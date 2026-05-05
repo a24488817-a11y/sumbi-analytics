@@ -1,7 +1,7 @@
 """
 숨비 애널리틱스 v3.0 (SOOMBI Analytics)
 - 시장 분리 랭킹: KOSPI TOP 15 / KOSDAQ TOP 15
-- 종목 체급 자동 분류: 👑대장주 / ⚖️중량주 / 🪙동전주 / 🎰도박주
+- 종목 체급 자동 분류: 👑대장주(시총1조+) / ⚖️중형주(2천억~1조) / 🪙소형/동전주(2천억미만·주가2천원미만)
 - 내일 급등 확률: 기대수익률 + 승률 계산
 - 4대 필살기: 기관/연기금 × 공매도상환 × 눌림목 × 미반영호재
 """
@@ -13,6 +13,7 @@ import numpy as np
 import requests
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor
 from streamlit_autorefresh import st_autorefresh
 import warnings
 warnings.filterwarnings("ignore")
@@ -62,8 +63,7 @@ html, body, [class*="css"] { font-family: 'Pretendard','Noto Sans KR',sans-serif
     padding:6px 14px; display:inline-flex; align-items:center; gap:5px; }
 .grade-bluechip { background:#7c3aed; color:#fff; }
 .grade-midcap   { background:#059669; color:#fff; }
-.grade-penny    { background:#d97706; color:#fff; }
-.grade-gamble   { background:#dc2626; color:#fff; }
+.grade-small    { background:#d97706; color:#fff; }
 
 /* ── 내일 예측 박스 ── */
 .forecast-box { background:#f8fafc; border-radius:12px; padding:12px 16px;
@@ -254,19 +254,6 @@ KOSDAQ_STOCKS = {
     "108490": ("로보티즈",           "로봇/AI"),
 }
 
-# 대장주 코드 (시총 상위 + 섹터 주도주)
-BLUECHIP_CODES = {
-    "005930","000660","035420","005380","051910","006400","068270",
-    "105560","028260","012330","207940","000270","017670","030200",
-    "015760","034730","032830","086790","009540","055550","005490",
-    "000810","066570","003550","003490","097950","267250",
-    # KOSDAQ 대장주
-    "247540","086520","196170","028300","323410","357780","214150",
-}
-
-# 고위험 코드 (임상 단계 바이오, 극단 변동성)
-HIGH_RISK_CODES = {"028300","009420","326030","108490","086520","247540"}
-
 OVERHANG_DB = {
     "042660": {"type": "블록딜(PRS)", "safe": True,
                "comment": "대형 블록딜이지만 전략적 투자자 유치 목적. 하방 경직성 확보 '안전핀' 패턴."},
@@ -295,26 +282,26 @@ NAVER_HDR = {
 
 
 # ───────────────────────────────────────────────────────────────────────────────
-# 체급 분류
+# 체급 분류 — 시가총액(억원) + 주가(원) 기반 3단계
 # ───────────────────────────────────────────────────────────────────────────────
 GRADE_META = {
-    "bluechip": ("👑", "대장주", "시총 상위·섹터 주도주", "#7c3aed", "grade-bluechip",
+    "bluechip": ("👑", "대장주", "시총 1조 이상 대형주",  "#7c3aed", "grade-bluechip",
                  "안정성 높음 — 기관·연기금이 선호하는 대형주"),
-    "midcap":   ("⚖️", "중량주", "탄탄한 중견주",          "#059669", "grade-midcap",
+    "midcap":   ("⚖️", "중형주", "시총 2천억~1조 중견주", "#059669", "grade-midcap",
                  "실적 뒷받침 중견주 — 적정 변동성"),
-    "penny":    ("🪙", "동전주", "1,000원 미만 저가주",    "#d97706", "grade-penny",
-                 "저가 = 작은 돈으로 많은 주식 · 변동성 큼"),
-    "gamble":   ("🎰", "도박주", "극단 변동성·재무 리스크", "#dc2626", "grade-gamble",
-                 "고위험 — 손실 방지 손절선 필수"),
+    "small":    ("🪙", "소형/동전주", "시총 2천억 미만·주가 2천원 미만", "#d97706", "grade-small",
+                 "소형주·저가주 — 변동성 크므로 손절선 필수"),
 }
 
-def classify_stock(ticker: str, price: float, rsi: float, vol_ratio: float) -> str:
-    if price < 1_000:
-        return "penny"
-    if ticker in HIGH_RISK_CODES or rsi > 82 or vol_ratio > 350:
-        return "gamble"
-    if ticker in BLUECHIP_CODES:
+def classify_stock_tier(market_cap: float, close_price: float) -> str:
+    """
+    market_cap  : 시가총액 (억원)
+    close_price : 현재가 (원)
+    """
+    if market_cap >= 10_000:
         return "bluechip"
+    if market_cap < 2_000 or close_price < 2_000:
+        return "small"
     return "midcap"
 
 
@@ -335,8 +322,7 @@ def calc_tomorrow_forecast(score: float, squeeze: bool, pb_score: float,
     if squeeze:      win_rate += 6.0
     if inst_streak >= 3: win_rate += 3.0
     elif inst_streak >= 2: win_rate += 1.5
-    if grade == "gamble": win_rate -= 8.0       # 고위험 종목은 승률 패널티
-    if grade == "penny":  win_rate -= 4.0
+    if grade == "small":  win_rate -= 5.0       # 소형/동전주 승률 패널티
     win_rate = max(20.0, min(win_rate, 76.0))
 
     # ── 기대수익률 ──
@@ -352,7 +338,7 @@ def calc_tomorrow_forecast(score: float, squeeze: bool, pb_score: float,
     er += min(news_cnt * 0.3, 1.2)
     if vol_ratio > 150:      er += 0.4
     if safepin:              er += 0.5
-    if grade == "gamble":    er += 1.2    # 고위험일수록 기대치 편차 큼 (양날의 검)
+    if grade == "small":     er += 0.8    # 소형주는 변동폭 큼 (양날의 검)
     er = round(min(er, 6.5), 2)
 
     return round(win_rate, 1), er
@@ -617,6 +603,10 @@ def sniper_price(ticker: str, suffix: str, date_str: str) -> dict:
     ma5   = float(close.rolling(5).mean().iloc[-1])
     ma10  = float(close.rolling(10).mean().iloc[-1])
     ma20_ = float(close.rolling(20).mean().iloc[-1])
+    try:
+        mcap = round((yf.Ticker(ticker + suffix).fast_info.get("market_cap") or 0) / 1e8, 0)
+    except Exception:
+        mcap = 0.0
     return {
         "현재가":      round(cur),
         "등락률":      round((cur - prev) / prev * 100, 2),
@@ -628,6 +618,7 @@ def sniper_price(ticker: str, suffix: str, date_str: str) -> dict:
         "ma5":         round(ma5),
         "ma10":        round(ma10),
         "ma20":        round(ma20_),
+        "시가총액":    mcap,
     }
 
 
@@ -728,6 +719,17 @@ def get_price_data(date_str: str, market: str) -> tuple:
     df["눌림목점수"] = pb_scores
     df["눌림목신호"] = pb_signals
     df["RSI"]        = rsi_vals
+
+    # 시가총액 병렬 조회 (yfinance fast_info)
+    def _one_cap(t_sfx: str) -> float:
+        try:
+            return round((yf.Ticker(t_sfx).fast_info.get("market_cap") or 0) / 1e8, 0)
+        except Exception:
+            return 0.0
+    with ThreadPoolExecutor(max_workers=10) as ex:
+        caps = list(ex.map(_one_cap, [t + suffix for t in df.index]))
+    df["시가총액(억)"] = caps
+
     return df.dropna(subset=["현재가","거래대금(억)"]).query("`거래대금(억)` > 0"), actual_date
 
 
@@ -814,9 +816,10 @@ def score_ticker(ticker: str, row: pd.Series, investor_map: dict, news_map: dict
     else:
         comment = f"수급 우위, 거래대금 {float(row.get('거래대금(억)', 0)):,.0f}억 — 분할 진입 검토"
 
-    # 체급 분류
+    # 체급 분류 — 시가총액(억원) + 현재가 기반
     price = float(row.get("현재가", 0))
-    grade = classify_stock(ticker, price, rsi_v, vol_r)
+    mcap  = float(row.get("시가총액(억)", 0))
+    grade = classify_stock_tier(mcap, price)
 
     # 내일 예측
     win_rate, exp_return = calc_tomorrow_forecast(
@@ -1077,6 +1080,7 @@ if "sniper_code" in st.session_state:
             "거래량비율(%)": _sp["거래량비율"],
             "거래대금(억)":  _sp["거래대금"],
             "현재가":        _sp["현재가"],
+            "시가총액(억)":  _sp.get("시가총액", 0),
         })
         _sscore   = score_ticker(_sc, _srow, {_sc: _sinv}, {_sc: _snews})
         _sc_total = _sscore["매수적합도(%)"]
@@ -1297,13 +1301,11 @@ st.html("""
     </div>
     <div style="display:flex;flex-wrap:wrap;gap:10px;font-size:13px;">
         <div><span class="grade-badge grade-bluechip">👑 대장주</span>
-             <span style="color:#6b7280;margin-left:6px;">시총 상위·섹터 주도주. 기관·연기금 선호. 안정성 높음.</span></div>
-        <div><span class="grade-badge grade-midcap">⚖️ 중량주</span>
-             <span style="color:#6b7280;margin-left:6px;">실적 뒷받침 탄탄한 중견주. 적정 변동성.</span></div>
-        <div><span class="grade-badge grade-penny">🪙 동전주</span>
-             <span style="color:#6b7280;margin-left:6px;">1,000원 미만 저가주. 작은 돈으로 많은 주식 가능. 변동성 큼.</span></div>
-        <div><span class="grade-badge grade-gamble">🎰 도박주</span>
-             <span style="color:#6b7280;margin-left:6px;">극단 변동성·재무 리스크. 손절선 필수. 고위험.</span></div>
+             <span style="color:#6b7280;margin-left:6px;">시총 1조 이상. 기관·연기금 선호. 안정성 높음.</span></div>
+        <div><span class="grade-badge grade-midcap">⚖️ 중형주</span>
+             <span style="color:#6b7280;margin-left:6px;">시총 2천억~1조 중견주. 실적 뒷받침. 적정 변동성.</span></div>
+        <div><span class="grade-badge grade-small">🪙 소형/동전주</span>
+             <span style="color:#6b7280;margin-left:6px;">시총 2천억 미만 또는 주가 2천원 미만. 고변동성. 손절선 필수.</span></div>
     </div>
 </div>""")
 
@@ -1377,7 +1379,7 @@ def render_market_tab(market_name: str, result_key: str, date_key: str,
 
         # ── 요약 통계 카드 ──────────────────────────────────────────────────
         grade_counts = ranked["_grade"].value_counts()
-        g_cols = st.columns(4)
+        g_cols = st.columns(3)
         for col, (gk, gm) in zip(g_cols, GRADE_META.items()):
             cnt = int(grade_counts.get(gk, 0))
             with col:
