@@ -297,10 +297,17 @@ def classify_stock_tier(market_cap: float, close_price: float) -> str:
     """
     market_cap  : 시가총액 (억원)
     close_price : 현재가 (원)
+    NaN / 0 → 중형주로 방어 처리 (소형주 오분류 방지)
     """
-    if market_cap >= 10_000:
+    try:
+        mc = float(market_cap)
+    except (TypeError, ValueError):
+        mc = 0.0
+    if mc <= 0 or (mc != mc):          # 0 또는 NaN → 중형주 방어
+        return "midcap"
+    if mc >= 10_000:                   # 1조원(10,000억) 이상 → 대장주
         return "bluechip"
-    if market_cap < 2_000 or close_price < 2_000:
+    if mc < 2_000 or close_price < 2_000:  # 2천억 미만 or 주가 2천원 미만 → 소형
         return "small"
     return "midcap"
 
@@ -604,7 +611,9 @@ def sniper_price(ticker: str, suffix: str, date_str: str) -> dict:
     ma10  = float(close.rolling(10).mean().iloc[-1])
     ma20_ = float(close.rolling(20).mean().iloc[-1])
     try:
-        mcap = round((yf.Ticker(ticker + suffix).fast_info.get("market_cap") or 0) / 1e8, 0)
+        _fi  = yf.Ticker(ticker + suffix).fast_info
+        _cap = getattr(_fi, "market_cap", None)
+        mcap = round(_cap / 1e8, 0) if (_cap and _cap > 0) else 0.0
     except Exception:
         mcap = 0.0
     return {
@@ -720,10 +729,12 @@ def get_price_data(date_str: str, market: str) -> tuple:
     df["눌림목신호"] = pb_signals
     df["RSI"]        = rsi_vals
 
-    # 시가총액 병렬 조회 (yfinance fast_info)
+    # 시가총액 병렬 조회 (yfinance fast_info — 속성 접근, dict 아님)
     def _one_cap(t_sfx: str) -> float:
         try:
-            return round((yf.Ticker(t_sfx).fast_info.get("market_cap") or 0) / 1e8, 0)
+            _fi  = yf.Ticker(t_sfx).fast_info
+            _cap = getattr(_fi, "market_cap", None)
+            return round(_cap / 1e8, 0) if (_cap and _cap > 0) else 0.0
         except Exception:
             return 0.0
     with ThreadPoolExecutor(max_workers=10) as ex:
