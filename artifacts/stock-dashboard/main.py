@@ -586,12 +586,11 @@ def classify_news_item(headline: str) -> tuple:
 
 @st.cache_data(ttl=300)
 def sniper_price(ticker: str, suffix: str, date_str: str) -> dict:
-    """단일 종목 가격·기술분석 데이터"""
-    target_dt = datetime.strptime(date_str, "%Y%m%d")
+    """단일 종목 가격·기술분석 데이터
+    period='60d' 사용 → 주말·공휴일 직후에도 최근 실제 거래일 자동 선택"""
     raw = yf.download(
         ticker + suffix,
-        start=(target_dt - timedelta(days=70)).strftime("%Y-%m-%d"),
-        end=(target_dt + timedelta(days=2)).strftime("%Y-%m-%d"),
+        period="60d",
         auto_adjust=True, progress=False,
     )
     if raw.empty:
@@ -689,13 +688,13 @@ def calc_pullback_score(close_s: pd.Series, vol_s: pd.Series) -> dict:
 
 @st.cache_data(ttl=300)
 def get_price_data(date_str: str, market: str) -> tuple:
-    stocks    = KOSPI_STOCKS if market == "KOSPI" else KOSDAQ_STOCKS
-    suffix    = SUFFIX[market]
-    target_dt = datetime.strptime(date_str, "%Y%m%d")
+    """주가 데이터 수집 — period='60d' 사용으로 주말·공휴일 직후에도 최근 거래일 자동 선택
+    date_str 은 캐시 키 식별용으로만 사용; 실제 다운로드는 항상 최신 60거래일 기준"""
+    stocks = KOSPI_STOCKS if market == "KOSPI" else KOSDAQ_STOCKS
+    suffix = SUFFIX[market]
     raw = yf.download(
         [t + suffix for t in stocks],
-        start=(target_dt - timedelta(days=70)).strftime("%Y-%m-%d"),
-        end=(target_dt + timedelta(days=2)).strftime("%Y-%m-%d"),
+        period="60d",
         auto_adjust=True, progress=False,
     )
     if raw.empty or "Close" not in raw:
