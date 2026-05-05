@@ -157,15 +157,18 @@ if st.session_state.get("analysis_run"):
 
         st.success(f"✅ 분석 완료: 42대 필살기 기반 우량 수급주 {len(top_picks)}종목 추출")
 
+        def color_change(v):
+            if isinstance(v, (int, float)) and v < 0:
+                return "color: #ef4444; font-weight:bold"
+            elif isinstance(v, (int, float)) and v > 0:
+                return "color: #22c55e; font-weight:bold"
+            return ""
+
         styled = (
             top_picks.style
             .background_gradient(subset=["거래대금(억)"], cmap="Blues")
             .background_gradient(subset=["거래량비율(%)"], cmap="Oranges")
-            .applymap(
-                lambda v: "color: #ef4444; font-weight:bold" if isinstance(v, float) and v < 0
-                else ("color: #22c55e; font-weight:bold" if isinstance(v, float) and v > 0 else ""),
-                subset=["등락률(%)"]
-            )
+            .map(color_change, subset=["등락률(%)"])
             .format({
                 "현재가": "{:,}",
                 "등락률(%)": "{:+.2f}%",
