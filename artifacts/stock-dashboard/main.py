@@ -905,6 +905,47 @@ def render_ranked_cards(ranked: pd.DataFrame):
 
 
 # ───────────────────────────────────────────────────────────────────────────────
+# 사이드바 — 가장 먼저 실행해야 date_str 이 UI 전체에서 사용 가능
+# ───────────────────────────────────────────────────────────────────────────────
+with st.sidebar:
+    st.html("""
+<div style="font-size:20px;font-weight:900;color:#13131a;padding:8px 0 2px;">🐳 숨비 애널리틱스</div>
+<div style="font-size:12px;color:#9ca3af;margin-bottom:14px;">SOOMBI Analytics v3.0</div>
+""")
+st.sidebar.markdown("---")
+st.sidebar.markdown("**📅 분석 기준일**")
+target_date = st.sidebar.date_input("기준일", datetime.now() - timedelta(days=1),
+                                     label_visibility="collapsed")
+date_str = target_date.strftime("%Y%m%d")
+
+st.sidebar.markdown("---")
+if st.sidebar.button("🔄 데이터 새로고침", use_container_width=True):
+    if st.session_state.get("analysis_run"):
+        st.cache_data.clear(); st.rerun()
+    else:
+        st.sidebar.info("먼저 분석을 시작하세요.")
+
+auto_refresh = st.sidebar.toggle("자동 새로고침", value=False)
+refresh_interval = 60
+if auto_refresh:
+    refresh_interval = st.sidebar.selectbox("주기", [30,60,120,300],
+        format_func=lambda x: f"{x}초" if x < 60 else f"{x//60}분", index=1)
+if auto_refresh and st.session_state.get("analysis_run"):
+    cnt = st_autorefresh(interval=refresh_interval * 1000, key="autorefresh")
+    if cnt > 0: st.cache_data.clear()
+
+st.sidebar.markdown("---")
+with st.sidebar:
+    st.html("""
+<div style="font-size:12px;color:#9ca3af;line-height:1.9;">
+<strong>📌 정렬 기준</strong><br>
+내일 기대수익률 → 양봉 승률 → 매수적합도<br><br>
+<strong>🐳 숨비(Soombi)란?</strong><br>
+제주 해녀의 잠수 기술. 깊이 분석해<br>
+급등 종목을 건져 올립니다.
+</div>""")
+
+# ───────────────────────────────────────────────────────────────────────────────
 # ■ UI — 헤더
 # ───────────────────────────────────────────────────────────────────────────────
 st.html("""
@@ -917,18 +958,46 @@ st.html("""
 </div>
 """)
 
-# ── 지수 전광판 ───────────────────────────────────────────────────────────────
+# ── 지수 전광판 — CSS Grid (모바일 강제 2×2, 데스크톱 1×4) ──────────────────
 macro = get_macro_indices()
-idx_cols = st.columns(4)
-for col, key in zip(idx_cols, ["KOSPI","KOSDAQ","나스닥","나스닥선물"]):
+
+def _idx_cell(key: str) -> str:
     d = macro.get(key)
-    with col:
-        if d:
-            v = f"{d['현재']:,.2f}" if d["현재"] < 100_000 else f"{d['현재']:,.0f}"
-            st.html(index_card_html(key, v, d["변동률"], d["변동"]))
-        else:
-            st.html(f'<div class="index-card"><div class="index-name">{key}</div>'
-                    f'<div class="index-value flat">N/A</div></div>')
+    if not d:
+        return (f'<div class="index-card">'
+                f'<div class="index-name">{key}</div>'
+                f'<div class="index-value flat">N/A</div></div>')
+    cur = d["현재"]
+    v   = f"{cur:,.2f}" if cur < 100_000 else f"{cur:,.0f}"
+    pct = d["변동률"]; ab = d["변동"]
+    cls   = "up" if pct > 0 else "down" if pct < 0 else "flat"
+    arrow = "▲" if pct > 0 else "▼" if pct < 0 else ""
+    sign  = "+" if pct > 0 else ""
+    return (f'<div class="index-card">'
+            f'<div class="index-name">{key}</div>'
+            f'<div class="index-value {cls}">{v}</div>'
+            f'<div class="index-delta {cls}">{arrow} {sign}{pct:.2f}%'
+            f' <span style="font-weight:400;font-size:10px;color:#9ca3af;">({sign}{ab:,.2f})</span>'
+            f'</div></div>')
+
+st.html(f"""
+<style>
+  .idx-grid {{
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+    margin-bottom: 8px;
+  }}
+  @media (max-width: 640px) {{
+    .idx-grid {{ grid-template-columns: repeat(2, 1fr); }}
+  }}
+</style>
+<div class="idx-grid">
+  {_idx_cell("KOSPI")}
+  {_idx_cell("KOSDAQ")}
+  {_idx_cell("나스닥")}
+  {_idx_cell("나스닥선물")}
+</div>""")
 
 # ───────────────────────────────────────────────────────────────────────────────
 # ■ 스나이퍼 — 종목 역인덱스 DB
@@ -1236,47 +1305,6 @@ st.html("""
         <div><span class="grade-badge grade-gamble">🎰 도박주</span>
              <span style="color:#6b7280;margin-left:6px;">극단 변동성·재무 리스크. 손절선 필수. 고위험.</span></div>
     </div>
-</div>""")
-
-# ───────────────────────────────────────────────────────────────────────────────
-# 사이드바
-# ───────────────────────────────────────────────────────────────────────────────
-with st.sidebar:
-    st.html("""
-<div style="font-size:20px;font-weight:900;color:#13131a;padding:8px 0 2px;">🐳 숨비 애널리틱스</div>
-<div style="font-size:12px;color:#9ca3af;margin-bottom:14px;">SOOMBI Analytics v3.0</div>
-""")
-st.sidebar.markdown("---")
-st.sidebar.markdown("**📅 분석 기준일**")
-target_date = st.sidebar.date_input("기준일", datetime.now() - timedelta(days=1),
-                                     label_visibility="collapsed")
-date_str = target_date.strftime("%Y%m%d")
-
-st.sidebar.markdown("---")
-if st.sidebar.button("🔄 데이터 새로고침", use_container_width=True):
-    if st.session_state.get("analysis_run"):
-        st.cache_data.clear(); st.rerun()
-    else:
-        st.sidebar.info("먼저 분석을 시작하세요.")
-
-auto_refresh = st.sidebar.toggle("자동 새로고침", value=False)
-refresh_interval = 60
-if auto_refresh:
-    refresh_interval = st.sidebar.selectbox("주기", [30,60,120,300],
-        format_func=lambda x: f"{x}초" if x < 60 else f"{x//60}분", index=1)
-if auto_refresh and st.session_state.get("analysis_run"):
-    cnt = st_autorefresh(interval=refresh_interval * 1000, key="autorefresh")
-    if cnt > 0: st.cache_data.clear()
-
-st.sidebar.markdown("---")
-with st.sidebar:
-    st.html("""
-<div style="font-size:12px;color:#9ca3af;line-height:1.9;">
-<strong>📌 정렬 기준</strong><br>
-내일 기대수익률 → 양봉 승률 → 매수적합도<br><br>
-<strong>🐳 숨비(Soombi)란?</strong><br>
-제주 해녀의 잠수 기술. 깊이 분석해<br>
-급등 종목을 건져 올립니다.
 </div>""")
 
 # ───────────────────────────────────────────────────────────────────────────────
