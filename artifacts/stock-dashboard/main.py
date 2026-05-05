@@ -6,6 +6,7 @@
 - 4대 필살기: 기관/연기금 × 공매도상환 × 눌림목 × 미반영호재
 """
 
+import re
 import streamlit as st
 import yfinance as yf
 import pandas as pd
@@ -561,6 +562,89 @@ def get_news_batch(tickers: tuple) -> dict:
     return {t: get_naver_news(t) for t in tickers}
 
 
+@st.cache_data(ttl=600)
+def fetch_naver_market_list(market: str, max_pages: int = 15) -> pd.DataFrame:
+    """Naver 시가총액 랭킹 페이지에서 전종목 기본 시세 일괄 수집 (병렬 HTTP)
+    컬럼 확인(실측): td[2]=현재가 | td[4]=등락률(%) | td[6]=시가총액(억원)
+                     td[7]=거래대금(백만원→/100=억) | td[8]=외국인비율 | td[9]=거래량
+    market: 'KOSPI'(sosok=0) or 'KOSDAQ'(sosok=1)
+    """
+    sosok = 0 if market == "KOSPI" else 1
+
+    # 총 페이지 수 파악 (첫 페이지 호출 겸용)
+    try:
+        r0 = requests.get(
+            f"https://finance.naver.com/sise/sise_market_sum.naver?sosok={sosok}&page=1",
+            headers=NAVER_HDR, timeout=10,
+        )
+        r0.encoding = "euc-kr"
+        soup0 = BeautifulSoup(r0.text, "html.parser")
+        pager = soup0.select_one("td.pgRR a")
+        total = int(re.search(r"page=(\d+)", pager["href"]).group(1)) if pager else 1
+        total = min(total, max_pages)
+    except Exception:
+        total = max_pages
+
+    def _parse_page(page: int) -> list:
+        try:
+            r = requests.get(
+                f"https://finance.naver.com/sise/sise_market_sum.naver?sosok={sosok}&page={page}",
+                headers=NAVER_HDR, timeout=10,
+            )
+            r.encoding = "euc-kr"
+            soup = BeautifulSoup(r.text, "html.parser")
+            out = []
+            for tr in soup.select("table.type_2 tr[onmouseover]"):
+                tds = tr.find_all("td")
+                if len(tds) < 10:
+                    continue
+                a = tds[1].find("a")
+                if not a:
+                    continue
+                m = re.search(r"code=(\d{6})", a.get("href", ""))
+                if not m:
+                    continue
+                ticker = m.group(1)
+                name   = a.get_text(strip=True)
+
+                def _f(i: int) -> float:
+                    try:
+                        return float(
+                            tds[i].get_text(strip=True)
+                            .replace(",", "").replace("+", "").replace("%", "")
+                        )
+                    except Exception:
+                        return 0.0
+
+                price = _f(2)
+                chg   = _f(4)   # 등락률(%)
+                mcap  = _f(6)   # 시가총액(억원) — 이미 억원 단위
+                amt   = _f(7)   # 거래대금(백만원) → /100 = 억원
+                if price <= 0:
+                    continue
+                out.append({
+                    "ticker":       ticker,
+                    "종목명":       name,
+                    "현재가":       price,
+                    "등락률(%)":    chg,
+                    "시가총액(억)": mcap,
+                    "거래대금(억)": round(amt / 100, 1),
+                })
+            return out
+        except Exception:
+            return []
+
+    all_rows: list = []
+    with ThreadPoolExecutor(max_workers=20) as ex:
+        for rows in ex.map(_parse_page, range(1, total + 1)):
+            all_rows.extend(rows)
+
+    if not all_rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(all_rows).dropna(subset=["ticker"]).set_index("ticker")
+    return df[df["거래대금(억)"] >= 0]
+
+
 # ── 뉴스 분류 키워드 ──────────────────────────────────────────────────────────
 _GOOD_KW = [
     "수주","계약체결","계약","임상성공","기술수출","어닝서프라이즈","흑자전환","흑자",
@@ -688,12 +772,31 @@ def calc_pullback_score(close_s: pd.Series, vol_s: pd.Series) -> dict:
 
 @st.cache_data(ttl=300)
 def get_price_data(date_str: str, market: str) -> tuple:
-    """주가 데이터 수집 — period='60d' 사용으로 주말·공휴일 직후에도 최근 거래일 자동 선택
-    date_str 은 캐시 키 식별용으로만 사용; 실제 다운로드는 항상 최신 60거래일 기준"""
-    stocks = KOSPI_STOCKS if market == "KOSPI" else KOSDAQ_STOCKS
-    suffix = SUFFIX[market]
+    """전종목 파이프라인 v2.0
+    ① Naver 시가총액 랭킹 전종목 스냅샷 (병렬) → 종목명·시가총액(억) 일괄 취득
+    ② 거래대금 상위 300 + 소형/저가주 추가 100 선별 → yfinance 일괄 60d OHLCV
+    ③ RSI·눌림목 계산 후 병합 반환 (yf.fast_info 루프 완전 제거 → 고속화)
+    date_str은 캐시 키 전용; 실다운로드는 항상 최신 60거래일 기준"""
+    suffix       = SUFFIX[market]
+    known_stocks = {**KOSPI_STOCKS, **KOSDAQ_STOCKS}
+
+    # ── ① Naver 전종목 스냅샷 ──────────────────────────────────────────────────
+    snapshot = fetch_naver_market_list(market, max_pages=15)
+    if snapshot.empty:
+        # Naver 장애 시 기존 정적 DB fallback
+        snapshot     = None
+        dl_tickers   = list((KOSPI_STOCKS if market == "KOSPI" else KOSDAQ_STOCKS).keys())
+    else:
+        filtered   = snapshot[snapshot["거래대금(억)"] >= 0.5]
+        top_val    = filtered.nlargest(300, "거래대금(억)")           # 유동성 상위 300
+        top_small  = filtered[
+            (filtered["현재가"] < 5_000) | (filtered["시가총액(억)"] < 2_000)
+        ].nlargest(100, "거래대금(억)")                                # 소형·저가 추가 100
+        dl_tickers = list(pd.concat([top_val, top_small]).drop_duplicates().index)
+
+    # ── ② yfinance 60d OHLCV 일괄 다운로드 ───────────────────────────────────
     raw = yf.download(
-        [t + suffix for t in stocks],
+        [t + suffix for t in dl_tickers],
         period="60d",
         auto_adjust=True, progress=False,
     )
@@ -729,29 +832,27 @@ def get_price_data(date_str: str, market: str) -> tuple:
         "거래량비율(%)": vol_ratio,
     })
     df.index = [c.replace(suffix, "") for c in df.index]
-    df.insert(0, "종목명",  [stocks[t][0] if t in stocks else t for t in df.index])
-    df.insert(1, "섹터",    [stocks[t][1] if t in stocks else "기타" for t in df.index])
+
+    # ── ③ 종목명·섹터·시가총액 병합 (Naver 스냅샷 우선, 정적 DB fallback) ──────
+    df.insert(0, "종목명", [
+        (snapshot.loc[t, "종목명"] if (snapshot is not None and t in snapshot.index)
+         else known_stocks[t][0] if t in known_stocks else t)
+        for t in df.index
+    ])
+    df.insert(1, "섹터", [
+        known_stocks[t][1] if t in known_stocks else "기타"
+        for t in df.index
+    ])
     df["눌림목점수"] = pb_scores
     df["눌림목신호"] = pb_signals
     df["RSI"]        = rsi_vals
+    df["시가총액(억)"] = [
+        float(snapshot.loc[t, "시가총액(억)"]) if (snapshot is not None and t in snapshot.index)
+        else 0.0
+        for t in df.index
+    ]
 
-    # 시가총액 병렬 조회 (fast_info 속성 → 없으면 shares×price 계산 fallback)
-    def _one_cap(t_sfx: str) -> float:
-        try:
-            _fi  = yf.Ticker(t_sfx).fast_info
-            _cap = getattr(_fi, "market_cap", None)
-            if not (_cap and _cap > 0):
-                _sh = getattr(_fi, "shares", None)
-                _pr = getattr(_fi, "last_price", None)
-                _cap = (_sh * _pr) if (_sh and _pr and _sh > 0) else 0
-            return round(_cap / 1e8, 0) if (_cap and _cap > 0) else 0.0
-        except Exception:
-            return 0.0
-    with ThreadPoolExecutor(max_workers=10) as ex:
-        caps = list(ex.map(_one_cap, [t + suffix for t in df.index]))
-    df["시가총액(억)"] = caps
-
-    return df.dropna(subset=["현재가","거래대금(억)"]).query("`거래대금(억)` > 0"), actual_date
+    return df.dropna(subset=["현재가", "거래대금(억)"]).query("`거래대금(억)` > 0"), actual_date
 
 
 def score_ticker(ticker: str, row: pd.Series, investor_map: dict, news_map: dict) -> dict:
@@ -1212,19 +1313,39 @@ _CODE_MKT  = {**{c: "KOSPI" for c in KOSPI_STOCKS}, **{c: "KOSDAQ" for c in KOSD
 _NAME_CODE = {v[0]: k for k, v in _ALL_STKS.items()}
 
 def _resolve_sniper(q: str):
-    """코드/이름/부분명 검색 → (code, market, name, sector) or None"""
+    """코드/이름/부분명 검색 → (code, market, name, sector) or None
+    정적 DB 92종목 → 동적 price_df (전종목 확장 후 신규 종목) 순서로 탐색"""
     q = q.strip()
+    # 1. 정적 DB 코드 직접 조회
     if q in _CODE_MKT:
         code = q; mkt = _CODE_MKT[q]
         name, sector = _ALL_STKS[code]
         return code, mkt, name, sector
+    # 2. 정적 DB 이름 조회
     if q in _NAME_CODE:
         code = _NAME_CODE[q]; mkt = _CODE_MKT[code]
         name, sector = _ALL_STKS[code]
         return code, mkt, name, sector
+    # 3. 정적 DB 부분 이름 매칭
     for code, (name, sector) in _ALL_STKS.items():
         if q in name:
             return code, _CODE_MKT[code], name, sector
+    # 4. 동적 price_df 에서 검색 (전종목 확장 이후 신규 종목 지원)
+    if re.match(r"^\d{6}$", q):
+        for mkt in ("KOSPI", "KOSDAQ"):
+            df_s = st.session_state.get(f"{mkt.lower()}_result")
+            if df_s is not None and q in df_s.index:
+                return q, mkt, str(df_s.loc[q, "종목명"]), str(df_s.loc[q, "섹터"])
+        # 코드는 맞지만 미분석 — KOSPI로 우선 시도 (sniper_price 가 suffix 처리)
+        return q, "KOSPI", q, "기타"
+    # 5. 동적 price_df 부분 이름 매칭
+    for mkt in ("KOSPI", "KOSDAQ"):
+        df_s = st.session_state.get(f"{mkt.lower()}_result")
+        if df_s is not None and "종목명" in df_s.columns:
+            hits = df_s[df_s["종목명"].str.contains(q, na=False)]
+            if not hits.empty:
+                ticker = hits.index[0]
+                return ticker, mkt, str(hits.iloc[0]["종목명"]), str(hits.iloc[0]["섹터"])
     return None, None, None, None
 
 # ───────────────────────────────────────────────────────────────────────────────
