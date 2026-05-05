@@ -31,12 +31,12 @@ st.markdown("""
 html, body, [class*="css"] { font-family: 'Pretendard','Noto Sans KR',sans-serif; }
 .main { background: #f8f9fc; }
 
-/* 지수 카드 */
-.index-card { background:#fff; border-radius:20px; padding:22px 24px;
-    box-shadow:0 2px 12px rgba(0,0,0,0.07); margin-bottom:8px; border:1px solid #f0f0f5; }
-.index-name  { font-size:13px; font-weight:600; color:#8c8c9e; letter-spacing:.5px; margin-bottom:6px; }
-.index-value { font-size:28px; font-weight:800; color:#13131a; line-height:1.1; }
-.index-delta { font-size:14px; font-weight:700; margin-top:5px; }
+/* 지수 카드 — 컴팩트 */
+.index-card { background:#fff; border-radius:12px; padding:10px 14px;
+    box-shadow:0 1px 6px rgba(0,0,0,0.06); margin-bottom:0; border:1px solid #f0f0f5; }
+.index-name  { font-size:10px; font-weight:700; color:#8c8c9e; letter-spacing:.4px; margin-bottom:1px; }
+.index-value { font-size:18px; font-weight:900; color:#13131a; line-height:1.2; }
+.index-delta { font-size:11px; font-weight:700; margin-top:2px; }
 .up   { color:#ef4444; }
 .down { color:#1d6ce8; }
 .flat { color:#9ca3af; }
@@ -118,6 +118,38 @@ section[data-testid="stSidebar"] { background:#fff; border-right:1px solid #f0f0
     color:#ef4444 !important; border-bottom-color:#ef4444 !important; }
 thead tr th { background:#f8fafc !important; font-weight:700 !important;
     font-size:13px !important; color:#374151 !important; }
+
+/* 스나이퍼 검색 헤더 */
+.sniper-header { background:linear-gradient(135deg,#1e1e2e 0%,#0f172a 100%);
+    border-radius:16px; padding:16px 22px 12px; margin:10px 0 6px; }
+.sniper-title { font-size:15px; font-weight:900; color:#f8fafc; letter-spacing:-.3px; }
+.sniper-sub   { font-size:11px; color:#94a3b8; margin-top:3px; }
+
+/* 스나이퍼 결과 카드 */
+.sniper-card { background:#fff; border-radius:20px; padding:22px 26px;
+    box-shadow:0 6px 24px rgba(0,0,0,0.10); margin:6px 0 14px; border:1px solid #f0f0f5; }
+.sniper-name { font-size:22px; font-weight:900; color:#13131a; }
+.sniper-meta { font-size:12px; color:#8c8c9e; margin:2px 0 8px; }
+
+/* 4대 필살기 스코어 박스 */
+.filter-box   { background:#f8fafc; border-radius:12px; padding:12px 14px;
+    text-align:center; border:1px solid #e2e8f0; }
+.filter-name  { font-size:11px; font-weight:700; color:#8c8c9e; margin-bottom:5px; }
+.filter-score { font-size:26px; font-weight:900; line-height:1.1; }
+.filter-max   { font-size:10px; color:#c4c4cf; margin-top:2px; }
+
+/* MA 분석 */
+.ma-row   { display:flex; align-items:center; gap:10px; margin-bottom:5px; font-size:13px; }
+.ma-label { font-weight:700; min-width:44px; color:#6b7280; }
+.ma-val   { font-weight:800; color:#13131a; }
+
+/* 뉴스 분류 카드 */
+.nc-good { background:#f0fdf4; border-radius:10px; padding:9px 14px;
+    border-left:3px solid #16a34a; margin-bottom:6px; font-size:13px; color:#14532d; }
+.nc-bad  { background:#fef2f2; border-radius:10px; padding:9px 14px;
+    border-left:3px solid #dc2626; margin-bottom:6px; font-size:13px; color:#7f1d1d; }
+.nc-neut { background:#f8fafc; border-radius:10px; padding:9px 14px;
+    border-left:3px solid #94a3b8; margin-bottom:6px; font-size:13px; color:#475569; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -533,6 +565,72 @@ def get_news_batch(tickers: tuple) -> dict:
     return {t: get_naver_news(t) for t in tickers}
 
 
+# ── 뉴스 분류 키워드 ──────────────────────────────────────────────────────────
+_GOOD_KW = [
+    "수주","계약체결","계약","임상성공","기술수출","어닝서프라이즈","흑자전환","흑자",
+    "신사업","투자유치","특허","수혜","정책수혜","매출증가","수출","배당증가",
+    "자사주매입","자사주","깜짝실적","실적개선","신고가","급등","호실적","수주잔고",
+]
+_BAD_KW = [
+    "적자","손실","소송","제재","횡령","배임","부도","파산","리콜","감소",
+    "취소","지연","하락","전환사채","유상증자","오버행","조사착수","피소",
+    "징계","과태료","하향","경고","불공정","압수수색","혐의","기소",
+]
+
+def classify_news_item(headline: str) -> tuple:
+    """Returns ('호재'|'악재'|'중립', matched_keywords)"""
+    g = [kw for kw in _GOOD_KW if kw in headline]
+    b = [kw for kw in _BAD_KW  if kw in headline]
+    if len(g) > len(b): return "호재", g[:3]
+    if len(b) > len(g): return "악재", b[:3]
+    if g: return "호재", g[:3]
+    if b: return "악재", b[:3]
+    return "중립", []
+
+
+@st.cache_data(ttl=300)
+def sniper_price(ticker: str, suffix: str, date_str: str) -> dict:
+    """단일 종목 가격·기술분석 데이터"""
+    target_dt = datetime.strptime(date_str, "%Y%m%d")
+    raw = yf.download(
+        ticker + suffix,
+        start=(target_dt - timedelta(days=70)).strftime("%Y-%m-%d"),
+        end=(target_dt + timedelta(days=2)).strftime("%Y-%m-%d"),
+        auto_adjust=True, progress=False,
+    )
+    if raw.empty:
+        return {}
+    # 단일 종목은 컬럼이 MultiIndex 아닐 수 있음
+    if isinstance(raw.columns, pd.MultiIndex):
+        raw.columns = raw.columns.get_level_values(0)
+    if "Close" not in raw.columns:
+        return {}
+    close  = raw["Close"].dropna()
+    volume = raw["Volume"].dropna()
+    if len(close) < 11:
+        return {}
+    cur   = float(close.iloc[-1])
+    prev  = float(close.iloc[-2])
+    vol   = float(volume.iloc[-1])
+    avg20 = float(volume.tail(20).mean())
+    pb    = calc_pullback_score(close, volume)
+    ma5   = float(close.rolling(5).mean().iloc[-1])
+    ma10  = float(close.rolling(10).mean().iloc[-1])
+    ma20_ = float(close.rolling(20).mean().iloc[-1])
+    return {
+        "현재가":      round(cur),
+        "등락률":      round((cur - prev) / prev * 100, 2),
+        "거래량비율":  round(vol / avg20 * 100, 1),
+        "거래대금":    round(cur * vol / 1e8, 1),
+        "눌림목점수":  pb["score"],
+        "눌림목신호":  pb["signal"],
+        "RSI":         pb["rsi"],
+        "ma5":         round(ma5),
+        "ma10":        round(ma10),
+        "ma20":        round(ma20_),
+    }
+
+
 def calc_rsi(series: pd.Series, period: int = 14) -> float:
     delta = series.diff().dropna()
     gain  = delta.clip(lower=0).rolling(period).mean()
@@ -831,6 +929,273 @@ for col, key in zip(idx_cols, ["KOSPI","KOSDAQ","나스닥","나스닥선물"]):
         else:
             st.html(f'<div class="index-card"><div class="index-name">{key}</div>'
                     f'<div class="index-value flat">N/A</div></div>')
+
+# ───────────────────────────────────────────────────────────────────────────────
+# ■ 스나이퍼 — 종목 역인덱스 DB
+# ───────────────────────────────────────────────────────────────────────────────
+_ALL_STKS  = {**KOSPI_STOCKS, **KOSDAQ_STOCKS}
+_CODE_MKT  = {**{c: "KOSPI" for c in KOSPI_STOCKS}, **{c: "KOSDAQ" for c in KOSDAQ_STOCKS}}
+_NAME_CODE = {v[0]: k for k, v in _ALL_STKS.items()}
+
+def _resolve_sniper(q: str):
+    """코드/이름/부분명 검색 → (code, market, name, sector) or None"""
+    q = q.strip()
+    if q in _CODE_MKT:
+        code = q; mkt = _CODE_MKT[q]
+        name, sector = _ALL_STKS[code]
+        return code, mkt, name, sector
+    if q in _NAME_CODE:
+        code = _NAME_CODE[q]; mkt = _CODE_MKT[code]
+        name, sector = _ALL_STKS[code]
+        return code, mkt, name, sector
+    for code, (name, sector) in _ALL_STKS.items():
+        if q in name:
+            return code, _CODE_MKT[code], name, sector
+    return None, None, None, None
+
+# ───────────────────────────────────────────────────────────────────────────────
+# ■ UI — 스나이퍼 검색창
+# ───────────────────────────────────────────────────────────────────────────────
+st.html("""
+<div class="sniper-header">
+    <div class="sniper-title">🎯 단일 종목 정밀 스나이퍼</div>
+    <div class="sniper-sub">종목명 또는 6자리 코드 입력 → 42대 필살기 로직 100% 가동 · 기관/외국인/눌림목/뉴스 완전 해부 · 호재·악재 자동 분류</div>
+</div>""")
+
+_sq_col, _sb_col = st.columns([5, 1])
+with _sq_col:
+    _sniper_q = st.text_input(
+        "sniper_q",
+        placeholder="🔍  종목명 또는 코드 입력  (예: 삼성전자 · 005930 · SK하이닉스 · HLB · 에코프로)",
+        label_visibility="collapsed",
+        key="sniper_input",
+    )
+with _sb_col:
+    _sniper_clicked = st.button("🎯 해부 시작", use_container_width=True, key="sniper_btn")
+
+if _sniper_clicked and _sniper_q:
+    _code, _mkt, _name, _sector = _resolve_sniper(_sniper_q)
+    if _code:
+        st.session_state["sniper_code"]   = _code
+        st.session_state["sniper_mkt"]    = _mkt
+        st.session_state["sniper_name"]   = _name
+        st.session_state["sniper_sector"] = _sector
+    else:
+        st.error(f"'{_sniper_q}' 종목을 찾을 수 없습니다. 등록된 종목명 또는 6자리 코드를 입력해 주세요.")
+
+# ── 스나이퍼 결과 ──────────────────────────────────────────────────────────────
+if "sniper_code" in st.session_state:
+    _sc   = st.session_state["sniper_code"]
+    _smkt = st.session_state["sniper_mkt"]
+    _sn   = st.session_state.get("sniper_name", _sc)
+    _ss   = st.session_state.get("sniper_sector", "기타")
+    _sfx  = SUFFIX[_smkt]
+
+    with st.spinner(f"🎯 {_sn}({_sc}) 정밀 해부 중 — 4대 필살기 가동…"):
+        _sp    = sniper_price(_sc, _sfx, date_str)
+        _sinv  = get_investor_data_naver(_sc)
+        _snews = get_naver_news(_sc)
+
+    if not _sp:
+        st.warning(f"⚠️ {_sn}({_sc}) 가격 데이터를 수집하지 못했습니다. 기준일을 변경해 보세요.")
+    else:
+        # ── 점수 계산 ────────────────────────────────────────────────────────
+        _srow = pd.Series({
+            "눌림목점수":    _sp["눌림목점수"],
+            "눌림목신호":    _sp["눌림목신호"],
+            "RSI":           _sp["RSI"],
+            "등락률(%)":     _sp["등락률"],
+            "거래량비율(%)": _sp["거래량비율"],
+            "거래대금(억)":  _sp["거래대금"],
+            "현재가":        _sp["현재가"],
+        })
+        _sscore   = score_ticker(_sc, _srow, {_sc: _sinv}, {_sc: _snews})
+        _sc_total = _sscore["매수적합도(%)"]
+        _sc_color = ("#ef4444" if _sc_total >= 75 else
+                     "#f59e0b" if _sc_total >= 55 else
+                     "#94a3b8" if _sc_total >= 35 else "#1d6ce8")
+        _price    = _sp["현재가"]
+        _chg      = _sp["등락률"]
+        _cc       = "#ef4444" if _chg > 0 else "#1d6ce8" if _chg < 0 else "#9ca3af"
+        _chg_sym  = "▲" if _chg > 0 else "▼" if _chg < 0 else ""
+        _grade    = _sscore["_grade"]
+        _gm       = GRADE_META.get(_grade, GRADE_META["midcap"])
+        _gbadge   = f'<span class="grade-badge {_gm[4]}">{_gm[0]} {_gm[1]}</span>'
+        _wr       = _sscore["_win_rate"]
+        _er       = _sscore["_exp_return"]
+        _wr_c     = "#16a34a" if _wr >= 60 else "#f59e0b" if _wr >= 45 else "#94a3b8"
+        _er_c     = "#ef4444" if _er >= 2  else "#f97316" if _er >= 1  else "#94a3b8"
+        _rsi      = _sp["RSI"]
+        _vr       = _sp["거래량비율"]
+        _ma5, _ma10, _ma20 = _sp["ma5"], _sp["ma10"], _sp["ma20"]
+        _ma5_gap  = round((_price - _ma5)  / _ma5  * 100, 1) if _ma5  else 0
+        _ma10_gap = round((_price - _ma10) / _ma10 * 100, 1) if _ma10 else 0
+        _ma20_gap = round((_price - _ma20) / _ma20 * 100, 1) if _ma20 else 0
+        _ma_trend = ("정배열 ✅" if _ma5 > _ma10 > _ma20
+                     else "역배열 ⚠️" if _ma5 < _ma10 < _ma20
+                     else "혼조 ↔")
+        _rsi_color = "#16a34a" if _rsi <= 40 else "#ef4444" if _rsi >= 70 else "#374151"
+        _rsi_label = ("과매도↑" if _rsi <= 30 else "저점권" if _rsi <= 45
+                      else "과매수↓" if _rsi >= 70 else "정상")
+        _vr_color  = "#ef4444" if _vr > 150 else "#374151"
+        _vr_label  = "🔥 폭발" if _vr > 300 else "급증" if _vr > 150 else "정상"
+
+        def _gap_color(g):
+            return "#16a34a" if -2 <= g <= 5 else "#f97316" if g > 5 else "#ef4444"
+
+        _pb_sig_short = _sp["눌림목신호"][:10] if len(_sp["눌림목신호"]) > 10 else _sp["눌림목신호"]
+
+        # 특수 배지
+        _s_badges = ""
+        if _sscore.get("폭발후보"):
+            _s_badges += "<span class='badge badge-explode'>💥 공매도 상환 감지</span> "
+        if _sscore.get("안전핀"):
+            _s_badges += "<span class='badge badge-safe'>🛡️ 안전핀 타점</span>"
+
+        st.html(f"""
+<div class="sniper-card">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:16px;margin-bottom:16px;">
+    <div>
+      <div class="sniper-name">{_sn}</div>
+      <div class="sniper-meta">{_sc} · {_smkt} · {_ss}</div>
+      <div style="margin:6px 0;">
+        <span style="font-size:24px;font-weight:900;color:{_cc};">{_price:,}원</span>
+        <span style="font-size:15px;font-weight:700;color:{_cc};margin-left:8px;">{_chg_sym} {_chg:+.2f}%</span>
+      </div>
+      <div style="margin-bottom:6px;">{_gbadge}</div>
+      <div>{_s_badges}</div>
+    </div>
+    <div style="text-align:center;background:#f8fafc;border-radius:16px;padding:16px 22px;border:2px solid {_sc_color};">
+      <div style="font-size:44px;font-weight:900;color:{_sc_color};line-height:1;">{_sc_total:.0f}</div>
+      <div style="font-size:11px;color:#9ca3af;margin-top:2px;">매수 적합도 / 100점</div>
+      <div style="margin-top:8px;">{fit_signal_html(_sc_total)}</div>
+      <div style="margin-top:10px;display:flex;gap:8px;">
+        <div style="background:#fff;border-radius:8px;padding:6px 10px;border:1px solid #e2e8f0;text-align:center;">
+          <div style="font-size:17px;font-weight:900;color:{_wr_c};">{_wr:.0f}%</div>
+          <div style="font-size:10px;color:#9ca3af;">양봉 승률</div>
+        </div>
+        <div style="background:#fff;border-radius:8px;padding:6px 10px;border:1px solid #e2e8f0;text-align:center;">
+          <div style="font-size:17px;font-weight:900;color:{_er_c};">+{_er:.1f}%</div>
+          <div style="font-size:10px;color:#9ca3af;">기대수익률</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px;">
+    <div class="filter-box">
+      <div class="filter-name">🏦 기관/연기금</div>
+      <div class="filter-score" style="color:#dc2626;">{_sscore["기관/연기금"]:.0f}</div>
+      <div class="filter-max">/ 30점</div>
+    </div>
+    <div class="filter-box">
+      <div class="filter-name">💥 공매도상환</div>
+      <div class="filter-score" style="color:#ea580c;">{_sscore["숏스퀴즈"]:.0f}</div>
+      <div class="filter-max">/ 20점</div>
+    </div>
+    <div class="filter-box">
+      <div class="filter-name">📈 눌림목</div>
+      <div class="filter-score" style="color:#16a34a;">{_sscore["눌림목"]:.1f}</div>
+      <div class="filter-max">/ 30점</div>
+    </div>
+    <div class="filter-box">
+      <div class="filter-name">📰 미반영호재</div>
+      <div class="filter-score" style="color:#2563eb;">{_sscore["뉴스호재"]:.0f}</div>
+      <div class="filter-max">/ 20점</div>
+    </div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:14px;">
+    <div>
+      <div style="font-size:13px;font-weight:800;color:#374151;margin-bottom:8px;">📐 이동평균선 분석</div>
+      <div class="ma-row">
+        <span class="ma-label">5일선</span>
+        <span class="ma-val">{_ma5:,}원</span>
+        <span style="font-size:12px;font-weight:700;color:{_gap_color(_ma5_gap)};">{_ma5_gap:+.1f}%</span>
+      </div>
+      <div class="ma-row">
+        <span class="ma-label">10일선</span>
+        <span class="ma-val">{_ma10:,}원</span>
+        <span style="font-size:12px;font-weight:700;color:{_gap_color(_ma10_gap)};">{_ma10_gap:+.1f}%</span>
+      </div>
+      <div class="ma-row">
+        <span class="ma-label">20일선</span>
+        <span class="ma-val">{_ma20:,}원</span>
+        <span style="font-size:12px;font-weight:700;color:{_gap_color(_ma20_gap)};">{_ma20_gap:+.1f}%</span>
+      </div>
+      <div style="margin-top:6px;font-size:12px;font-weight:700;color:#6b7280;">배열: {_ma_trend}</div>
+    </div>
+    <div>
+      <div style="font-size:13px;font-weight:800;color:#374151;margin-bottom:8px;">📊 기술 지표</div>
+      <div class="ma-row">
+        <span class="ma-label">RSI(14)</span>
+        <span class="ma-val" style="color:{_rsi_color};">{_rsi:.1f}</span>
+        <span style="font-size:11px;color:#9ca3af;">{_rsi_label}</span>
+      </div>
+      <div class="ma-row">
+        <span class="ma-label">거래량</span>
+        <span class="ma-val" style="color:{_vr_color};">{_vr:.0f}%</span>
+        <span style="font-size:11px;color:#9ca3af;">{_vr_label}</span>
+      </div>
+      <div class="ma-row">
+        <span class="ma-label">눌림목</span>
+        <span class="ma-val">{_sp["눌림목점수"]}점</span>
+        <span style="font-size:11px;color:#9ca3af;">{_pb_sig_short}</span>
+      </div>
+      <div class="ma-row">
+        <span class="ma-label">거래대금</span>
+        <span class="ma-val">{_sp["거래대금"]:,.0f}억</span>
+      </div>
+    </div>
+  </div>
+
+  <div style="margin-top:2px;padding-top:12px;border-top:1px solid #f1f5f9;font-size:13px;color:#374151;line-height:1.7;">
+    💬 <strong>AI 타점 분석:</strong> {_sscore["타점분석"]}
+  </div>
+</div>""")
+
+        # ── 기관·외국인 수급 ─────────────────────────────────────────────────
+        if _sinv:
+            st.html('<div style="font-size:14px;font-weight:800;color:#13131a;margin:8px 0 4px;">🏦 기관·외국인 수급 흐름 (최근 5거래일)</div>')
+            _inv_df = pd.DataFrame(_sinv)
+            _inv_df.columns = ["날짜", "기관 순매수", "외국인 순매수", "외국인 보유율(%)"]
+            st.dataframe(_inv_df, use_container_width=True, hide_index=True)
+
+        # ── 뉴스 분류 ────────────────────────────────────────────────────────
+        if _snews:
+            st.html('<div style="font-size:14px;font-weight:800;color:#13131a;margin:12px 0 4px;">📰 뉴스 자동 분류 — 호재 · 악재 · 중립</div>')
+            _good_html = _bad_html = _neut_html = ""
+            _good_cnt = _bad_cnt = 0
+            for _h in _snews:
+                _cat, _kws = classify_news_item(_h)
+                _kw_tag = (f' <span style="font-size:10px;color:#6b7280;">[{", ".join(_kws)}]</span>'
+                           if _kws else "")
+                if _cat == "호재":
+                    _good_html += f'<div class="nc-good">🟢 {_h}{_kw_tag}</div>'
+                    _good_cnt  += 1
+                elif _cat == "악재":
+                    _bad_html  += f'<div class="nc-bad">🔴 {_h}{_kw_tag}</div>'
+                    _bad_cnt   += 1
+                else:
+                    _neut_html += f'<div class="nc-neut">⚪ {_h}</div>'
+
+            _sum_color = ("#16a34a" if _good_cnt > _bad_cnt
+                          else "#dc2626" if _bad_cnt > _good_cnt else "#94a3b8")
+            _sum_text  = (f"호재 {_good_cnt}건 우세 — 긍정 편향" if _good_cnt > _bad_cnt
+                          else f"악재 {_bad_cnt}건 우세 — 부정 편향" if _bad_cnt > _good_cnt
+                          else "호재·악재 균형")
+            st.html(f"""
+<div style="background:{_sum_color}18;border-radius:10px;padding:9px 14px;margin-bottom:8px;
+            border:1px solid {_sum_color}40;font-size:13px;font-weight:700;color:{_sum_color};">
+    📊 뉴스 종합 ({len(_snews)}건): {_sum_text}
+</div>
+{_good_html}{_bad_html}{_neut_html}""")
+
+    # ── 결과 닫기 ──────────────────────────────────────────────────────────────
+    if st.button("✕ 스나이퍼 결과 닫기", key="sniper_clear"):
+        for _k in ["sniper_code", "sniper_mkt", "sniper_name", "sniper_sector"]:
+            st.session_state.pop(_k, None)
+        st.rerun()
 
 # ── 장세 코멘트 ───────────────────────────────────────────────────────────────
 kd = macro.get("KOSPI"); nd = macro.get("나스닥"); nfd = macro.get("나스닥선물")
