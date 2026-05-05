@@ -1,0 +1,13 @@
+id = "stock-dashboard"
+title = "KRX Stock Dashboard"
+kind = "web"
+previewPath = "/stock-dashboard/"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+localPort = 5000
+paths = ["/stock-dashboard"]
+
+[services.devServer]
+command = "streamlit run /home/runner/workspace/artifacts/stock-dashboard/app.py --server.port 5000 --server.baseUrlPath /stock-dashboard"
