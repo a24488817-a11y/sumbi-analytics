@@ -24,13 +24,13 @@ args = "KRX Stock Dashboard"
 name = "KRX Stock Dashboard"
 author = "agent"
 
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "streamlit run /home/runner/workspace/artifacts/stock-dashboard/app.py --server.port 5000"
-waitForPort = 5000
-
 [workflows.workflow.metadata]
 outputType = "webview"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "streamlit run main.py --server.port 5000 --server.address 0.0.0.0"
+waitForPort = 5000
 
 [agent]
 stack = "PNPM_WORKSPACE"
