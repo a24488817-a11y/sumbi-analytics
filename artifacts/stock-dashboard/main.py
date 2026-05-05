@@ -297,17 +297,20 @@ def classify_stock_tier(market_cap: float, close_price: float) -> str:
     """
     market_cap  : 시가총액 (억원)
     close_price : 현재가 (원)
-    NaN / 0 → 중형주로 방어 처리 (소형주 오분류 방지)
+
+    시총 미확인(0/NaN)일 때는 주가로 fallback:
+      - 주가 2천원 미만  → 소형 (저가주는 시총 불문 소형)
+      - 주가 2천원 이상  → 중형 (보수적 방어 처리)
     """
     try:
         mc = float(market_cap)
     except (TypeError, ValueError):
         mc = 0.0
-    if mc <= 0 or (mc != mc):          # 0 또는 NaN → 중형주 방어
-        return "midcap"
-    if mc >= 10_000:                   # 1조원(10,000억) 이상 → 대장주
+    if mc <= 0 or (mc != mc):                      # 시총 불명 → 주가로 fallback
+        return "small" if close_price < 2_000 else "midcap"
+    if mc >= 10_000:                               # 1조원(10,000억) 이상 → 대장주
         return "bluechip"
-    if mc < 2_000 or close_price < 2_000:  # 2천억 미만 or 주가 2천원 미만 → 소형
+    if mc < 2_000 or close_price < 2_000:          # 2천억 미만 or 주가 2천원 미만 → 소형
         return "small"
     return "midcap"
 
@@ -613,6 +616,10 @@ def sniper_price(ticker: str, suffix: str, date_str: str) -> dict:
     try:
         _fi  = yf.Ticker(ticker + suffix).fast_info
         _cap = getattr(_fi, "market_cap", None)
+        if not (_cap and _cap > 0):
+            _shares = getattr(_fi, "shares", None)
+            _price  = getattr(_fi, "last_price", None)
+            _cap = (_shares * _price) if (_shares and _price and _shares > 0) else 0
         mcap = round(_cap / 1e8, 0) if (_cap and _cap > 0) else 0.0
     except Exception:
         mcap = 0.0
@@ -729,11 +736,15 @@ def get_price_data(date_str: str, market: str) -> tuple:
     df["눌림목신호"] = pb_signals
     df["RSI"]        = rsi_vals
 
-    # 시가총액 병렬 조회 (yfinance fast_info — 속성 접근, dict 아님)
+    # 시가총액 병렬 조회 (fast_info 속성 → 없으면 shares×price 계산 fallback)
     def _one_cap(t_sfx: str) -> float:
         try:
             _fi  = yf.Ticker(t_sfx).fast_info
             _cap = getattr(_fi, "market_cap", None)
+            if not (_cap and _cap > 0):
+                _sh = getattr(_fi, "shares", None)
+                _pr = getattr(_fi, "last_price", None)
+                _cap = (_sh * _pr) if (_sh and _pr and _sh > 0) else 0
             return round(_cap / 1e8, 0) if (_cap and _cap > 0) else 0.0
         except Exception:
             return 0.0
@@ -906,6 +917,47 @@ def build_ranked(price_df: pd.DataFrame, investor_map: dict, news_map: dict) -> 
     ranked = (
         pd.DataFrame(scored_rows, index=top15_base.index)
         .sort_values(["_exp_return","_win_rate","매수적합도(%)"], ascending=False)
+        .reset_index()
+    )
+    ranked.insert(0, "순위", range(1, len(ranked) + 1))
+    return ranked
+
+
+def build_ranked_small(
+    price_df: pd.DataFrame,
+    investor_map: dict,
+    news_map: dict,
+) -> pd.DataFrame:
+    """소형/동전주 전용 — 거래량비율 기준으로 후보 확장 후 42대 점수화"""
+    candidates = price_df.sort_values("거래량비율(%)", ascending=False)
+    scored_rows, scored_idx = [], []
+    for ticker, row in candidates.iterrows():
+        mcap  = float(row.get("시가총액(억)", 0))
+        price = float(row.get("현재가", 0))
+        if classify_stock_tier(mcap, price) != "small":
+            continue
+        s = score_ticker(ticker, row, investor_map, news_map)
+        scored_rows.append({
+            "종목명": row["종목명"],    "섹터": row["섹터"],
+            "현재가": row["현재가"],    "등락률(%)": row["등락률(%)"],
+            "RSI": row["RSI"],          "눌림목신호": row["눌림목신호"],
+            "거래대금(억)": row["거래대금(억)"],
+            "기관/연기금": s["기관/연기금"],  "숏스퀴즈": s["숏스퀴즈"],
+            "눌림목": s["눌림목"],      "뉴스호재": s["뉴스호재"],
+            "매수적합도(%)": s["매수적합도(%)"], "타점분석": s["타점분석"],
+            "수급신호": s["수급신호"],
+            "_squeeze": s["폭발후보"],  "_safepin": s["안전핀"],
+            "_기관당일": s["_기관당일"], "_외국인당일": s["_외국인당일"],
+            "_기관연속일": s["_기관연속일"],
+            "_grade": s["_grade"],      "_win_rate": s["_win_rate"],
+            "_exp_return": s["_exp_return"],
+        })
+        scored_idx.append(ticker)
+    if not scored_rows:
+        return pd.DataFrame()
+    ranked = (
+        pd.DataFrame(scored_rows, index=scored_idx)
+        .sort_values(["_exp_return", "_win_rate", "매수적합도(%)"], ascending=False)
         .reset_index()
     )
     ranked.insert(0, "순위", range(1, len(ranked) + 1))
@@ -1356,8 +1408,8 @@ tab_kp, tab_kq, tab_bc, tab_mc, tab_sm, tab_supply, tab_sector, tab_news, tab_oh
 ])
 
 
-def _run_btn(key: str):
-    if st.button("🚀 KOSPI · KOSDAQ 동시 분석 시작", key=key, use_container_width=True):
+def _run_btn(key: str, label: str = "🚀 KOSPI · KOSDAQ 동시 분석 시작"):
+    if st.button(label, key=key, use_container_width=True):
         st.session_state["analysis_run"] = True
         st.cache_data.clear()
 
@@ -1373,7 +1425,7 @@ def render_market_tab(market_name: str, result_key: str, date_key: str,
     체급 배지로 위험도 즉시 확인 | 🏦기관/연기금(30pt) + 💥공매도상환(20pt) + 📈최적매수(30pt) + 📰호재(20pt)
     </div>""")
 
-    _run_btn(run_btn_key)
+    _run_btn(run_btn_key, f"🚀 {market_name} 분석 시작")
     result = st.session_state.get(result_key)
 
     if result is not None and not result.empty:
@@ -1390,7 +1442,10 @@ def render_market_tab(market_name: str, result_key: str, date_key: str,
             news_map = get_news_batch(top15_tickers)
 
         ranked = build_ranked(result, investor_map, news_map)
-        st.session_state[f"{market_code.lower()}_ranked"] = ranked
+        st.session_state[f"{market_code.lower()}_ranked"]       = ranked
+        st.session_state[f"{market_code.lower()}_price_df"]     = result
+        st.session_state[f"{market_code.lower()}_investor_map"] = investor_map
+        st.session_state[f"{market_code.lower()}_news_map"]     = news_map
 
         # ── 요약 통계 카드 ──────────────────────────────────────────────────
         grade_counts = ranked["_grade"].value_counts()
@@ -1463,13 +1518,14 @@ def render_market_tab(market_name: str, result_key: str, date_key: str,
 
 # ── 체급 탭 렌더 함수 ─────────────────────────────────────────────────────────
 def render_tier_tab(grade_key: str):
-    """KOSPI + KOSDAQ 합산 → 체급 필터링 후 카드 표시"""
+    """KOSPI + KOSDAQ 합산 → 체급 필터링 후 카드 표시
+    소형/동전주는 거래대금 TOP 15 밖 종목까지 확장 스캔"""
     gm = GRADE_META[grade_key]
     icon, name, desc, color, css, tip = gm
 
     st.html(f'<div class="section-header">{icon} {name} — KOSPI + KOSDAQ 합산</div>')
     st.html(f'<div class="section-sub">{tip} | 분류 기준: {desc}</div>')
-    _run_btn(f"btn_tier_{grade_key}")
+    _run_btn(f"btn_tier_{grade_key}", f"🚀 {icon} {name} KOSPI+KOSDAQ 분석 시작")
 
     kp = st.session_state.get("kospi_ranked")
     kq = st.session_state.get("kosdaq_ranked")
@@ -1491,11 +1547,29 @@ def render_tier_tab(grade_key: str):
             st.info("KOSPI · KOSDAQ 탭에서 분석이 완료되면 여기에 자동으로 표시됩니다.")
         return
 
+    # ── TOP 15 scored 결과에서 해당 체급 필터 ─────────────────────────────
     parts = [df for df in [kp, kq] if df is not None]
-    combined = pd.concat(parts, ignore_index=True)
-    filtered = (combined[combined["_grade"] == grade_key]
-                .sort_values(["_exp_return", "_win_rate", "매수적합도(%)"], ascending=False)
-                .reset_index(drop=True))
+    combined  = pd.concat(parts, ignore_index=True)
+    filtered  = (combined[combined["_grade"] == grade_key]
+                 .sort_values(["_exp_return", "_win_rate", "매수적합도(%)"], ascending=False)
+                 .reset_index(drop=True))
+
+    # ── 소형/동전주: TOP 15에 없으면 전체 price_df 에서 확장 스캔 ──────────
+    if filtered.empty and grade_key == "small":
+        extra_parts = []
+        for mkt in ["kospi", "kosdaq"]:
+            pdf = st.session_state.get(f"{mkt}_price_df")
+            inv = st.session_state.get(f"{mkt}_investor_map", {})
+            nws = st.session_state.get(f"{mkt}_news_map", {})
+            if pdf is not None and not pdf.empty:
+                with st.spinner(f"🪙 {mkt.upper()} 소형/동전주 확장 스캔 중…"):
+                    sm = build_ranked_small(pdf, inv, nws)
+                if not sm.empty:
+                    extra_parts.append(sm)
+        if extra_parts:
+            filtered = (pd.concat(extra_parts, ignore_index=True)
+                        .sort_values(["_exp_return", "_win_rate", "매수적합도(%)"], ascending=False)
+                        .reset_index(drop=True))
 
     if filtered.empty:
         st.html(f"""
