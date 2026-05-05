@@ -1332,9 +1332,12 @@ if st.session_state.get("analysis_run"):
 # ───────────────────────────────────────────────────────────────────────────────
 # 탭
 # ───────────────────────────────────────────────────────────────────────────────
-tab_kp, tab_kq, tab_supply, tab_sector, tab_news, tab_oh = st.tabs([
+tab_kp, tab_kq, tab_bc, tab_mc, tab_sm, tab_supply, tab_sector, tab_news, tab_oh = st.tabs([
     "🏆 KOSPI TOP 15",
     "🔷 KOSDAQ TOP 15",
+    "👑 대장주",
+    "📈 중형주",
+    "🪙 소형/동전주",
     "📊 수급 분석표",
     "💰 섹터 돈의 흐름",
     "📰 미반영 뉴스",
@@ -1376,6 +1379,7 @@ def render_market_tab(market_name: str, result_key: str, date_key: str,
             news_map = get_news_batch(top15_tickers)
 
         ranked = build_ranked(result, investor_map, news_map)
+        st.session_state[f"{market_code.lower()}_ranked"] = ranked
 
         # ── 요약 통계 카드 ──────────────────────────────────────────────────
         grade_counts = ranked["_grade"].value_counts()
@@ -1446,6 +1450,81 @@ def render_market_tab(market_name: str, result_key: str, date_key: str,
         </div>""")
 
 
+# ── 체급 탭 렌더 함수 ─────────────────────────────────────────────────────────
+def render_tier_tab(grade_key: str):
+    """KOSPI + KOSDAQ 합산 → 체급 필터링 후 카드 표시"""
+    gm = GRADE_META[grade_key]
+    icon, name, desc, color, css, tip = gm
+
+    st.html(f'<div class="section-header">{icon} {name} — KOSPI + KOSDAQ 합산</div>')
+    st.html(f'<div class="section-sub">{tip} | 분류 기준: {desc}</div>')
+    _run_btn(f"btn_tier_{grade_key}")
+
+    kp = st.session_state.get("kospi_ranked")
+    kq = st.session_state.get("kosdaq_ranked")
+
+    if kp is None and kq is None:
+        if not st.session_state.get("analysis_run"):
+            st.html(f"""
+            <div style="background:#fff;border-radius:20px;padding:40px;text-align:center;
+                        box-shadow:0 2px 12px rgba(0,0,0,0.06);margin-top:12px;">
+                <div style="font-size:52px;margin-bottom:12px;">{icon}</div>
+                <div style="font-size:18px;font-weight:800;color:#13131a;margin-bottom:8px;">
+                    버튼을 눌러 분석을 시작하세요
+                </div>
+                <div style="font-size:14px;color:#9ca3af;">
+                    KOSPI + KOSDAQ 전체 결과 중 {name} 종목만 자동으로 모아 보여줍니다.
+                </div>
+            </div>""")
+        else:
+            st.info("KOSPI · KOSDAQ 탭에서 분석이 완료되면 여기에 자동으로 표시됩니다.")
+        return
+
+    parts = [df for df in [kp, kq] if df is not None]
+    combined = pd.concat(parts, ignore_index=True)
+    filtered = (combined[combined["_grade"] == grade_key]
+                .sort_values(["_exp_return", "_win_rate", "매수적합도(%)"], ascending=False)
+                .reset_index(drop=True))
+
+    if filtered.empty:
+        st.html(f"""
+        <div style="background:#fff;border-radius:16px;padding:32px;text-align:center;
+                    box-shadow:0 2px 10px rgba(0,0,0,0.06);margin-top:12px;">
+            <div style="font-size:40px;margin-bottom:8px;">{icon}</div>
+            <div style="font-size:16px;font-weight:700;color:#9ca3af;">
+                현재 분석 결과에서 {name} 종목이 없습니다.
+            </div>
+        </div>""")
+        return
+
+    filtered = filtered.copy()
+    filtered.insert(0, "순위", range(1, len(filtered) + 1))
+
+    avg_wr = filtered["_win_rate"].mean()
+    avg_er = filtered["_exp_return"].mean()
+    top_er = filtered["_exp_return"].max()
+    cnt    = len(filtered)
+
+    st.html(f"""
+    <div class="macro-card" style="margin-bottom:8px;">
+        <div style="display:flex;gap:24px;flex-wrap:wrap;font-size:13px;align-items:center;">
+            <div>
+                <span style="font-size:22px;font-weight:900;color:{color};">{cnt}종목</span>
+                <span style="font-size:12px;color:#9ca3af;margin-left:4px;">{name}</span>
+            </div>
+            <div>📊 <strong>평균 승률</strong>:
+                <span style="color:#16a34a;font-weight:800;">{avg_wr:.1f}%</span></div>
+            <div>📈 <strong>평균 기대수익</strong>:
+                <span style="color:#ef4444;font-weight:800;">+{avg_er:.2f}%</span></div>
+            <div>🚀 <strong>최고 기대수익</strong>:
+                <span style="color:#7c3aed;font-weight:800;">+{top_er:.2f}%</span>
+                ({filtered.iloc[0]["종목명"]})</div>
+        </div>
+    </div>""")
+
+    render_ranked_cards(filtered)
+
+
 # ── KOSPI TAB ────────────────────────────────────────────────────────────────
 with tab_kp:
     render_market_tab("KOSPI", "kospi_result", "kospi_date", "btn_kp", "KOSPI")
@@ -1453,6 +1532,16 @@ with tab_kp:
 # ── KOSDAQ TAB ───────────────────────────────────────────────────────────────
 with tab_kq:
     render_market_tab("KOSDAQ", "kosdaq_result", "kosdaq_date", "btn_kq", "KOSDAQ")
+
+# ── 체급별 탭 ─────────────────────────────────────────────────────────────────
+with tab_bc:
+    render_tier_tab("bluechip")
+
+with tab_mc:
+    render_tier_tab("midcap")
+
+with tab_sm:
+    render_tier_tab("small")
 
 # ── 수급 분석표 ───────────────────────────────────────────────────────────────
 with tab_supply:
