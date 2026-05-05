@@ -922,20 +922,158 @@ def build_ranked(price_df: pd.DataFrame, investor_map: dict, news_map: dict) -> 
     return ranked
 
 
+def score_ticker_small(ticker: str, row: pd.Series,
+                       investor_map: dict, news_map: dict) -> dict:
+    """소형/동전주 전용 점수 엔진 — 세력 기습 쌍끌이 패턴 탐지.
+    42대 필살기(기관 실적·연기금 연속매수 등)는 완전 배제.
+    핵심: 단기 낙폭 바닥 + RSI 과매도 + 외국인·기관 기습 동시 매수."""
+    data       = investor_map.get(ticker, [])
+    inst_d0    = data[0]["기관"]    if data           else 0
+    foreign_d0 = data[0]["외국인"] if data           else 0
+    inst_d1    = data[1]["기관"]    if len(data) > 1 else 0
+    foreign_d1 = data[1]["외국인"] if len(data) > 1 else 0
+
+    labels        = []
+    squeeze_score = 0
+    squeeze_flag  = False
+
+    # ── A. 기습 쌍끌이 감지 (0~40점) ──────────────────────────────────────────
+    if inst_d0 > 0 and foreign_d0 > 0:               # 당일 쌍끌이
+        squeeze_score += 20
+        squeeze_flag   = True
+        labels.append("🔥 기습 쌍끌이 D0")
+    if inst_d1 > 0 and foreign_d1 > 0 and (inst_d0 > 0 or foreign_d0 > 0):
+        squeeze_score += 10                           # 연속 쌍끌이
+        labels.append("연속 쌍끌이")
+    if len(data) >= 2 and foreign_d0 > 0 and data[1]["외국인"] < 0:
+        squeeze_score += 10                           # 외국인 매도→매수 전환
+        squeeze_flag   = True
+        labels.append("💥 외국인 전환(숏스퀴즈)")
+    elif inst_d0 > 0 and foreign_d0 <= 0:
+        squeeze_score += 8;  labels.append("기관 단독 기습")
+    elif foreign_d0 > 0 and inst_d0 <= 0:
+        squeeze_score += 8;  labels.append("외국인 단독 기습")
+    squeeze_score = min(squeeze_score, 40)
+
+    # ── B. 단기 낙폭·눌림목 (0~30점) ──────────────────────────────────────────
+    pb_score = round(min(float(row.get("눌림목점수", 0)) * 0.30, 30), 1)
+
+    # ── C. RSI 과매도 (0~20점) ────────────────────────────────────────────────
+    rsi_v     = float(row.get("RSI", 50))
+    rsi_score = 0
+    if rsi_v < 25:
+        rsi_score = 20; labels.append(f"📉 RSI극단과매도({rsi_v:.0f})")
+    elif rsi_v < 30:
+        rsi_score = 15; labels.append(f"📉 RSI과매도({rsi_v:.0f})")
+    elif rsi_v < 40:
+        rsi_score = 8
+    elif rsi_v < 50:
+        rsi_score = 3
+
+    # ── D. 거래량 폭발 (0~10점) ───────────────────────────────────────────────
+    vol_r     = float(row.get("거래량비율(%)", 100))
+    vol_score = 0
+    if vol_r >= 300:
+        vol_score = 10; labels.append(f"🚀 거래량{vol_r:.0f}%폭발")
+    elif vol_r >= 200:
+        vol_score = 7;  labels.append(f"📈 거래량{vol_r:.0f}%급증")
+    elif vol_r >= 150:
+        vol_score = 4
+
+    total = min(100, squeeze_score + pb_score + rsi_score + vol_score)
+
+    # ── 뉴스 호재 ─────────────────────────────────────────────────────────────
+    news_text  = " ".join(news_map.get(ticker, []))
+    news_hits  = list(dict.fromkeys(kw for kw in NEWS_KEYWORDS if kw in news_text))
+    news_score = min(len(news_hits) * 4, 20)
+    if news_hits: labels.append(f"📰호재({','.join(news_hits[:2])})")
+
+    # ── 동전주 전용 기대수익률·승률 ───────────────────────────────────────────
+    if squeeze_flag and rsi_v < 35 and vol_r >= 200:
+        win_rate, exp_return = 55.0, 6.0
+    elif squeeze_flag and rsi_v < 40:
+        win_rate, exp_return = 50.0, 4.5
+    elif squeeze_flag:
+        win_rate, exp_return = 45.0, 3.5
+    elif rsi_v < 30 and vol_r >= 150:
+        win_rate, exp_return = 42.0, 3.0
+    elif pb_score >= 18 and rsi_v < 45:
+        win_rate, exp_return = 40.0, 2.5
+    else:
+        win_rate, exp_return = 33.0, 1.5
+    if news_hits:
+        exp_return += 0.5; win_rate += 3.0
+
+    # ── 타점 분석 코멘트 ──────────────────────────────────────────────────────
+    chg = float(row.get("등락률(%)", 0))
+    if squeeze_flag and vol_r >= 200:
+        comment = (f"🔥 세력 기습 쌍끌이 — 외국인 {foreign_d0:+,} / 기관 {inst_d0:+,} "
+                   f"| 거래량 {vol_r:.0f}% | RSI {rsi_v:.0f} 바닥 — 내일 급등 경계")
+    elif squeeze_flag:
+        comment = (f"외국인·기관 동시 진입 포착(외 {foreign_d0:+,} / 기 {inst_d0:+,}) "
+                   f"| RSI {rsi_v:.0f} — 단기 급등 대기, 손절선 필수")
+    elif rsi_v < 30 and vol_r >= 150:
+        comment = (f"RSI {rsi_v:.0f} 극단 과매도 + 거래량 {vol_r:.0f}% 급증 "
+                   f"— 저점 세력 매집 의심, 수급 확인 후 진입")
+    elif "💥 외국인 전환(숏스퀴즈)" in " ".join(labels):
+        comment = (f"외국인 매도→매수 전환(공매도 상환 추정) | 오늘 {chg:+.1f}% "
+                   f"— 급등 트리거 가능성, 고위험 주의")
+    else:
+        comment = (f"낙폭 {pb_score:.0f}점 · RSI {rsi_v:.0f} · 거래량 {vol_r:.0f}% "
+                   f"— 추가 쌍끌이 신호 확인 후 진입 고려")
+
+    mcap  = float(row.get("시가총액(억)", 0))
+    price = float(row.get("현재가", 0))
+    grade = classify_stock_tier(mcap, price)
+
+    return {
+        "기관/연기금":   0.0,
+        "숏스퀴즈":      float(squeeze_score),
+        "눌림목":        pb_score,
+        "뉴스호재":      float(news_score),
+        "매수적합도(%)": round(total, 1),
+        "타점분석":      comment,
+        "수급신호":      " | ".join(labels) if labels else "—",
+        "폭발후보":      squeeze_flag,
+        "안전핀":        False,
+        "_기관당일":     inst_d0,
+        "_외국인당일":   foreign_d0,
+        "_기관연속일":   0,
+        "_grade":        grade,
+        "_win_rate":     win_rate,
+        "_exp_return":   exp_return,
+        "_news_cnt":     len(news_hits),
+    }
+
+
 def build_ranked_small(
     price_df: pd.DataFrame,
-    investor_map: dict,
+    investor_map: dict,   # 기존 TOP15 map (재사용 or 보완)
     news_map: dict,
 ) -> pd.DataFrame:
-    """소형/동전주 전용 — 거래량비율 기준으로 후보 확장 후 42대 점수화"""
+    """소형/동전주 전용 빌더 — 거래량비율 기준 후보 확장 +
+    소형 종목 전용 수급 배치 조회 + score_ticker_small 엔진 적용"""
+
+    # 1. 소형 후보 추출 (거래량비율 높은 순)
     candidates = price_df.sort_values("거래량비율(%)", ascending=False)
+    small_pairs = [
+        (ticker, row) for ticker, row in candidates.iterrows()
+        if classify_stock_tier(
+            float(row.get("시가총액(억)", 0)), float(row.get("현재가", 0))
+        ) == "small"
+    ]
+    if not small_pairs:
+        return pd.DataFrame()
+
+    # 2. 소형 후보 전용 수급·뉴스 데이터 별도 배치 조회
+    small_tickers  = tuple(t for t, _ in small_pairs)
+    small_inv_map  = get_investor_batch(small_tickers)
+    small_news_map = get_news_batch(small_tickers)
+
+    # 3. 동전주 전용 엔진으로 점수화
     scored_rows, scored_idx = [], []
-    for ticker, row in candidates.iterrows():
-        mcap  = float(row.get("시가총액(억)", 0))
-        price = float(row.get("현재가", 0))
-        if classify_stock_tier(mcap, price) != "small":
-            continue
-        s = score_ticker(ticker, row, investor_map, news_map)
+    for ticker, row in small_pairs:
+        s = score_ticker_small(ticker, row, small_inv_map, small_news_map)
         scored_rows.append({
             "종목명": row["종목명"],    "섹터": row["섹터"],
             "현재가": row["현재가"],    "등락률(%)": row["등락률(%)"],
@@ -952,8 +1090,10 @@ def build_ranked_small(
             "_exp_return": s["_exp_return"],
         })
         scored_idx.append(ticker)
+
     if not scored_rows:
         return pd.DataFrame()
+
     ranked = (
         pd.DataFrame(scored_rows, index=scored_idx)
         .sort_values(["_exp_return", "_win_rate", "매수적합도(%)"], ascending=False)
