@@ -2,7 +2,6 @@ kind = "web"
 previewPath = "/"
 title = "KRX Stock Dashboard"
 version = "1.0.0"
-id = "stock-dashboard"
 
 [[services]]
 localPort = 5000
