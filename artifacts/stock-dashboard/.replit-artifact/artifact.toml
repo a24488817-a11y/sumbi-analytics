@@ -9,4 +9,4 @@ name = "KRX Stock Dashboard"
 paths = ["/"]
 
 [services.development]
-run = "streamlit run /home/runner/workspace/main.py --server.port 5000 --server.address 0.0.0.0"
+run = "streamlit run /home/runner/workspace/artifacts/stock-dashboard/main.py --server.port 5000 --server.address 0.0.0.0"
