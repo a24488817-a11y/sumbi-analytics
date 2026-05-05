@@ -1498,9 +1498,7 @@ def render_tier_tab(grade_key: str):
         return
 
     filtered = filtered.copy()
-    if "순위" in filtered.columns:
-        filtered.drop(columns=["순위"], inplace=True)
-    filtered.insert(0, "순위", range(1, len(filtered) + 1))
+    filtered["순위"] = range(1, len(filtered) + 1)
 
     avg_wr = filtered["_win_rate"].mean()
     avg_er = filtered["_exp_return"].mean()
