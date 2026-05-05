@@ -1,9 +1,7 @@
 """
-42대 필살기 주식 분석 엔진 v2.0
-- 주가/OHLCV: yfinance (듀얼 엔진)
-- 기관/외국인 순매매: 네이버금융 frgn.naver 직접 파싱 (pykrx 대체)
-- 공매도/숏스퀴즈: 외국인 매수전환 패턴 + 보유율 추세 분석
-- 뉴스: 네이버금융 news_news.naver 한글 파싱
+숨비 애널리틱스 (SOOMBI Analytics)
+- 주가/OHLCV: yfinance | 기관/외국인 실데이터: 네이버금융 직접 파싱
+- 4대 필살기 필터: 기관/연기금 × 숏스퀴즈 × 눌림목 × 미반영 호재
 """
 
 import streamlit as st
@@ -17,7 +15,146 @@ from streamlit_autorefresh import st_autorefresh
 import warnings
 warnings.filterwarnings("ignore")
 
-st.set_page_config(page_title="42대 필살기 분석기", layout="wide")
+st.set_page_config(
+    page_title="숨비 애널리틱스 · SOOMBI Analytics",
+    page_icon="🐳",
+    layout="wide",
+)
+
+# ───────────────────────────────────────────────────────────────────────────────
+# 글로벌 CSS — 토스증권 스타일
+# ───────────────────────────────────────────────────────────────────────────────
+st.markdown("""
+<style>
+/* ─── 기본 폰트 & 배경 ─── */
+html, body, [class*="css"] {
+    font-family: 'Pretendard', 'Noto Sans KR', sans-serif;
+}
+.main { background: #f8f9fc; }
+
+/* ─── 지수 카드 ─── */
+.index-card {
+    background: #ffffff;
+    border-radius: 20px;
+    padding: 22px 24px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.07);
+    margin-bottom: 8px;
+    border: 1px solid #f0f0f5;
+}
+.index-name  { font-size: 13px; font-weight: 600; color: #8c8c9e; letter-spacing: 0.5px; margin-bottom: 6px; }
+.index-value { font-size: 28px; font-weight: 800; color: #13131a; line-height: 1.1; }
+.index-delta { font-size: 14px; font-weight: 700; margin-top: 5px; }
+.up   { color: #ef4444; }   /* 한국식: 상승=빨강 */
+.down { color: #1d6ce8; }   /* 한국식: 하락=파랑 */
+.flat { color: #9ca3af; }
+
+/* ─── 섹션 헤더 ─── */
+.section-header {
+    font-size: 20px; font-weight: 800; color: #13131a;
+    margin: 28px 0 12px 0; letter-spacing: -0.3px;
+}
+.section-sub {
+    font-size: 13px; color: #8c8c9e; margin-top: -8px; margin-bottom: 16px;
+}
+
+/* ─── 종목 카드 ─── */
+.stock-card {
+    background: #ffffff;
+    border-radius: 16px;
+    padding: 20px 22px;
+    margin-bottom: 10px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.06);
+    border-left: 5px solid #e2e8f0;
+    transition: box-shadow 0.2s;
+}
+.stock-card.tier1 { border-left-color: #ef4444; }
+.stock-card.tier2 { border-left-color: #f97316; }
+.stock-card.tier3 { border-left-color: #eab308; }
+.stock-card.tier4 { border-left-color: #94a3b8; }
+
+.stock-rank  { font-size: 13px; font-weight: 700; color: #8c8c9e; }
+.stock-name  { font-size: 19px; font-weight: 800; color: #13131a; margin: 2px 0 4px 0; }
+.stock-price { font-size: 22px; font-weight: 800; color: #13131a; }
+.stock-sector{ font-size: 12px; color: #9ca3af; background: #f1f5f9;
+               border-radius: 6px; padding: 2px 8px; display:inline-block; }
+
+/* ─── 적합도 바지 ─── */
+.fit-bar-wrap { background: #f1f5f9; border-radius: 99px; height: 8px; margin: 8px 0 4px; }
+.fit-bar      { border-radius: 99px; height: 8px; transition: width 0.4s; }
+
+/* ─── 점수 배지 ─── */
+.badge {
+    display: inline-block; border-radius: 8px; padding: 3px 10px;
+    font-size: 12px; font-weight: 700; margin: 2px 3px 2px 0;
+}
+.badge-inst  { background: #fef2f2; color: #dc2626; }
+.badge-short { background: #fff7ed; color: #ea580c; }
+.badge-pb    { background: #f0fdf4; color: #16a34a; }
+.badge-news  { background: #eff6ff; color: #2563eb; }
+.badge-hot   { background: #ef4444; color: #fff; }
+.badge-safe  { background: #dbeafe; color: #1d4ed8; }
+.badge-explode { background: #7c3aed; color: #fff; }
+
+/* ─── 신호등 배지 ─── */
+.signal-buy  { background:#ef4444; color:#fff; border-radius:10px;
+               padding:4px 14px; font-size:13px; font-weight:800; }
+.signal-ready{ background:#f59e0b; color:#fff; border-radius:10px;
+               padding:4px 14px; font-size:13px; font-weight:800; }
+.signal-wait { background:#94a3b8; color:#fff; border-radius:10px;
+               padding:4px 14px; font-size:13px; font-height:800; }
+.signal-stop { background:#e2e8f0; color:#64748b; border-radius:10px;
+               padding:4px 14px; font-size:13px; }
+
+/* ─── 매크로 코멘트 카드 ─── */
+.macro-card {
+    background:#ffffff; border-radius:16px; padding:20px 24px;
+    box-shadow:0 2px 10px rgba(0,0,0,0.06); margin-bottom:12px;
+}
+.macro-line { font-size:14px; color:#374151; line-height:1.8; }
+
+/* ─── 타이틀 ─── */
+.soombi-title {
+    font-size: 32px; font-weight: 900; color: #13131a; letter-spacing: -1px;
+}
+.soombi-sub {
+    font-size: 14px; color: #8c8c9e; margin-top: 2px;
+}
+.soombi-logo { font-size: 36px; }
+
+/* ─── 사이드바 ─── */
+section[data-testid="stSidebar"] {
+    background: #ffffff;
+    border-right: 1px solid #f0f0f5;
+}
+
+/* ─── 분석 시작 버튼 ─── */
+.stButton > button {
+    background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%) !important;
+    color: white !important; font-weight: 800 !important;
+    border-radius: 14px !important; border: none !important;
+    padding: 14px 28px !important; font-size: 16px !important;
+    width: 100%; box-shadow: 0 4px 15px rgba(239,68,68,0.4) !important;
+}
+
+/* ─── 섹터 바 차트 제목 ─── */
+h3 { font-weight: 800 !important; color: #13131a !important; }
+
+/* ─── 탭 스타일 ─── */
+[data-testid="stTabs"] button {
+    font-weight: 700; font-size: 14px;
+}
+[data-testid="stTabs"] button[aria-selected="true"] {
+    color: #ef4444 !important; border-bottom-color: #ef4444 !important;
+}
+
+/* ─── 데이터프레임 헤더 ─── */
+thead tr th {
+    background: #f8fafc !important; font-weight: 700 !important;
+    font-size: 13px !important; color: #374151 !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
 
 # ───────────────────────────────────────────────────────────────────────────────
 # 종목 / 섹터 DB
@@ -143,94 +280,199 @@ NAVER_HDR = {
     "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"),
     "Referer": "https://finance.naver.com/",
-    "Accept-Charset": "euc-kr",
 }
 
 
 # ───────────────────────────────────────────────────────────────────────────────
-# ■ 네이버 금융 — 기관/외국인 순매매 (듀얼 엔진 핵심)
+# UI 헬퍼 함수
+# ───────────────────────────────────────────────────────────────────────────────
+def index_card_html(name: str, value: str, delta_pct: float, delta_abs: float) -> str:
+    """한국식 지수 카드 (상승=빨강, 하락=파랑)"""
+    if delta_pct > 0:
+        cls = "up"; arrow = "▲"; sign = "+"
+    elif delta_pct < 0:
+        cls = "down"; arrow = "▼"; sign = ""
+    else:
+        cls = "flat"; arrow = ""; sign = ""
+    return f"""
+    <div class="index-card">
+        <div class="index-name">{name}</div>
+        <div class="index-value {cls}">{value}</div>
+        <div class="index-delta {cls}">{arrow} {sign}{delta_pct:.2f}% &nbsp;
+            <span style="font-weight:400;font-size:12px;color:#9ca3af;">
+                ({sign}{delta_abs:,.2f})
+            </span>
+        </div>
+    </div>"""
+
+
+def fit_signal_html(score: float) -> str:
+    """매수 적합도 신호등 HTML"""
+    if score >= 75:
+        return f"<span class='signal-buy'>🔴 즉시 매수</span>"
+    elif score >= 55:
+        return f"<span class='signal-ready'>🟡 매수 준비</span>"
+    elif score >= 35:
+        return f"<span class='signal-wait'>⚪ 관망</span>"
+    else:
+        return f"<span class='signal-stop'>🔵 진입 불가</span>"
+
+
+def fit_bar_html(score: float) -> str:
+    """매수 적합도 프로그레스 바"""
+    if score >= 75:   bar_color = "#ef4444"
+    elif score >= 55: bar_color = "#f59e0b"
+    elif score >= 35: bar_color = "#94a3b8"
+    else:             bar_color = "#1d6ce8"
+    return f"""
+    <div class="fit-bar-wrap">
+        <div class="fit-bar" style="width:{score}%;background:{bar_color};"></div>
+    </div>
+    <div style="font-size:13px;font-weight:800;color:{bar_color};">{score:.1f}점 / 100점</div>"""
+
+
+def chg_color(v: float) -> str:
+    """한국식 등락률 색상"""
+    if v > 0:  return "#ef4444"
+    elif v < 0: return "#1d6ce8"
+    return "#9ca3af"
+
+
+def tier_class(rank: int) -> str:
+    if rank == 1:       return "tier1"
+    elif rank <= 3:     return "tier2"
+    elif rank <= 7:     return "tier3"
+    return "tier4"
+
+
+def stock_card_html(rank: int, r: pd.Series) -> str:
+    """개별 종목 카드 HTML"""
+    tc      = tier_class(rank)
+    medals  = {1: "🥇", 2: "🥈", 3: "🥉"}
+    medal   = medals.get(rank, f"#{rank}")
+    price   = int(r["현재가"]) if not pd.isna(r["현재가"]) else 0
+    chg     = float(r["등락률(%)"])
+    cc      = chg_color(chg)
+    chg_sym = "▲" if chg > 0 else "▼" if chg < 0 else ""
+    sign    = "+" if chg > 0 else ""
+    fit     = float(r["매수적합도(%)"])
+    sig_html = fit_signal_html(fit)
+    bar_html = fit_bar_html(fit)
+
+    # 배지
+    badges = ""
+    if r.get("_squeeze", False):
+        badges += "<span class='badge badge-explode'>💥 급등 대기 [공매도 상환]</span>"
+    if r.get("_safepin", False):
+        badges += "<span class='badge badge-safe'>🛡️ 안전핀 타점 [물량 주의→경직]</span>"
+
+    inst_raw = r.get("_기관당일", 0)
+    frgn_raw = r.get("_외국인당일", 0)
+    inst_txt = f"{inst_raw:+,}" if inst_raw != 0 else "수집중"
+    frgn_txt = f"{frgn_raw:+,}" if frgn_raw != 0 else "수집중"
+
+    # 4대 점수 배지
+    score_badges = (
+        f"<span class='badge badge-inst'>🏦 기관/연기금 {r['기관/연기금']:.0f}점</span>"
+        f"<span class='badge badge-short'>💥 공매도상환 {r['숏스퀴즈']:.0f}점</span>"
+        f"<span class='badge badge-pb'>📈 최적매수타임 {r['눌림목']:.1f}점</span>"
+        f"<span class='badge badge-news'>📰 미반영호재 {r['뉴스호재']:.0f}점</span>"
+    )
+
+    return f"""
+    <div class="stock-card {tc}">
+        <div style="display:flex; align-items:flex-start; justify-content:space-between; flex-wrap:wrap; gap:8px;">
+            <div style="flex:1; min-width:200px;">
+                <div class="stock-rank">{medal} {rank}위 &nbsp;<span class="stock-sector">{r['섹터']}</span></div>
+                <div class="stock-name">{r['종목명']}</div>
+                <div>
+                    <span class="stock-price" style="color:{cc};">{price:,}원</span>
+                    &nbsp;<span style="font-size:15px;font-weight:700;color:{cc};">{chg_sym} {sign}{chg:.2f}%</span>
+                </div>
+                <div style="margin-top:6px;">{badges}</div>
+                <div style="margin-top:4px;">{score_badges}</div>
+            </div>
+            <div style="min-width:180px; text-align:right;">
+                <div>{sig_html}</div>
+                {bar_html}
+                <div style="font-size:11px;color:#9ca3af;margin-top:6px;">
+                    기관 {inst_txt} | 외국인 {frgn_txt}
+                </div>
+            </div>
+        </div>
+        <div style="margin-top:12px; padding-top:10px; border-top:1px solid #f1f5f9;
+                    font-size:13px; color:#374151; line-height:1.6;">
+            💬 <strong>AI 타점 분석:</strong> {r['타점분석']}
+        </div>
+    </div>"""
+
+
+# ───────────────────────────────────────────────────────────────────────────────
+# 데이터 함수 (로직 동일, 캐시 유지)
 # ───────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=600)
 def get_investor_data_naver(ticker: str) -> list:
-    """
-    네이버금융 frgn.naver 에서 기관/외국인 순매매량 + 외국인 보유율 최근 5일 반환.
-    반환 형식: [{"날짜": "2026.05.04", "기관": 4335045, "외국인": 5214979, "보유율": 49.33}, ...]
-    """
     try:
         r = requests.get(
             "https://finance.naver.com/item/frgn.naver",
             headers=NAVER_HDR, params={"code": ticker}, timeout=8,
         )
         r.encoding = "euc-kr"
-        soup = BeautifulSoup(r.text, "html.parser")
+        soup   = BeautifulSoup(r.text, "html.parser")
         tables = soup.find_all("table")
         if len(tables) < 4:
             return []
 
-        target = tables[3]
-        rows = target.find_all("tr")
-        result = []
-
-        def _parse_int(s: str) -> int:
-            """'+4,335,045', '상승12,000', '-840,944' → int"""
+        def _int(s: str) -> int:
             s = s.replace(",", "").replace("+", "")
             for w in ("상승", "하락", "보합"):
                 s = s.replace(w, "")
-            try:
-                return int(s)
-            except ValueError:
-                return 0
+            try:    return int(s)
+            except: return 0
 
-        def _parse_float(s: str) -> float:
-            try:
-                return float(s.replace("%", "").strip())
-            except ValueError:
-                return 0.0
+        def _float(s: str) -> float:
+            try:    return float(s.replace("%", "").strip())
+            except: return 0.0
 
-        for row in rows:
+        result = []
+        for row in tables[3].find_all("tr"):
             cells = [td.get_text(strip=True) for td in row.find_all("td")]
-            # 날짜 행: cells[0] = "2026.05.04", len >= 7
             if len(cells) >= 7 and len(cells[0]) == 10 and cells[0][4] == ".":
                 result.append({
-                    "날짜":    cells[0],
-                    "기관":    _parse_int(cells[5]),
-                    "외국인":  _parse_int(cells[6]),
-                    "보유율":  _parse_float(cells[8]) if len(cells) > 8 else 0.0,
+                    "날짜":   cells[0],
+                    "기관":   _int(cells[5]),
+                    "외국인": _int(cells[6]),
+                    "보유율": _float(cells[8]) if len(cells) > 8 else 0.0,
                 })
                 if len(result) >= 5:
                     break
-
         return result
-
     except Exception:
         return []
 
 
 @st.cache_data(ttl=600)
 def get_investor_batch(tickers: tuple) -> dict:
-    """여러 티커의 기관/외국인 데이터를 한 번에 수집 (캐시 공유)."""
     return {t: get_investor_data_naver(t) for t in tickers}
 
 
-# ───────────────────────────────────────────────────────────────────────────────
-# ■ 네이버 금융 — 한글 뉴스
-# ───────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=600)
 def get_naver_news(ticker: str) -> list:
     try:
-        url  = f"https://finance.naver.com/item/news_news.naver?code={ticker}&page=1"
-        r    = requests.get(url, headers=NAVER_HDR, timeout=6)
+        r = requests.get(
+            f"https://finance.naver.com/item/news_news.naver?code={ticker}&page=1",
+            headers=NAVER_HDR, timeout=6,
+        )
         r.encoding = "euc-kr"
         soup = BeautifulSoup(r.text, "html.parser")
-        out  = []
+        out = []
         for row in soup.select("table.type5 tr"):
-            title_el = row.select_one("td.title a")
-            date_el  = row.select_one("td.date")
-            if title_el and date_el:
-                title = title_el.get_text(strip=True)
-                date  = date_el.get_text(strip=True)
+            t_el = row.select_one("td.title a")
+            d_el = row.select_one("td.date")
+            if t_el and d_el:
+                title = t_el.get_text(strip=True)
                 if title:
-                    out.append(f"[{date}] {title}")
+                    out.append(f"[{d_el.get_text(strip=True)}] {title}")
             if len(out) >= 5:
                 break
         return out
@@ -243,9 +485,6 @@ def get_news_batch(tickers: tuple) -> dict:
     return {t: get_naver_news(t) for t in tickers}
 
 
-# ───────────────────────────────────────────────────────────────────────────────
-# ■ yfinance — OHLCV + 눌림목 분석 (기존 유지)
-# ───────────────────────────────────────────────────────────────────────────────
 def calc_rsi(series: pd.Series, period: int = 14) -> float:
     delta = series.diff().dropna()
     gain  = delta.clip(lower=0).rolling(period).mean()
@@ -257,8 +496,7 @@ def calc_rsi(series: pd.Series, period: int = 14) -> float:
 
 def calc_pullback_score(close_s: pd.Series, vol_s: pd.Series) -> dict:
     if len(close_s) < 22:
-        return {"score": 0, "signal": "데이터 부족", "rsi": 50,
-                "ma5": None, "ma10": None, "ma20": None}
+        return {"score": 0, "signal": "데이터 부족", "rsi": 50}
 
     ma5  = close_s.rolling(5).mean()
     ma10 = close_s.rolling(10).mean()
@@ -270,67 +508,46 @@ def calc_pullback_score(close_s: pd.Series, vol_s: pd.Series) -> dict:
     rsi   = calc_rsi(close_s)
     score = 0
 
-    # 5일선 터치 (최적 눌림목)
     ma5_gap = (cur - ma5c) / ma5c * 100
-    if 0 <= ma5_gap <= 3:
-        score += 25
-    elif -1.5 <= ma5_gap < 0:
-        score += 20
+    if 0 <= ma5_gap <= 3:   score += 25
+    elif -1.5 <= ma5_gap < 0: score += 20
 
-    # 10일선 터치 (추세 생명선)
     ma10_gap = (cur - ma10c) / ma10c * 100
-    if 0 <= ma10_gap <= 5:
-        score += 20
-    elif -2 <= ma10_gap < 0:
-        score += 15
+    if 0 <= ma10_gap <= 5:  score += 20
+    elif -2 <= ma10_gap < 0: score += 15
 
-    # 정배열
-    if ma5c > ma10c > ma20c:
-        score += 15
-    elif ma5c > ma10c:
-        score += 8
+    if ma5c > ma10c > ma20c: score += 15
+    elif ma5c > ma10c:        score += 8
 
-    # 눌림 후 반등 양봉
     price_chg = (cur - prev) / prev * 100
-    if price_chg > 0 and prev < ma5p:
-        score += 20
-    elif price_chg > 0:
-        score += 10
+    if price_chg > 0 and prev < ma5p: score += 20
+    elif price_chg > 0:                score += 10
 
-    # RSI 최적 구간
-    if 30 <= rsi <= 50:
-        score += 20
-    elif 50 < rsi <= 65:
-        score += 10
-    elif rsi < 30:
-        score += 5
+    if 30 <= rsi <= 50:   score += 20
+    elif 50 < rsi <= 65:  score += 10
+    elif rsi < 30:        score += 5
 
     score = min(score, 100)
     if score >= 75:   sig = "🔴 즉시 매수 (HIGH)"
     elif score >= 50: sig = "🟡 매수 준비 (MID)"
     elif score >= 30: sig = "⚪ 관망 (LOW)"
     else:             sig = "❌ 진입 불가"
-
-    return {"score": score, "signal": sig, "rsi": round(rsi, 1),
-            "ma5": round(ma5c, 0), "ma10": round(ma10c, 0), "ma20": round(ma20c, 0)}
+    return {"score": score, "signal": sig, "rsi": round(rsi, 1)}
 
 
 @st.cache_data(ttl=300)
 def get_price_data(date_str: str, market: str) -> tuple:
     stocks = KOSPI_STOCKS if market == "KOSPI" else KOSDAQ_STOCKS
     suffix = SUFFIX[market]
-    yf_tickers = [t + suffix for t in stocks]
-
     target_dt = datetime.strptime(date_str, "%Y%m%d")
     raw = yf.download(
-        yf_tickers,
+        [t + suffix for t in stocks],
         start=(target_dt - timedelta(days=70)).strftime("%Y-%m-%d"),
         end=(target_dt + timedelta(days=2)).strftime("%Y-%m-%d"),
         auto_adjust=True, progress=False,
     )
     if raw.empty or "Close" not in raw:
         return pd.DataFrame(), None
-
     close  = raw["Close"].dropna(how="all")
     volume = raw["Volume"].dropna(how="all")
     if len(close) < 11:
@@ -350,13 +567,9 @@ def get_price_data(date_str: str, market: str) -> tuple:
     for col in close.columns:
         try:
             pb = calc_pullback_score(close[col].dropna(), volume[col].dropna())
-            pb_scores.append(pb["score"])
-            pb_signals.append(pb["signal"])
-            rsi_vals.append(pb["rsi"])
+            pb_scores.append(pb["score"]); pb_signals.append(pb["signal"]); rsi_vals.append(pb["rsi"])
         except Exception:
-            pb_scores.append(0)
-            pb_signals.append("N/A")
-            rsi_vals.append(50)
+            pb_scores.append(0); pb_signals.append("N/A"); rsi_vals.append(50)
 
     df = pd.DataFrame({
         "현재가":        latest_close.round(0).astype("Int64"),
@@ -370,189 +583,103 @@ def get_price_data(date_str: str, market: str) -> tuple:
     df["눌림목점수"] = pb_scores
     df["눌림목신호"] = pb_signals
     df["RSI"]        = rsi_vals
-    df = df.dropna(subset=["현재가", "거래대금(억)"]).query("`거래대금(억)` > 0")
-    return df, actual_date
+    return df.dropna(subset=["현재가", "거래대금(억)"]).query("`거래대금(억)` > 0"), actual_date
 
 
-# ───────────────────────────────────────────────────────────────────────────────
-# ■ 42대 필살기 마스터 스코어링 엔진 (4대 필터 완전 연동)
-# ───────────────────────────────────────────────────────────────────────────────
-def score_ticker(ticker: str, row: pd.Series,
-                 investor_map: dict, news_map: dict) -> dict:
-    """
-    4대 필터 → 매수 적합도(0~100%) + 타점 분석 한줄평
+def score_ticker(ticker: str, row: pd.Series, investor_map: dict, news_map: dict) -> dict:
+    data   = investor_map.get(ticker, [])
+    labels = []
+    squeeze_flag = safepin_flag = False
+    inst_d0 = foreign_d0 = inst_streak = 0
 
-    investor_map: {ticker: [{"날짜","기관","외국인","보유율"}, ...]}  ← 네이버 실데이터
-    news_map:     {ticker: ["[날짜] 뉴스제목", ...]}
-    """
-    data    = investor_map.get(ticker, [])   # 최근 5일 기관/외국인 데이터
-    labels  = []
-    squeeze_flag = False
-    safepin_flag = False
-
-    # ── Filter 1: 기관/연기금 안전핀 (0~30점) ────────────────────────────────
-    # 네이버 frgn.naver 실데이터: 기관합계(연기금 포함) + 외국인 순매매량
+    # Filter 1: 기관/연기금 (0~30)
     inst_score = 0
-    inst_d0 = foreign_d0 = 0
-    inst_streak = 0
-
     if data:
-        d0        = data[0]
-        inst_d0   = d0["기관"]
-        foreign_d0 = d0["외국인"]
-
-        if inst_d0 > 0:
-            inst_score += 8
-            labels.append("기관매집")
-        if foreign_d0 > 0:
-            inst_score += 7
-            labels.append("외국인매집")
+        d0 = data[0]; inst_d0 = d0["기관"]; foreign_d0 = d0["외국인"]
+        if inst_d0 > 0:    inst_score += 8;  labels.append("기관매집")
+        if foreign_d0 > 0: inst_score += 7;  labels.append("외국인매집")
         if inst_d0 > 0 and foreign_d0 > 0:
-            inst_score += 5           # 쌍끌이 보너스
-            labels.append("🔥쌍끌이")
-
-        # 3일 연속 기관 순매수 = 연기금 포함 기관합계 지속 매집
+            inst_score += 5; labels.append("🔥쌍끌이")
         inst_streak = sum(1 for d in data[:3] if d["기관"] > 0)
-        if inst_streak >= 3:
-            inst_score += 10
-            labels.append("💎기관3일연속(연기금포함)")
-        elif inst_streak == 2:
-            inst_score += 5
-            labels.append("기관2일연속")
-
+        if inst_streak >= 3:   inst_score += 10; labels.append("💎기관3일연속(연기금포함)")
+        elif inst_streak == 2: inst_score += 5;  labels.append("기관2일연속")
     inst_score = min(inst_score, 30)
 
-    # ── Filter 2: 공매도 숏스퀴즈 & 신용 바닥 (0~20점) ─────────────────────
-    # 네이버 실데이터 기반: 외국인 매수전환 패턴 + 보유율 추세
-    short_score   = 0
-    squeeze_label = ""
-
+    # Filter 2: 숏스퀴즈 (0~20)
+    short_score = 0
     if len(data) >= 2:
-        recent_inst    = [d["기관"]    for d in data[:3]]
-        recent_foreign = [d["외국인"]  for d in data[:3]]
-        recent_hold    = [d["보유율"]  for d in data[:3]]
-
-        # 패턴 A: 외국인 매도 → 매수 전환 (숏커버링 신호)
-        if recent_foreign[0] > 0 and any(f < 0 for f in recent_foreign[1:3]):
-            short_score  += 15
-            squeeze_flag  = True
-            squeeze_label = "💥외국인매수전환(숏커버링추정)"
-            labels.append(squeeze_label)
-
-        # 패턴 B: 외국인 매도 지속 but 기관 방어 → 하방 경직
-        elif recent_foreign[0] < 0 and recent_inst[0] > 0:
-            short_score += 10
-            labels.append("기관방어vs외국인매도(하방경직)")
-
-        # 패턴 C: 외국인 3일 연속 매수 → 안정 수급
-        elif len(recent_foreign) >= 3 and all(f > 0 for f in recent_foreign[:3]):
-            short_score += 5
-            labels.append("외국인3일연속매수")
-
-        # 보유율 상승 추세 (+5 보너스)
-        if len(recent_hold) >= 2 and recent_hold[0] > recent_hold[1]:
+        rf = [d["외국인"] for d in data[:3]]
+        ri = [d["기관"]   for d in data[:3]]
+        rh = [d["보유율"] for d in data[:3]]
+        if rf[0] > 0 and any(f < 0 for f in rf[1:3]):
+            short_score += 15; squeeze_flag = True
+            labels.append("💥외국인매수전환(공매도상환추정)")
+        elif rf[0] < 0 and ri[0] > 0:
+            short_score += 10; labels.append("기관방어→하방경직")
+        elif len(rf) >= 3 and all(f > 0 for f in rf[:3]):
+            short_score += 5; labels.append("외국인3일연속매수")
+        if len(rh) >= 2 and rh[0] > rh[1]:
             short_score = min(short_score + 5, 20)
-            if "💥" not in " ".join(labels):
-                labels.append("외국인보유율↑")
-
+            if "💥" not in " ".join(labels): labels.append("외국인보유율↑")
     short_score = min(short_score, 20)
 
-    # ── Filter 3: 눌림목 & 오버행 안전핀 (0~30점) ───────────────────────────
-    pb_raw   = float(row.get("눌림목점수", 0))
-    pb_score = round(pb_raw * 0.30, 1)
-
-    if ticker in OVERHANG_DB:
-        oh = OVERHANG_DB[ticker]
-        if oh["safe"] and pb_score >= 9:
-            pb_score = min(pb_score + 5, 30)
-            safepin_flag = True
-            labels.append("🛡️안전핀타점")
-
+    # Filter 3: 눌림목 (0~30)
+    pb_score = round(float(row.get("눌림목점수", 0)) * 0.30, 1)
+    if ticker in OVERHANG_DB and OVERHANG_DB[ticker]["safe"] and pb_score >= 9:
+        pb_score = min(pb_score + 5, 30); safepin_flag = True; labels.append("🛡️안전핀타점")
     pb_score = min(pb_score, 30)
 
-    # ── Filter 4: 미반영 호재 & 정책 수혜 키워드 (0~20점) ───────────────────
-    news_score = 0
+    # Filter 4: 뉴스 호재 (0~20)
     news_hits  = []
     news_text  = " ".join(news_map.get(ticker, []))
     for kw in NEWS_KEYWORDS:
-        if kw in news_text and kw not in news_hits:
-            news_hits.append(kw)
+        if kw in news_text and kw not in news_hits: news_hits.append(kw)
     news_score = min(len(news_hits) * 4, 20)
-    if news_hits:
-        labels.append(f"📰호재({','.join(news_hits[:3])})")
+    if news_hits: labels.append(f"📰호재({','.join(news_hits[:3])})")
 
-    # ── 최종 매수 적합도 ──────────────────────────────────────────────────────
-    total = min(inst_score + short_score + pb_score + news_score, 100)
-
-    # ── 타점 분석 한줄평 ─────────────────────────────────────────────────────
+    total  = min(inst_score + short_score + pb_score + news_score, 100)
     pb_sig = row.get("눌림목신호", "")
     rsi_v  = float(row.get("RSI", 50))
     chg    = float(row.get("등락률(%)", 0))
     vol_r  = float(row.get("거래량비율(%)", 100))
 
     if "💎기관3일연속(연기금포함)" in labels and "🔥쌍끌이" in labels:
-        comment = "기관(연기금 포함)+외국인 쌍끌이 3일 집중 매집 — 즉시 진입 유효, 추세 가속 구간"
+        comment = "기관(연기금 포함)+외국인 쌍끌이 3일 집중 매집 — 즉시 진입 유효"
     elif "💎기관3일연속(연기금포함)" in labels:
-        comment = "기관(연기금 포함) 3일 연속 순매수 — 공적 자금 하방 지지, 중장기 매집 강력"
+        comment = "기관(연기금 포함) 3일 연속 순매수 — 공적 자금 하방 지지, 매집 강력"
     elif squeeze_flag and "🔴 즉시 매수" in pb_sig:
-        comment = f"외국인 매수 전환(숏커버링 추정) + {pb_sig} — 반등 폭발 타이밍"
+        comment = f"외국인 매수 전환(공매도 상환 추정) + {pb_sig} — 반등 폭발 타이밍"
     elif squeeze_flag:
-        comment = "외국인 매도→매수 전환 포착 — 숏커버링 유입 시 급등 대기"
+        comment = "외국인 매도→매수 전환 포착 — 공매도 상환 시 급등 대기"
     elif safepin_flag and "🔥쌍끌이" in labels:
-        comment = "오버행 안전핀 확보 + 기관/외국인 쌍끌이 — 하방 경직 후 재상승 타점"
+        comment = "물량 주의 종목이지만 주가 하방 경직 확인 + 쌍끌이 — 안전핀 타점"
     elif safepin_flag:
-        comment = "오버행 있으나 하방 경직성 확보 — PRS/CB 부담 소화 후 안전핀 타점"
+        comment = "잠재 물량(오버행)이 있으나 하방 경직성 확보 — 안전핀 최적 타점"
     elif news_hits and "🔥쌍끌이" in labels:
-        comment = f"정책·실적 호재({','.join(news_hits[:2])}) + 기관/외국인 쌍끌이 — 즉시 모멘텀 선취"
+        comment = f"정책·실적 호재({','.join(news_hits[:2])}) + 기관/외국인 쌍끌이 — 즉시 선취"
     elif news_hits:
-        comment = f"미반영 호재({','.join(news_hits[:3])}) — 이벤트 드리븐 진입 검토"
+        comment = f"현재가에 미반영된 호재({','.join(news_hits[:3])}) — 이벤트 드리븐 진입 검토"
     elif "🔴 즉시 매수" in pb_sig and "🔥쌍끌이" in labels:
-        comment = f"5/10일선 눌림목 반등 + 쌍끌이 — RSI {rsi_v:.0f} 저점 탈출 최적 타점"
+        comment = f"5/10일선 최적 눌림목 + 쌍끌이 — RSI {rsi_v:.0f} 저점 탈출 최적 타이밍"
     elif "🔴 즉시 매수" in pb_sig:
         comment = f"5/10일선 지지 확인, RSI {rsi_v:.0f} 저점 — 거래량 증가 시 즉시 진입"
     elif vol_r > 200:
-        comment = f"거래량 {vol_r:.0f}% 급증 이상수급 — 세력 개입 의심, 추격 진입 유의"
+        comment = f"거래량 {vol_r:.0f}% 급증 이상 수급 — 세력 개입 의심, 추격 진입 유의"
     elif chg > 0 and "기관매집" in labels:
         comment = f"기관 순매수 + 상승({chg:+.1f}%) — 기관 주도 상승 초기 단계"
     else:
-        comment = f"수급강도 우위, 거래대금 {float(row.get('거래대금(억)', 0)):,.0f}억 — 분할 진입 검토"
+        comment = f"수급 우위, 거래대금 {float(row.get('거래대금(억)', 0)):,.0f}억 — 분할 진입 검토"
 
     return {
-        "기관/연기금":     inst_score,
-        "숏스퀴즈":        short_score,
-        "눌림목":          pb_score,
-        "뉴스호재":        news_score,
-        "매수적합도(%)":   round(total, 1),
-        "타점분석":        comment,
-        "폭발후보":        squeeze_flag,
-        "안전핀":          safepin_flag,
-        "수급신호":        " | ".join(labels) if labels else "—",
-        # 수급 원본 (디버그용)
-        "_기관당일":       inst_d0,
-        "_외국인당일":     foreign_d0,
-        "_기관연속일":     inst_streak,
+        "기관/연기금": inst_score, "숏스퀴즈": short_score,
+        "눌림목": pb_score, "뉴스호재": news_score,
+        "매수적합도(%)": round(total, 1), "타점분석": comment,
+        "폭발후보": squeeze_flag, "안전핀": safepin_flag,
+        "수급신호": " | ".join(labels) if labels else "—",
+        "_기관당일": inst_d0, "_외국인당일": foreign_d0, "_기관연속일": inst_streak,
     }
 
 
-# ───────────────────────────────────────────────────────────────────────────────
-# 섹터 흐름
-# ───────────────────────────────────────────────────────────────────────────────
-def get_sector_flow(df: pd.DataFrame) -> pd.DataFrame:
-    if df is None or df.empty:
-        return pd.DataFrame()
-    s = df.groupby("섹터")["거래대금(억)"].sum().sort_values(ascending=False).reset_index()
-    s.rename(columns={"거래대금(억)": "섹터 거래대금(억)"}, inplace=True)
-    s["비중(%)"] = (s["섹터 거래대금(억)"] / s["섹터 거래대금(억)"].sum() * 100).round(1)
-    return s
-
-
-def detect_overhang(tickers: list) -> list:
-    return [{"종목코드": t, **OVERHANG_DB[t]} for t in tickers if t in OVERHANG_DB]
-
-
-# ───────────────────────────────────────────────────────────────────────────────
-# 매크로 지수
-# ───────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=60)
 def get_macro_indices() -> dict:
     syms = {"KOSPI": "^KS11", "KOSDAQ": "^KQ11", "나스닥": "^IXIC", "나스닥선물": "NQ=F"}
@@ -572,55 +699,94 @@ def get_macro_indices() -> dict:
     return out
 
 
-# ───────────────────────────────────────────────────────────────────────────────
-# UI — 헤더
-# ───────────────────────────────────────────────────────────────────────────────
-st.title("🚀 42대 필살기 주식 분석 엔진 v2.0")
-st.caption("듀얼 엔진: yfinance(OHLCV) × 네이버금융(기관/외국인 실데이터) × 4대 필살기 필터")
-st.markdown("---")
+def get_sector_flow(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty: return pd.DataFrame()
+    s = df.groupby("섹터")["거래대금(억)"].sum().sort_values(ascending=False).reset_index()
+    s.rename(columns={"거래대금(억)": "섹터 거래대금(억)"}, inplace=True)
+    s["비중(%)"] = (s["섹터 거래대금(억)"] / s["섹터 거래대금(억)"].sum() * 100).round(1)
+    return s
 
+
+def detect_overhang(tickers: list) -> list:
+    return [{"종목코드": t, **OVERHANG_DB[t]} for t in tickers if t in OVERHANG_DB]
+
+
+# ───────────────────────────────────────────────────────────────────────────────
+# ■ UI 시작 — 숨비 애널리틱스 헤더
+# ───────────────────────────────────────────────────────────────────────────────
+st.markdown("""
+<div style="display:flex; align-items:center; gap:14px; padding:8px 0 16px;">
+    <div class="soombi-logo">🐳</div>
+    <div>
+        <div class="soombi-title">숨비 애널리틱스</div>
+        <div class="soombi-sub">SOOMBI Analytics · 4대 필살기 AI 매수 적합도 엔진</div>
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
+# ── 지수 전광판 ───────────────────────────────────────────────────────────────
 macro = get_macro_indices()
-mc = st.columns(4)
-for col, key in zip(mc, ["KOSPI", "KOSDAQ", "나스닥", "나스닥선물"]):
+index_keys = ["KOSPI", "KOSDAQ", "나스닥", "나스닥선물"]
+idx_cols   = st.columns(4)
+for col, key in zip(idx_cols, index_keys):
     d = macro.get(key)
     with col:
         if d:
-            val = f"{d['현재']:,.2f}" if d['현재'] < 100_000 else f"{d['현재']:,.0f}"
-            st.metric(key, val, f"{d['변동률']:+.2f}%")
+            v = f"{d['현재']:,.2f}" if d["현재"] < 100_000 else f"{d['현재']:,.0f}"
+            st.markdown(index_card_html(key, v, d["변동률"], d["변동"]), unsafe_allow_html=True)
         else:
-            st.metric(key, "N/A")
+            st.markdown(f"""
+            <div class="index-card">
+                <div class="index-name">{key}</div>
+                <div class="index-value flat">N/A</div>
+            </div>""", unsafe_allow_html=True)
 
-with st.expander("📊 장세 3줄 매크로 코멘트", expanded=True):
-    kd  = macro.get("KOSPI");  nd = macro.get("나스닥"); nfd = macro.get("나스닥선물")
-    if kd:
-        if kd["변동률"] > 0.5:   st.markdown(f"🟢 **국내**: KOSPI {kd['변동률']:+.2f}% 강세 — 외국인/기관 순매수 우위.")
-        elif kd["변동률"] < -0.5: st.markdown(f"🔴 **국내**: KOSPI {kd['변동률']:+.2f}% 약세 — 프로그램 매도 또는 외국인 이탈 점검.")
-        else:                      st.markdown(f"⚪ **국내**: KOSPI {kd['변동률']:+.2f}% 보합 — 관망세, 수급 이벤트 주시.")
-    if nd:
-        if nd["변동률"] > 0.5:    st.markdown(f"🟢 **글로벌**: 나스닥 {nd['변동률']:+.2f}% 상승 — 반도체·성장주 수급 유리.")
-        elif nd["변동률"] < -0.5: st.markdown(f"🔴 **글로벌**: 나스닥 {nd['변동률']:+.2f}% 하락 — IT·바이오 수급 압박.")
-        else:                      st.markdown(f"⚪ **글로벌**: 나스닥 보합 — 방향성 불명확.")
-    if nfd:
-        sign = "상승" if nfd and nfd["변동률"] >= 0 else "하락"
-        st.markdown(f"📡 **나스닥선물**: {nfd['변동률']:+.2f}% {sign} — 다음 장 개장 분위기 선반영.")
+# ── 장세 코멘트 카드 ──────────────────────────────────────────────────────────
+kd = macro.get("KOSPI"); nd = macro.get("나스닥"); nfd = macro.get("나스닥선물")
+lines = []
+if kd:
+    if kd["변동률"] > 0.5:    lines.append(f"🔴 <strong>국내 증시 강세</strong>: KOSPI {kd['변동률']:+.2f}% — 기관·외국인 순매수 우위. 매수 여건 유리합니다.")
+    elif kd["변동률"] < -0.5: lines.append(f"🔵 <strong>국내 증시 약세</strong>: KOSPI {kd['변동률']:+.2f}% — 외국인 이탈 또는 프로그램 매도. 관망 후 눌림목 진입 검토.")
+    else:                      lines.append(f"⚪ <strong>국내 증시 보합</strong>: KOSPI {kd['변동률']:+.2f}% — 방향성 탐색 중. 개별 종목 수급에 집중하세요.")
+if nd:
+    if nd["변동률"] > 0.5:    lines.append(f"🔴 <strong>글로벌 상승</strong>: 나스닥 {nd['변동률']:+.2f}% — 반도체·성장주 수급 유리합니다.")
+    elif nd["변동률"] < -0.5: lines.append(f"🔵 <strong>글로벌 하락</strong>: 나스닥 {nd['변동률']:+.2f}% — IT·바이오 수급 압박 주의.")
+    else:                      lines.append(f"⚪ <strong>글로벌 보합</strong>: 나스닥 방향성 불명확 — 국내 수급 주도장 예상.")
+if nfd:
+    sign = "상승" if nfd["변동률"] >= 0 else "하락"
+    lines.append(f"📡 <strong>나스닥 선물</strong>: {nfd['변동률']:+.2f}% {sign} — 다음 장 개장 분위기 선반영 중.")
 
-st.markdown("---")
+macro_body = "<br>".join(lines) if lines else "시장 데이터를 불러오는 중입니다."
+st.markdown(f"""
+<div class="macro-card">
+    <div style="font-size:14px;font-weight:800;color:#13131a;margin-bottom:10px;">📊 지금 시장은?</div>
+    <div class="macro-line">{macro_body}</div>
+    <div style="font-size:11px;color:#c4c4cf;margin-top:10px;">
+        ※ 한국 증시 기준: 🔴 상승 | 🔵 하락 &nbsp;·&nbsp; 빨간색=오름, 파란색=내림
+    </div>
+</div>
+""", unsafe_allow_html=True)
 
 # ───────────────────────────────────────────────────────────────────────────────
 # 사이드바
 # ───────────────────────────────────────────────────────────────────────────────
-st.sidebar.header("🔍 분석 필터 설정")
-target_date = st.sidebar.date_input("분석 기준일", datetime.now() - timedelta(days=1))
+st.sidebar.markdown("""
+<div style="font-size:20px;font-weight:900;color:#13131a;padding:8px 0 4px;">🐳 숨비 애널리틱스</div>
+<div style="font-size:12px;color:#9ca3af;margin-bottom:16px;">SOOMBI Analytics</div>
+""", unsafe_allow_html=True)
+st.sidebar.markdown("---")
+st.sidebar.markdown("**📅 분석 기간 설정**")
+target_date = st.sidebar.date_input("기준일 선택", datetime.now() - timedelta(days=1), label_visibility="collapsed")
 date_str    = target_date.strftime("%Y%m%d")
-market_type = st.sidebar.selectbox("시장 선택", ["KOSPI", "KOSDAQ"])
+market_type = st.sidebar.selectbox("📈 시장 선택", ["KOSPI", "KOSDAQ"])
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("🔄 새로고침")
-if st.sidebar.button("🔄 데이터 새로고침"):
+st.sidebar.markdown("**⚙️ 설정**")
+if st.sidebar.button("🔄 데이터 새로고침", width="stretch"):
     if st.session_state.get("analysis_run"):
         st.cache_data.clear(); st.rerun()
     else:
-        st.sidebar.info("먼저 분석을 시작해 주세요.")
+        st.sidebar.info("먼저 분석을 시작하세요.")
 
 auto_refresh = st.sidebar.toggle("자동 새로고침", value=False)
 refresh_interval = 60
@@ -630,18 +796,26 @@ if auto_refresh:
         format_func=lambda x: f"{x}초" if x < 60 else f"{x//60}분", index=1)
 if auto_refresh and st.session_state.get("analysis_run"):
     cnt = st_autorefresh(interval=refresh_interval * 1000, key="autorefresh")
-    if cnt > 0:
-        st.cache_data.clear()
+    if cnt > 0: st.cache_data.clear()
+
+st.sidebar.markdown("---")
+st.sidebar.markdown("""
+<div style="font-size:12px;color:#9ca3af;line-height:1.8;">
+<strong>🐳 숨비(Soombi)란?</strong><br>
+제주 해녀가 숨을 참고 깊이 잠수해<br>
+귀한 것을 건져 올리는 전통 기술.<br>
+깊이 분석해 급등 종목을 포착합니다.
+</div>
+""", unsafe_allow_html=True)
 
 # ───────────────────────────────────────────────────────────────────────────────
-# 공통 데이터 페치 (탭 이전 — 전 탭 공유)
+# 공통 데이터 페치
 # ───────────────────────────────────────────────────────────────────────────────
 if st.session_state.get("analysis_run"):
-    with st.spinner("📈 yfinance OHLCV 수집 중 (주가/차트/눌림목)…"):
+    with st.spinner("📈 주가 데이터를 불러오는 중입니다…"):
         _price_df, _actual_date = get_price_data(date_str, market_type)
-
     if _price_df is None or _price_df.empty:
-        st.error(f"⚠️ {date_str} {market_type} 데이터 없음 — 공휴일·주말·미개장일입니다. 날짜를 변경하세요.")
+        st.error(f"⚠️ {date_str} {market_type} 데이터가 없습니다. 공휴일·주말·미개장일인지 확인해주세요.")
         st.session_state["result"] = None
     else:
         st.session_state["result"]      = _price_df
@@ -651,95 +825,63 @@ if st.session_state.get("analysis_run"):
 # 탭
 # ───────────────────────────────────────────────────────────────────────────────
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "🏆 42대 필살기 랭킹 TOP 15",
+    "🏆 AI 매수 추천 TOP 15",
     "📊 수급 분석표",
     "💰 섹터 돈의 흐름",
-    "📰 미반영 뉴스 (한글)",
-    "⚠️ 오버행/블록딜 감지",
+    "📰 미반영 뉴스",
+    "⚠️ 물량 주의 종목",
 ])
 
 
 def _run_btn(key: str):
-    if st.button("🚀 42대 필살기 엔진 풀가동 분석 시작", key=key):
+    if st.button("🚀 지금 분석 시작하기", key=key, width="stretch"):
         st.session_state["analysis_run"] = True
         st.session_state["market"]  = market_type
         st.session_state["date"]    = date_str
         st.cache_data.clear()
 
 
-# ── TAB 1: 통합 랭킹 ─────────────────────────────────────────────────────────
+# ── TAB 1: AI 매수 추천 랭킹 ─────────────────────────────────────────────────
 with tab1:
-    st.subheader("🏆 42대 필살기 통합 랭킹 TOP 15")
-    st.caption(
-        "**배점**: 🏦 기관/연기금 실데이터(30점) + 💥 숏스퀴즈 패턴(20점) "
-        "+ 📈 눌림목타점(30점) + 📰 미반영호재(20점) = **매수 적합도 100%**"
-    )
+    st.markdown('<div class="section-header">🏆 AI 매수 추천 TOP 15</div>', unsafe_allow_html=True)
+    st.markdown("""
+    <div class="section-sub">
+    🏦 기관·연기금 매집(30점) + 💥 공매도 상환 급등 대기(20점) +
+    📈 최적 매수 타이밍 눌림목(30점) + 📰 미반영 뉴스 호재(20점) = 100점 만점
+    </div>""", unsafe_allow_html=True)
+
     _run_btn("btn1")
 
     result = st.session_state.get("result")
     if result is not None and not result.empty:
         actual_date = st.session_state.get("actual_date", "")
         if actual_date and actual_date != target_date.strftime("%Y-%m-%d"):
-            st.info(f"📅 최근 거래일 **{actual_date}** 기준으로 분석합니다.")
+            st.info(f"📅 **{actual_date}** 기준 (요청일 데이터 없음 → 최근 거래일로 대체)")
 
-        # 초기 정렬로 TOP 15 추출 (거래대금 기준)
-        top15_base = result.sort_values(
-            by=["거래대금(억)", "거래량비율(%)"], ascending=False
-        ).head(15)
-
-        # 보조 데이터 수집 (네이버 실데이터)
+        top15_base    = result.sort_values(["거래대금(억)", "거래량비율(%)"], ascending=False).head(15)
         top15_tickers = tuple(top15_base.index.tolist())
 
-        with st.spinner("🏦 네이버금융 기관/외국인 순매매 실데이터 수집 중…"):
+        with st.spinner("🏦 기관·외국인 순매매 실데이터 수집 중 (네이버금융)…"):
             investor_map = get_investor_batch(top15_tickers)
-        with st.spinner("📰 네이버금융 한글 뉴스 수집 중…"):
+        with st.spinner("📰 뉴스 호재 키워드 분석 중…"):
             news_map = get_news_batch(top15_tickers)
 
-        # ── 수급 원본 디버그 정보 (확장) ─────────────────────────────────────
-        with st.expander("🔍 기관/외국인 실데이터 수집 결과 확인 (원본)", expanded=False):
-            debug_rows = []
-            for t in top15_tickers:
-                d = investor_map.get(t, [])
-                name = top15_base.loc[t, "종목명"] if t in top15_base.index else t
-                if d:
-                    debug_rows.append({
-                        "종목": f"{name}({t})",
-                        "당일 기관": f"{d[0]['기관']:+,}" if d else "—",
-                        "당일 외국인": f"{d[0]['외국인']:+,}" if d else "—",
-                        "외국인 보유율": f"{d[0]['보유율']:.2f}%" if d else "—",
-                        "D-1 기관": f"{d[1]['기관']:+,}" if len(d) > 1 else "—",
-                        "D-2 기관": f"{d[2]['기관']:+,}" if len(d) > 2 else "—",
-                    })
-                else:
-                    debug_rows.append({"종목": f"{name}({t})", "당일 기관": "데이터 없음",
-                                       "당일 외국인": "—", "외국인 보유율": "—",
-                                       "D-1 기관": "—", "D-2 기관": "—"})
-            st.dataframe(pd.DataFrame(debug_rows), use_container_width=True)
-            st.caption("※ 네이버금융 frgn.naver 직접 파싱 실데이터")
-
-        # ── 마스터 점수 계산 ──────────────────────────────────────────────────
+        # 점수 계산
         scored_rows = []
         for ticker, row in top15_base.iterrows():
             s = score_ticker(ticker, row, investor_map, news_map)
             scored_rows.append({
-                "종목명":        row["종목명"],
-                "섹터":          row["섹터"],
-                "현재가":        row["현재가"],
-                "등락률(%)":     row["등락률(%)"],
-                "RSI":           row["RSI"],
-                "눌림목신호":    row["눌림목신호"],
-                "기관/연기금":   s["기관/연기금"],
-                "숏스퀴즈":      s["숏스퀴즈"],
-                "눌림목":        s["눌림목"],
-                "뉴스호재":      s["뉴스호재"],
-                "매수적합도(%)": s["매수적합도(%)"],
-                "타점분석":      s["타점분석"],
-                "수급신호":      s["수급신호"],
-                "_squeeze":      s["폭발후보"],
-                "_safepin":      s["안전핀"],
-                "_기관당일":     s["_기관당일"],
-                "_외국인당일":   s["_외국인당일"],
-                "_기관연속일":   s["_기관연속일"],
+                "종목명": row["종목명"], "섹터": row["섹터"],
+                "현재가": row["현재가"], "등락률(%)": row["등락률(%)"],
+                "RSI": row["RSI"], "눌림목신호": row["눌림목신호"],
+                "거래대금(억)": row["거래대금(억)"],
+                "기관/연기금": s["기관/연기금"], "숏스퀴즈": s["숏스퀴즈"],
+                "눌림목": s["눌림목"], "뉴스호재": s["뉴스호재"],
+                "매수적합도(%)": s["매수적합도(%)"], "타점분석": s["타점분석"],
+                "수급신호": s["수급신호"],
+                "_squeeze": s["폭발후보"], "_safepin": s["안전핀"],
+                "_기관당일": s["_기관당일"], "_외국인당일": s["_외국인당일"],
+                "_기관연속일": s["_기관연속일"],
             })
 
         ranked = (
@@ -749,211 +891,216 @@ with tab1:
         )
         ranked.insert(0, "순위", range(1, len(ranked) + 1))
 
-        # ── 표 스타일 ─────────────────────────────────────────────────────────
-        def rank_bg(v):
-            if v == 1:    return "background-color:#7c3aed;color:white;font-weight:bold"
-            elif v <= 3:  return "background-color:#1e3a8a;color:white;font-weight:bold"
-            elif v <= 7:  return "background-color:#1d4ed8;color:white"
-            return ""
-
-        def fit_color(v):
-            if v >= 70:   return "color:#22c55e;font-weight:bold"
-            elif v >= 50: return "color:#f59e0b;font-weight:bold"
-            elif v >= 30: return "color:#94a3b8"
-            return "color:#ef4444"
-
-        def chg_color(v):
-            if isinstance(v, (int, float)):
-                if v < 0: return "color:#ef4444;font-weight:bold"
-                if v > 0: return "color:#22c55e;font-weight:bold"
-            return ""
-
-        display = ["순위", "종목명", "현재가", "등락률(%)", "RSI",
-                   "기관/연기금", "숏스퀴즈", "눌림목", "뉴스호재",
-                   "매수적합도(%)", "눌림목신호"]
-
-        styled = (
-            ranked[display].style
-            .map(rank_bg,   subset=["순위"])
-            .map(fit_color, subset=["매수적합도(%)"])
-            .map(chg_color, subset=["등락률(%)"])
-            .format({
-                "현재가":        "{:,}",
-                "등락률(%)":     "{:+.2f}%",
-                "기관/연기금":   "{:.0f}점",
-                "숏스퀴즈":      "{:.0f}점",
-                "눌림목":        "{:.1f}점",
-                "뉴스호재":      "{:.0f}점",
-                "매수적합도(%)": "{:.1f}%",
-                "RSI":           "{:.1f}",
-            })
-        )
-        st.dataframe(styled, use_container_width=True)
-
-        # ── 타점 분석 한줄평 ──────────────────────────────────────────────────
-        st.markdown("### 🎯 종목별 타점 분석 한줄평")
+        # ── 종목 카드 렌더링 ──────────────────────────────────────────────────
         for _, r in ranked.iterrows():
-            badge = ""
-            if r["_squeeze"]:  badge += " 💥폭발후보"
-            if r["_safepin"]:  badge += " 🛡️안전핀"
-            fit = r["매수적합도(%)"]
-            bar_col = "#22c55e" if fit >= 70 else "#f59e0b" if fit >= 50 else "#94a3b8"
-            # 기관/외국인 수급 원본 표시
-            inst_raw = r["_기관당일"]
-            frgn_raw = r["_외국인당일"]
-            inst_txt = f"기관 {inst_raw:+,}" if inst_raw != 0 else "기관 데이터없음"
-            frgn_txt = f"외국인 {frgn_raw:+,}" if frgn_raw != 0 else "외국인 데이터없음"
-            st.markdown(
-                f"**#{int(r['순위'])} {r['종목명']}**{badge} "
-                f"<span style='color:{bar_col};font-weight:bold'>적합도 {fit:.1f}%</span> "
-                f"<span style='color:#64748b;font-size:0.85em'>({inst_txt} | {frgn_txt})</span><br>"
-                f"→ {r['타점분석']}",
-                unsafe_allow_html=True,
-            )
+            st.markdown(stock_card_html(int(r["순위"]), r), unsafe_allow_html=True)
 
-        # ── TOP 3 카드 ────────────────────────────────────────────────────────
-        st.markdown("### 🥇 즉시 매수 후보 TOP 3")
-        top3_cols = st.columns(3)
-        medals    = ["🥇", "🥈", "🥉"]
-        for i, (_, r) in enumerate(ranked.head(3).iterrows()):
-            with top3_cols[i]:
-                st.markdown(f"#### {medals[i]} {r['종목명']}")
-                st.metric("현재가", f"{r['현재가']:,}원",
-                          f"{r['등락률(%)']:+.2f}%",
-                          delta_color="normal" if r["등락률(%)"] >= 0 else "inverse")
-                st.progress(int(r["매수적합도(%)"]),
-                            text=f"매수 적합도 {r['매수적합도(%)']:.1f}%")
-                st.write(f"**수급신호**: {r['수급신호']}")
-                st.write(f"**눌림목**: {r['눌림목신호']}")
-                st.write(f"**타점**: {r['타점분석']}")
+        # ── 실데이터 원본 확인 ────────────────────────────────────────────────
+        with st.expander("🔍 기관·외국인 실데이터 원본 확인", expanded=False):
+            debug_rows = []
+            for t in top15_tickers:
+                d = investor_map.get(t, [])
+                name = top15_base.loc[t, "종목명"] if t in top15_base.index else t
+                if d:
+                    debug_rows.append({
+                        "종목": f"{name}({t})",
+                        "당일 기관": f"{d[0]['기관']:+,}",
+                        "당일 외국인": f"{d[0]['외국인']:+,}",
+                        "외국인 보유율": f"{d[0]['보유율']:.2f}%",
+                        "D-1 기관": f"{d[1]['기관']:+,}" if len(d) > 1 else "—",
+                        "D-2 기관": f"{d[2]['기관']:+,}" if len(d) > 2 else "—",
+                    })
+                else:
+                    debug_rows.append({"종목": f"{name}({t})", "당일 기관": "수집 실패",
+                                       "당일 외국인": "—", "외국인 보유율": "—", "D-1 기관": "—", "D-2 기관": "—"})
+            st.dataframe(pd.DataFrame(debug_rows), width="stretch")
+            st.caption("※ 네이버금융 frgn.naver 직접 파싱 — 기관합계에 연기금 포함")
 
     else:
-        st.info("위 버튼을 눌러 분석을 시작하세요.")
+        # 미분석 상태 안내 카드
+        st.markdown("""
+        <div style="background:#fff;border-radius:20px;padding:40px;text-align:center;
+                    box-shadow:0 2px 12px rgba(0,0,0,0.06);margin-top:12px;">
+            <div style="font-size:48px;margin-bottom:12px;">🐳</div>
+            <div style="font-size:20px;font-weight:800;color:#13131a;margin-bottom:8px;">
+                분석을 시작해보세요
+            </div>
+            <div style="font-size:14px;color:#9ca3af;line-height:1.8;">
+                위 버튼을 누르면 기관·외국인 실데이터를 수집하고<br>
+                AI가 매수 적합도 1위~15위를 즉시 산출합니다.
+            </div>
+        </div>""", unsafe_allow_html=True)
 
 
 # ── TAB 2: 수급 분석표 ───────────────────────────────────────────────────────
 with tab2:
-    st.subheader(f"📊 {date_str} {market_type} 입체 수급 분석")
+    st.markdown(f'<div class="section-header">📊 {market_type} 수급 분석표</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-sub">거래대금 상위 15개 종목의 기술적 수급 현황</div>', unsafe_allow_html=True)
     _run_btn("btn2")
 
     result = st.session_state.get("result")
     if result is not None and not result.empty:
-        top15 = result.sort_values(
-            ["거래대금(억)", "거래량비율(%)"], ascending=False
-        ).head(15)
+        top15 = result.sort_values(["거래대금(억)", "거래량비율(%)"], ascending=False).head(15)
 
-        def chg_color2(v):
+        # 컬럼 한글 설명 추가
+        display = top15[["종목명", "섹터", "현재가", "등락률(%)", "거래대금(억)", "거래량비율(%)", "RSI", "눌림목신호"]].copy()
+        display.columns = ["종목명", "섹터", "현재가(원)", "등락률(%)\n↑빨강↓파랑",
+                           "거래대금(억)\n[오늘 거래금액]", "거래량비율(%)\n[평균 대비]",
+                           "RSI\n[30↓과매도→매수기회]", "매수타이밍\n[눌림목신호]"]
+
+        def _chg_style(v):
             if isinstance(v, (int, float)):
-                if v < 0: return "color:#ef4444;font-weight:bold"
-                if v > 0: return "color:#22c55e;font-weight:bold"
+                if v < 0: return "color:#1d6ce8;font-weight:bold"
+                if v > 0: return "color:#ef4444;font-weight:bold"
             return ""
 
         styled2 = (
-            top15[["종목명", "섹터", "현재가", "등락률(%)",
-                   "거래대금(억)", "거래량비율(%)", "RSI", "눌림목신호"]].style
-            .background_gradient(subset=["거래대금(억)"],  cmap="Blues")
-            .background_gradient(subset=["거래량비율(%)"], cmap="Oranges")
-            .map(chg_color2, subset=["등락률(%)"])
+            display.style
+            .background_gradient(subset=["거래대금(억)\n[오늘 거래금액]"],  cmap="Reds", vmin=0)
+            .background_gradient(subset=["거래량비율(%)\n[평균 대비]"], cmap="Oranges", vmin=0)
+            .map(_chg_style, subset=["등락률(%)\n↑빨강↓파랑"])
             .format({
-                "현재가":        "{:,}",
-                "등락률(%)":     "{:+.2f}%",
-                "거래대금(억)":  "{:,.1f}억",
-                "거래량비율(%)": "{:.1f}%",
-                "RSI":           "{:.1f}",
+                "현재가(원)":                   "{:,}",
+                "등락률(%)\n↑빨강↓파랑":       "{:+.2f}%",
+                "거래대금(억)\n[오늘 거래금액]": "{:,.1f}억",
+                "거래량비율(%)\n[평균 대비]":    "{:.1f}%",
+                "RSI\n[30↓과매도→매수기회]":    "{:.1f}",
             })
         )
-        st.dataframe(styled2, use_container_width=True)
-        st.info("💡 거래대금: 당일 체결금액(억) | 거래량비율: 20일 평균 대비")
+        st.dataframe(styled2, width="stretch", height=520)
+        st.markdown("""
+        <div class="macro-card" style="margin-top:12px;">
+            <div style="font-size:13px;color:#374151;line-height:2;">
+            📌 <strong>거래대금</strong> — 오늘 이 종목에 몰린 돈의 총액 (클수록 주목도 높음)<br>
+            📌 <strong>거래량비율</strong> — 평소 대비 오늘 거래량 (200% 이상이면 이상 수급)<br>
+            📌 <strong>RSI</strong> — 0~30: 너무 내렸다(매수기회), 70~100: 너무 올랐다(과열 주의)
+            </div>
+        </div>""", unsafe_allow_html=True)
     else:
         st.info("위 버튼을 눌러 분석을 시작하세요.")
 
 
 # ── TAB 3: 섹터 흐름 ─────────────────────────────────────────────────────────
 with tab3:
-    st.subheader("💰 섹터별 돈의 흐름")
+    st.markdown('<div class="section-header">💰 어디에 돈이 몰리고 있나요?</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-sub">오늘 거래대금 기준 섹터별 자금 흐름</div>', unsafe_allow_html=True)
+
     result = st.session_state.get("result")
     if result is not None and not result.empty:
         sector_df = get_sector_flow(result)
         top3_sec  = sector_df.head(3)
+
         sc = st.columns(3)
+        medals_sec = ["🥇", "🥈", "🥉"]
         for i, (_, row) in enumerate(top3_sec.iterrows()):
             with sc[i]:
-                st.metric(f"{'🥇🥈🥉'[i]} {row['섹터']}",
-                          f"{row['섹터 거래대금(억)']:,.1f}억",
-                          f"비중 {row['비중(%)']:.1f}%")
-        st.bar_chart(sector_df.set_index("섹터")["섹터 거래대금(억)"])
-        st.dataframe(sector_df, use_container_width=True)
+                st.markdown(f"""
+                <div class="index-card">
+                    <div class="index-name">{medals_sec[i]} {row['섹터']}</div>
+                    <div class="index-value up">{row['섹터 거래대금(억)']:,.0f}억</div>
+                    <div class="index-delta up">전체의 {row['비중(%)']:.1f}% 집중</div>
+                </div>""", unsafe_allow_html=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.bar_chart(sector_df.set_index("섹터")["섹터 거래대금(억)"], color="#ef4444")
+        st.dataframe(sector_df, width="stretch")
+
         if not top3_sec.empty:
-            st.info(f"📡 자금 집중: **{top3_sec.iloc[0]['섹터']}** 섹터 — 해당 섹터 대장주 추가 수급 유입 모니터링.")
+            top_sec = top3_sec.iloc[0]["섹터"]
+            st.markdown(f"""
+            <div class="macro-card">
+                <div style="font-size:14px;color:#374151;">
+                💡 오늘 자금은 <strong style="color:#ef4444;">{top_sec}</strong> 섹터에 가장 많이 집중됐습니다.
+                해당 섹터 대장주에 추가 수급 유입 가능성을 주시하세요.
+                </div>
+            </div>""", unsafe_allow_html=True)
     else:
-        st.info("수급 분석표 탭에서 먼저 분석을 실행하세요.")
+        st.info("AI 매수 추천 탭에서 먼저 분석을 실행하세요.")
 
 
 # ── TAB 4: 한글 뉴스 ─────────────────────────────────────────────────────────
 with tab4:
-    st.subheader("📰 네이버 금융 — 한국어 뉴스 미반영 호재 분석")
+    st.markdown('<div class="section-header">📰 주가에 아직 반영 안 된 뉴스</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-sub">오늘 나온 뉴스 중 주가가 아직 따라가지 못한 호재를 탐색합니다</div>',
+                unsafe_allow_html=True)
+
     result = st.session_state.get("result")
     if result is not None and not result.empty:
-        top15_n = result.sort_values(
-            ["거래대금(억)", "거래량비율(%)"], ascending=False
-        ).head(15)
+        top15_n = result.sort_values(["거래대금(억)", "거래량비율(%)"], ascending=False).head(15)
         nm = get_news_batch(tuple(top15_n.index.tolist()))
+
         for ticker in top15_n.index:
-            name = top15_n.loc[ticker, "종목명"]
+            name      = top15_n.loc[ticker, "종목명"]
             headlines = nm.get(ticker, [])
-            hits = [kw for kw in NEWS_KEYWORDS if any(kw in h for h in headlines)]
-            badge = f"  🔥 **호재 키워드: {', '.join(hits)}**" if hits else ""
-            with st.expander(f"📌 {name} ({ticker}){badge}", expanded=bool(hits)):
+            hits      = [kw for kw in NEWS_KEYWORDS if any(kw in h for h in headlines)]
+            has_hot   = bool(hits)
+            badge     = f"  🔥 호재 키워드: {', '.join(hits)}" if has_hot else ""
+            with st.expander(f"{'🔥' if has_hot else '📌'} {name} ({ticker}){badge}", expanded=has_hot):
                 if headlines:
                     for h in headlines:
                         st.markdown(f"- {h}")
-                    st.caption("※ 위 뉴스가 현재가에 미반영된 호재/악재일 수 있습니다.")
+                    if hits:
+                        st.success(f"✅ 호재 키워드 감지: **{', '.join(hits)}** — 현재 주가에 미반영 가능성 체크!")
+                    st.caption("※ 네이버금융 실시간 뉴스 | 뉴스가 현재가에 반영되지 않았을 수 있습니다.")
                 else:
-                    st.write("네이버 금융 뉴스를 가져오지 못했습니다.")
+                    st.write("뉴스를 불러오지 못했습니다.")
     else:
-        st.info("수급 분석표 탭에서 먼저 분석을 실행하세요.")
+        st.info("AI 매수 추천 탭에서 먼저 분석을 실행하세요.")
 
 
 # ── TAB 5: 오버행/블록딜 ─────────────────────────────────────────────────────
 with tab5:
-    st.subheader("⚠️ 오버행 / 블록딜 정밀 감지기")
+    st.markdown('<div class="section-header">⚠️ 물량 주의 종목 감지</div>', unsafe_allow_html=True)
+    st.markdown("""
+    <div class="section-sub">
+    오버행(물량 주의) = CB·블록딜 등 대량 물량이 시장에 나올 수 있는 종목.
+    안전핀(🛡️) = 물량이 있지만 주가가 더 안 빠지는 하방 경직 상태.
+    </div>""", unsafe_allow_html=True)
+
     result = st.session_state.get("result")
     if result is not None and not result.empty:
-        top15_oh = result.sort_values(
-            ["거래대금(억)", "거래량비율(%)"], ascending=False
-        ).head(15)
-        hits = detect_overhang(top15_oh.index.tolist())
+        top15_oh = result.sort_values(["거래대금(억)", "거래량비율(%)"], ascending=False).head(15)
+        hits     = detect_overhang(top15_oh.index.tolist())
 
-        st.markdown("#### 🔎 TOP 15 내 오버행 감지")
+        st.markdown("#### 오늘 TOP 15 내 물량 주의 종목")
         if hits:
             for h in hits:
                 t     = h["종목코드"]
-                stocks = KOSPI_STOCKS if t in KOSPI_STOCKS else KOSDAQ_STOCKS
-                name  = stocks[t][0] if t in stocks else t
-                icon  = "🛡️" if h["safe"] else "⚠️"
-                with st.expander(f"{icon} {name} ({t}) — {h['type']}", expanded=True):
-                    st.markdown(f"**유형**: `{h['type']}`")
-                    st.markdown(f"**분석**: {h['comment']}")
+                stk   = KOSPI_STOCKS if t in KOSPI_STOCKS else KOSDAQ_STOCKS
+                name  = stk[t][0] if t in stk else t
+                icon  = "🛡️ 안전핀" if h["safe"] else "⚠️ 주의"
+                with st.expander(f"{icon} — {name} ({t}) · {h['type']}", expanded=True):
+                    st.markdown(f"**유형:** `{h['type']}`")
+                    st.markdown(f"**분석:** {h['comment']}")
                     if h["safe"]:
-                        st.success("→ 하방 경직성 확보 '안전핀' 역할 가능성 있음.")
+                        st.success("✅ **안전핀 상태**: 물량이 있지만 주가 하방 경직 — 오히려 안전한 타점일 수 있습니다.")
                     else:
-                        st.warning("→ 물량 출회 시 단기 주가 압박. 수급 이탈 즉각 손절 확인.")
+                        st.warning("⚠️ **물량 주의**: 대량 매도 물량 출회 시 단기 하락 가능. 손절선 설정 필수.")
         else:
-            st.success("✅ TOP 15 내 즉각적 오버행 리스크 없음.")
+            st.success("✅ 오늘 TOP 15에 물량 주의 종목이 없습니다. 수급이 비교적 깨끗합니다.")
 
-        st.markdown("#### 📋 전체 오버행 모니터링")
+        st.markdown("<br>**전체 물량 주의 모니터링**", unsafe_allow_html=True)
         oh_rows = []
         for h in detect_overhang(list(OVERHANG_DB.keys())):
             t = h["종목코드"]
             s = KOSPI_STOCKS if t in KOSPI_STOCKS else KOSDAQ_STOCKS
             oh_rows.append({
                 "종목명": s[t][0] if t in s else t, "코드": t,
-                "유형":   h["type"],
-                "안전핀": "✅ 하방경직" if h["safe"] else "❌ 물량주의",
-                "분석":   h["comment"],
+                "물량 유형": h["type"],
+                "상태": "🛡️ 안전핀(하방 경직)" if h["safe"] else "⚠️ 물량 주의",
+                "AI 분석": h["comment"],
             })
         if oh_rows:
-            st.dataframe(pd.DataFrame(oh_rows), use_container_width=True)
-        st.info("💡 안전핀 ✅ = 오버행 있으나 하방 경직성 확보. ❌ = 물량 압박 주의.")
+            st.dataframe(pd.DataFrame(oh_rows), width="stretch")
+
+        st.markdown("""
+        <div class="macro-card">
+            <div style="font-size:13px;color:#374151;line-height:2;">
+            📌 <strong>오버행(Overhang)</strong> = 수면 위 빙하처럼, 시장에 나올 준비된 대량 매도 물량<br>
+            📌 <strong>CB(전환사채)</strong> = 대출을 주식으로 바꿀 수 있는 채권. 주가 오르면 팔 수 있어 부담.<br>
+            📌 <strong>블록딜(PRS)</strong> = 대주주가 대량으로 주식을 파는 것. 시장에 물량 부담 발생.<br>
+            📌 <strong>안전핀</strong> = 물량이 있어도 주가가 더 안 빠짐 → 오히려 매수 기회!
+            </div>
+        </div>""", unsafe_allow_html=True)
     else:
-        st.info("수급 분석표 탭에서 먼저 분석을 실행하세요.")
+        st.info("AI 매수 추천 탭에서 먼저 분석을 실행하세요.")
