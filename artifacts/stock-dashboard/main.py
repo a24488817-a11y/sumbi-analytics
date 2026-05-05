@@ -803,13 +803,13 @@ def build_ranked(price_df: pd.DataFrame, investor_map: dict, news_map: dict) -> 
 def render_ranked_cards(ranked: pd.DataFrame):
     """종목 카드 렌더링"""
     for _, r in ranked.iterrows():
-        st.markdown(stock_card_html(int(r["순위"]), r), unsafe_allow_html=True)
+        st.html(stock_card_html(int(r["순위"]), r))
 
 
 # ───────────────────────────────────────────────────────────────────────────────
 # ■ UI — 헤더
 # ───────────────────────────────────────────────────────────────────────────────
-st.markdown("""
+st.html("""
 <div style="display:flex;align-items:center;gap:14px;padding:8px 0 16px;">
     <div style="font-size:36px;">🐳</div>
     <div>
@@ -817,7 +817,7 @@ st.markdown("""
         <div class="soombi-sub">SOOMBI Analytics v3.0 · KOSPI&KOSDAQ 동시 분석 · 체급 자동 분류 · 내일 급등 예측</div>
     </div>
 </div>
-""", unsafe_allow_html=True)
+""")
 
 # ── 지수 전광판 ───────────────────────────────────────────────────────────────
 macro = get_macro_indices()
@@ -827,10 +827,10 @@ for col, key in zip(idx_cols, ["KOSPI","KOSDAQ","나스닥","나스닥선물"]):
     with col:
         if d:
             v = f"{d['현재']:,.2f}" if d["현재"] < 100_000 else f"{d['현재']:,.0f}"
-            st.markdown(index_card_html(key, v, d["변동률"], d["변동"]), unsafe_allow_html=True)
+            st.html(index_card_html(key, v, d["변동률"], d["변동"]))
         else:
-            st.markdown(f'<div class="index-card"><div class="index-name">{key}</div>'
-                        f'<div class="index-value flat">N/A</div></div>', unsafe_allow_html=True)
+            st.html(f'<div class="index-card"><div class="index-name">{key}</div>'
+                    f'<div class="index-value flat">N/A</div></div>')
 
 # ── 장세 코멘트 ───────────────────────────────────────────────────────────────
 kd = macro.get("KOSPI"); nd = macro.get("나스닥"); nfd = macro.get("나스닥선물")
@@ -846,17 +846,17 @@ if nd:
 if nfd:
     sign = "상승" if nfd["변동률"] >= 0 else "하락"
     lines.append(f"📡 <strong>나스닥선물</strong>: {nfd['변동률']:+.2f}% {sign} — 다음 장 개장 분위기 선반영.")
-st.markdown(f"""
+st.html(f"""
 <div class="macro-card">
     <div style="font-size:14px;font-weight:800;color:#13131a;margin-bottom:8px;">📊 지금 시장은?</div>
     <div style="font-size:13px;color:#374151;line-height:1.9;">{"<br>".join(lines) or "데이터 수집 중..."}</div>
     <div style="font-size:11px;color:#c4c4cf;margin-top:8px;">
         ※ 한국 증시 기준: 🔴 상승(빨강) | 🔵 하락(파랑)
     </div>
-</div>""", unsafe_allow_html=True)
+</div>""")
 
 # ── 체급 설명 카드 ────────────────────────────────────────────────────────────
-st.markdown("""
+st.html("""
 <div class="macro-card">
     <div style="font-size:14px;font-weight:800;color:#13131a;margin-bottom:10px;">
         🏷️ 종목 체급 분류 안내 — 1초 만에 위험도 파악
@@ -871,15 +871,16 @@ st.markdown("""
         <div><span class="grade-badge grade-gamble">🎰 도박주</span>
              <span style="color:#6b7280;margin-left:6px;">극단 변동성·재무 리스크. 손절선 필수. 고위험.</span></div>
     </div>
-</div>""", unsafe_allow_html=True)
+</div>""")
 
 # ───────────────────────────────────────────────────────────────────────────────
 # 사이드바
 # ───────────────────────────────────────────────────────────────────────────────
-st.sidebar.markdown("""
+with st.sidebar:
+    st.html("""
 <div style="font-size:20px;font-weight:900;color:#13131a;padding:8px 0 2px;">🐳 숨비 애널리틱스</div>
 <div style="font-size:12px;color:#9ca3af;margin-bottom:14px;">SOOMBI Analytics v3.0</div>
-""", unsafe_allow_html=True)
+""")
 st.sidebar.markdown("---")
 st.sidebar.markdown("**📅 분석 기준일**")
 target_date = st.sidebar.date_input("기준일", datetime.now() - timedelta(days=1),
@@ -903,14 +904,15 @@ if auto_refresh and st.session_state.get("analysis_run"):
     if cnt > 0: st.cache_data.clear()
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("""
+with st.sidebar:
+    st.html("""
 <div style="font-size:12px;color:#9ca3af;line-height:1.9;">
 <strong>📌 정렬 기준</strong><br>
 내일 기대수익률 → 양봉 승률 → 매수적합도<br><br>
 <strong>🐳 숨비(Soombi)란?</strong><br>
 제주 해녀의 잠수 기술. 깊이 분석해<br>
 급등 종목을 건져 올립니다.
-</div>""", unsafe_allow_html=True)
+</div>""")
 
 # ───────────────────────────────────────────────────────────────────────────────
 # 공통: 분석 실행 (양쪽 시장 동시)
@@ -955,13 +957,12 @@ def render_market_tab(market_name: str, result_key: str, date_key: str,
                       run_btn_key: str, market_code: str):
     """KOSPI / KOSDAQ 공통 랭킹 탭 렌더 함수"""
     icon = "🏆" if market_code == "KOSPI" else "🔷"
-    st.markdown(f'<div class="section-header">{icon} {market_name} 내일 급등 예측 TOP 15</div>',
-                unsafe_allow_html=True)
-    st.markdown("""
+    st.html(f'<div class="section-header">{icon} {market_name} 내일 급등 예측 TOP 15</div>')
+    st.html("""
     <div class="section-sub">
     정렬 기준: <strong>내일 기대수익률</strong> → 양봉 승률 → AI 매수적합도 |
     체급 배지로 위험도 즉시 확인 | 🏦기관/연기금(30pt) + 💥공매도상환(20pt) + 📈최적매수(30pt) + 📰호재(20pt)
-    </div>""", unsafe_allow_html=True)
+    </div>""")
 
     _run_btn(run_btn_key)
     result = st.session_state.get(result_key)
@@ -987,17 +988,17 @@ def render_market_tab(market_name: str, result_key: str, date_key: str,
         for col, (gk, gm) in zip(g_cols, GRADE_META.items()):
             cnt = int(grade_counts.get(gk, 0))
             with col:
-                st.markdown(f"""
+                st.html(f"""
                 <div class="index-card" style="padding:14px 18px;">
                     <div class="index-name">{gm[0]} {gm[1]}</div>
                     <div class="index-value" style="font-size:24px;color:{gm[3]};">{cnt}종목</div>
                     <div style="font-size:11px;color:#9ca3af;">{gm[2]}</div>
-                </div>""", unsafe_allow_html=True)
+                </div>""")
 
         avg_wr = ranked["_win_rate"].mean()
         avg_er = ranked["_exp_return"].mean()
         top_er = ranked["_exp_return"].max()
-        st.markdown(f"""
+        st.html(f"""
         <div class="macro-card" style="margin-top:4px;">
             <div style="display:flex;gap:24px;flex-wrap:wrap;font-size:13px;">
                 <div>📊 <strong>평균 양봉 승률</strong>:
@@ -1008,7 +1009,7 @@ def render_market_tab(market_name: str, result_key: str, date_key: str,
                     <span style="color:#7c3aed;font-weight:800;">+{top_er:.2f}%</span>
                     ({ranked.iloc[0]["종목명"]})</div>
             </div>
-        </div>""", unsafe_allow_html=True)
+        </div>""")
 
         # ── 종목 카드 ────────────────────────────────────────────────────────
         render_ranked_cards(ranked)
@@ -1036,7 +1037,7 @@ def render_market_tab(market_name: str, result_key: str, date_key: str,
     elif st.session_state.get("analysis_run"):
         st.error(f"⚠️ {market_name} 데이터를 불러오지 못했습니다. 날짜를 확인해주세요 (공휴일·주말 불가).")
     else:
-        st.markdown(f"""
+        st.html(f"""
         <div style="background:#fff;border-radius:20px;padding:40px;text-align:center;
                     box-shadow:0 2px 12px rgba(0,0,0,0.06);margin-top:12px;">
             <div style="font-size:48px;margin-bottom:12px;">{icon}</div>
@@ -1047,7 +1048,7 @@ def render_market_tab(market_name: str, result_key: str, date_key: str,
                 KOSPI와 KOSDAQ을 동시에 분석합니다.<br>
                 기관·외국인 실데이터로 내일 급등 가능성을 계산합니다.
             </div>
-        </div>""", unsafe_allow_html=True)
+        </div>""")
 
 
 # ── KOSPI TAB ────────────────────────────────────────────────────────────────
@@ -1060,7 +1061,7 @@ with tab_kq:
 
 # ── 수급 분석표 ───────────────────────────────────────────────────────────────
 with tab_supply:
-    st.markdown('<div class="section-header">📊 수급 분석표</div>', unsafe_allow_html=True)
+    st.html('<div class="section-header">📊 수급 분석표</div>')
     _run_btn("btn_sup")
 
     sub_k, sub_q = st.tabs(["🏆 KOSPI", "🔷 KOSDAQ"])
@@ -1096,7 +1097,7 @@ with tab_supply:
 
 # ── 섹터 흐름 ─────────────────────────────────────────────────────────────────
 with tab_sector:
-    st.markdown('<div class="section-header">💰 어디에 돈이 몰리고 있나요?</div>', unsafe_allow_html=True)
+    st.html('<div class="section-header">💰 어디에 돈이 몰리고 있나요?</div>')
     sub_k2, sub_q2 = st.tabs(["🏆 KOSPI 섹터", "🔷 KOSDAQ 섹터"])
     for sub_tab, rkey, mname in [(sub_k2,"kospi_result","KOSPI"),(sub_q2,"kosdaq_result","KOSDAQ")]:
         with sub_tab:
@@ -1107,30 +1108,30 @@ with tab_sector:
                 sc    = st.columns(3)
                 for i, (_, row) in enumerate(top3s.iterrows()):
                     with sc[i]:
-                        st.markdown(f"""
+                        st.html(f"""
                         <div class="index-card">
                             <div class="index-name">{"🥇🥈🥉"[i]} {row['섹터']}</div>
                             <div class="index-value up">{row['섹터 거래대금(억)']:,.0f}억</div>
                             <div class="index-delta up">전체의 {row['비중(%)']:.1f}%</div>
-                        </div>""", unsafe_allow_html=True)
+                        </div>""")
                 st.bar_chart(sdf.set_index("섹터")["섹터 거래대금(억)"], color="#ef4444")
                 st.dataframe(sdf, width="stretch")
                 if not top3s.empty:
                     ts = top3s.iloc[0]["섹터"]
-                    st.markdown(f"""
+                    st.html(f"""
                     <div class="macro-card">
                         <div style="font-size:13px;color:#374151;">
                         💡 <strong>{mname}</strong>에서 오늘 자금은
                         <strong style="color:#ef4444;">{ts}</strong> 섹터에 가장 많이 집중됐습니다.
                         해당 섹터 대장주에 추가 수급 유입 가능성을 주시하세요.
                         </div>
-                    </div>""", unsafe_allow_html=True)
+                    </div>""")
             else:
                 st.info(f"{mname} 분석 후 데이터가 표시됩니다.")
 
 # ── 미반영 뉴스 ───────────────────────────────────────────────────────────────
 with tab_news:
-    st.markdown('<div class="section-header">📰 주가에 아직 반영 안 된 뉴스</div>', unsafe_allow_html=True)
+    st.html('<div class="section-header">📰 주가에 아직 반영 안 된 뉴스</div>')
     sub_kn, sub_qn = st.tabs(["🏆 KOSPI", "🔷 KOSDAQ"])
     for sub_tab, rkey, mname in [(sub_kn,"kospi_result","KOSPI"),(sub_qn,"kosdaq_result","KOSDAQ")]:
         with sub_tab:
@@ -1157,13 +1158,13 @@ with tab_news:
 
 # ── 물량 주의 종목 ─────────────────────────────────────────────────────────────
 with tab_oh:
-    st.markdown('<div class="section-header">⚠️ 물량 주의 종목 감지</div>', unsafe_allow_html=True)
-    st.markdown("""
+    st.html('<div class="section-header">⚠️ 물량 주의 종목 감지</div>')
+    st.html("""
     <div class="section-sub">
     오버행(물량 주의) = CB·블록딜 등 시장에 나올 수 있는 대량 매도 물량.
     안전핀(🛡️) = 물량이 있지만 주가 하방 경직 상태.
-    </div>""", unsafe_allow_html=True)
-    st.markdown("""
+    </div>""")
+    st.html("""
     <div class="macro-card">
         <div style="font-size:13px;color:#374151;line-height:2.1;">
         📌 <strong>오버행(Overhang)</strong> = 수면 위 빙하처럼 시장에 나올 준비된 대량 매도 물량<br>
@@ -1171,7 +1172,7 @@ with tab_oh:
         📌 <strong>블록딜(PRS)</strong> = 대주주가 대량 주식을 파는 것. 시장에 물량 부담 발생<br>
         📌 <strong>안전핀</strong> = 물량이 있어도 주가가 더 안 빠짐 → 오히려 매수 기회!
         </div>
-    </div>""", unsafe_allow_html=True)
+    </div>""")
 
     oh_rows = []
     for h in detect_overhang(list(OVERHANG_DB.keys())):
