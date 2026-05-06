@@ -301,6 +301,7 @@ _KRX_HOLIDAYS: dict[int, frozenset[_date]] = {
         _date(2026,  2, 17),   # 설날
         _date(2026,  2, 18),   # 설날 연휴 (다음날)
         _date(2026,  3,  2),   # 삼일절 대체공휴일 (3/1 일요일)
+        _date(2026,  5,  1),   # 근로자의 날 (KRX 휴장)
         _date(2026,  5,  5),   # 어린이날
         _date(2026,  5, 25),   # 석가탄신일 (음력 4월 8일)
         _date(2026,  6,  6),   # 현충일 (토요일)
@@ -657,7 +658,7 @@ def stock_card_html(rank: int, r: pd.Series) -> str:
 # ───────────────────────────────────────────────────────────────────────────────
 # 데이터 함수
 # ───────────────────────────────────────────────────────────────────────────────
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=120)
 def get_investor_data_naver(ticker: str) -> list:
     try:
         r = requests.get("https://finance.naver.com/item/frgn.naver",
@@ -691,7 +692,7 @@ def get_investor_data_naver(ticker: str) -> list:
         return []
 
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=120)
 def get_investor_batch(tickers: tuple) -> dict:
     return {t: get_investor_data_naver(t) for t in tickers}
 
@@ -1861,10 +1862,61 @@ if "sniper_code" in st.session_state:
 
         # ── 기관·외국인 수급 ─────────────────────────────────────────────────
         if _sinv:
-            st.html('<div style="font-size:14px;font-weight:800;color:#13131a;margin:8px 0 4px;">🏦 기관·외국인 수급 흐름 (최근 5거래일)</div>')
-            _inv_df = pd.DataFrame(_sinv)
-            _inv_df.columns = ["날짜", "기관 순매수", "외국인 순매수", "외국인 보유율(%)"]
-            st.dataframe(_inv_df, use_container_width=True, hide_index=True)
+            _inv_confirmed_date = _sinv[0]["날짜"]
+            _inv_today_str      = datetime.now(KST).strftime("%Y.%m.%d")
+            _inv_today_d        = datetime.now(KST).date()
+            _inv_is_trading_day = (_inv_today_d.weekday() < 5
+                                   and not _is_krx_holiday(_inv_today_d))
+            _inv_stale          = (_inv_confirmed_date != _inv_today_str
+                                   and _inv_is_trading_day
+                                   and datetime.now(KST).hour >= 9)
+            _inv_after_close    = (datetime.now(KST).hour > 15 or
+                                   (datetime.now(KST).hour == 15 and
+                                    datetime.now(KST).minute >= 30))
+
+            st.html(
+                '<div style="font-size:14px;font-weight:800;color:#13131a;'
+                'margin:8px 0 4px;">🏦 기관·외국인 수급 흐름 (최근 5거래일)</div>'
+            )
+            if _inv_stale:
+                _status_txt = ("장 마감 후 집계 중" if _inv_after_close
+                               else "장중 — 당일 확정 미공시")
+                st.html(f"""
+                <div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;
+                            padding:8px 12px;font-size:12px;color:#92400e;margin-bottom:6px;
+                            display:flex;align-items:center;gap:6px;">
+                  ⏳ <strong>수급 확정 기준일: {_inv_confirmed_date}</strong>
+                  &nbsp;|&nbsp; 오늘({_inv_today_str}) 기관·외국인 수급은 <strong>{_status_txt}</strong>
+                  &nbsp;— KRX가 익일 오전 공시 후 자동 반영됩니다.
+                </div>""")
+
+            _inv_df = pd.DataFrame([{
+                "날짜":            d["날짜"],
+                "기관 순매수(주)": d["기관"],
+                "외국인 순매수(주)": d["외국인"],
+                "외국인 보유율(%)": d["보유율"],
+            } for d in _sinv])
+
+            def _fmt_inv(v):
+                if isinstance(v, (int, float)):
+                    if v > 0: return f"+{int(v):,}"
+                    if v < 0: return f"{int(v):,}"
+                    return "0"
+                return v
+
+            st.dataframe(
+                _inv_df.style
+                .format({"기관 순매수(주)": _fmt_inv,
+                         "외국인 순매수(주)": _fmt_inv,
+                         "외국인 보유율(%)": "{:.2f}%"})
+                .map(lambda v: ("color:#ef4444;font-weight:700"
+                                if isinstance(v,(int,float)) and v > 0
+                                else ("color:#1d6ce8;font-weight:700"
+                                      if isinstance(v,(int,float)) and v < 0
+                                      else "")),
+                     subset=["기관 순매수(주)", "외국인 순매수(주)"]),
+                use_container_width=True, hide_index=True,
+            )
 
         # ── 뉴스 분류 ────────────────────────────────────────────────────────
         if _snews:
@@ -2052,23 +2104,64 @@ def render_market_tab(market_name: str, result_key: str, date_key: str,
 
         # ── 실데이터 확인 ────────────────────────────────────────────────────
         with st.expander("🔍 기관·외국인 실데이터 원본 확인", expanded=False):
+            # 수급 데이터 기준일 배너
+            _dbg_today_str = datetime.now(KST).strftime("%Y.%m.%d")
+            _dbg_today_d   = datetime.now(KST).date()
+            _dbg_is_td     = (_dbg_today_d.weekday() < 5
+                              and not _is_krx_holiday(_dbg_today_d))
+            # 최신 확정 기준일 — 가장 많은 종목의 d[0]["날짜"]
+            _all_dates = [investor_map[t][0]["날짜"]
+                          for t in top15_tickers
+                          if investor_map.get(t)]
+            _latest_conf = max(_all_dates) if _all_dates else "—"
+            _dbg_stale   = (_latest_conf != _dbg_today_str and _dbg_is_td
+                            and datetime.now(KST).hour >= 9)
+            if _dbg_stale:
+                _dbg_after_close = (datetime.now(KST).hour > 15 or
+                                    (datetime.now(KST).hour == 15 and
+                                     datetime.now(KST).minute >= 30))
+                _dbg_status = "장 마감 후 집계 중" if _dbg_after_close else "장중"
+                st.html(f"""
+                <div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;
+                            padding:8px 14px;font-size:12px;color:#92400e;margin-bottom:8px;">
+                  ⏳ <strong>수급 확정 데이터 기준일: {_latest_conf}</strong>
+                  &nbsp;|&nbsp; 오늘({_dbg_today_str}) 데이터는 <strong>{_dbg_status}</strong>
+                  — KRX 확정 공시 후 자동 업데이트됩니다 (통상 익일 09:00 이후)
+                </div>""")
+            else:
+                st.html(f"""
+                <div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;
+                            padding:8px 14px;font-size:12px;color:#166534;margin-bottom:8px;">
+                  ✅ <strong>수급 확정 데이터 기준일: {_latest_conf}</strong>
+                  &nbsp;|&nbsp; 최신 KRX 확정 데이터가 반영되었습니다.
+                </div>""")
+
             debug_rows = []
             for t in top15_tickers:
                 d = investor_map.get(t, [])
                 name = result.loc[t, "종목명"] if t in result.index else t
                 if d:
+                    _d0_date = d[0]["날짜"]
+                    _d0_stale_mark = " ⏳" if (_d0_date != _dbg_today_str and _dbg_is_td) else ""
                     debug_rows.append({
-                        "종목": f"{name}({t})", "당일 기관": f"{d[0]['기관']:+,}",
-                        "당일 외국인": f"{d[0]['외국인']:+,}",
+                        "종목": f"{name}({t})",
+                        f"최신 기준일{_d0_stale_mark}": _d0_date,
+                        "기관(D0)": f"{d[0]['기관']:+,}",
+                        "외국인(D0)": f"{d[0]['외국인']:+,}",
                         "외국인 보유율": f"{d[0]['보유율']:.2f}%",
-                        "D-1 기관": f"{d[1]['기관']:+,}" if len(d)>1 else "—",
-                        "D-2 기관": f"{d[2]['기관']:+,}" if len(d)>2 else "—",
+                        "기관(D-1)": f"{d[1]['기관']:+,}" if len(d)>1 else "—",
+                        "기관(D-2)": f"{d[2]['기관']:+,}" if len(d)>2 else "—",
                     })
                 else:
-                    debug_rows.append({"종목": f"{name}({t})", "당일 기관": "수집 실패",
-                                       "당일 외국인":"—","외국인 보유율":"—","D-1 기관":"—","D-2 기관":"—"})
+                    debug_rows.append({"종목": f"{name}({t})", "최신 기준일": "수집 실패",
+                                       "기관(D0)":"—","외국인(D0)":"—",
+                                       "외국인 보유율":"—","기관(D-1)":"—","기관(D-2)":"—"})
             st.dataframe(pd.DataFrame(debug_rows), width="stretch")
-            st.caption("※ 네이버금융 frgn.naver 직접 파싱 — 기관합계에 연기금 포함")
+            st.caption(
+                "※ 소스: 네이버금융 frgn.naver (기관합계 = 연기금 포함) | "
+                "KRX 확정 결제 데이터는 통상 익일 09:00 이후 공시 → 당일 15:30 마감 직후에는 "
+                f"D-1({_latest_conf}) 데이터가 최신입니다."
+            )
 
     elif st.session_state.get("analysis_run"):
         st.error(f"⚠️ {market_name} 데이터를 불러오지 못했습니다. 날짜를 확인해주세요 (공휴일·주말 불가).")
