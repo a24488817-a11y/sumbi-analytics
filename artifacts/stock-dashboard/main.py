@@ -847,7 +847,7 @@ def get_short_balance_naver(ticker: str) -> dict:
                     try:
                         bal = int(cells[1].replace(",", ""))
                         rat = float(cells[2].replace("%", "").replace(",", ""))
-                        if bal > 0:
+                        if bal >= 0:
                             rows.append({"날짜": cells[0], "잔고": bal, "잔고율": rat})
                     except Exception:
                         pass
@@ -2296,6 +2296,7 @@ if "sniper_code" in st.session_state:
             elif _nc == "호재":        _good_items.append((_nh, _nkt))
             elif _nc == "악재":        _bad_items.append((_nh, _nkt))
         _total_sig = len(_unref_items) + len(_good_items) + len(_bad_items)
+        _all_pos_items = _unref_items + _good_items  # 미반영 호재 + 호재 통합
         if _unref_items:
             _sum_color = "#2563eb"; _sum_text = f"🔥 미반영 호재 {len(_unref_items)}건 감지 — 선취매 검토"
         elif len(_good_items) > len(_bad_items):
@@ -2380,9 +2381,29 @@ if "sniper_code" in st.session_state:
             _sum3 = (f"③ ⚠️ {_r['title']}: {_r['desc'][:60]}"
                      f" — 수급 개선 확인 전 보수적 접근 권고.")
 
+        # ── 종목 특수 오버라이드 (한화오션 블록딜/오버행) ──────────────────────
+        _special_alert_html = ""
+        if _sn == "한화오션":
+            _special_alert_html = (
+                '<div style="background:#fef2f2;border-radius:8px;padding:10px 14px;'
+                'margin-bottom:12px;border-left:4px solid #dc2626;">'
+                '<div style="font-size:12px;font-weight:900;color:#991b1b;margin-bottom:4px;">'
+                '⚠️ 팩트체크 경보 · 한화오션</div>'
+                '<div style="font-size:12px;color:#1f2937;font-weight:700;line-height:1.7;">'
+                '한화시스템 블록딜 물량 수령에 따른 오버행(잠재적 매도 물량) 이슈가 해소되지 않아 '
+                '주가가 강력한 횡보 구간에 갇혀 있음. 기관 수급 유입 전까지 보수적 관망 권고.'
+                '</div></div>'
+            )
+            _sum1 = "① ⚠️ 블록딜 오버행 미해소 — 잠재 매도 물량이 상단을 압박, 추가 상승 제한적."
+            _sum2 = f"② 기관 수급 전환 신호 미확인(RSI {_rsi:.0f}) — 횡보 구간 이탈 + 기관 매집 동반 시 분할 진입."
+            _sum3 = "③ 오버행 해소 후 LNG선 수주 뉴스 + 외국인 매집 동반 시 즉시 진입 공식 적용 — 현재는 관망 우선."
+
         # ── 미반영 호재 필터박스 HTML (숫자만 — 상세는 아래 expander로) ────────
         _unref_box_html = f'<div class="filter-score" style="color:#2563eb;">{_sscore["뉴스호재"]:.0f}</div>'
-        if _unref_items:
+        if _all_pos_items:
+            _unref_box_html += (f'<div style="font-size:9px;color:#2563eb;font-weight:800;margin-top:3px;">'
+                                f'▾ {len(_all_pos_items)}건 클릭 확인</div>')
+        elif _news_s > 0:
             _unref_box_html += '<div style="font-size:9px;color:#2563eb;font-weight:700;margin-top:3px;">▾ 상세 보기</div>'
 
         # ── 공매도상환 박스 서브 노트 ─────────────────────────────────────────
@@ -2393,7 +2414,7 @@ if "sniper_code" in st.session_state:
                 f'<span style="color:#9ca3af;font-weight:400;"> {_sshort["날짜"]}</span></div>'
             )
         elif _short_s == 0:
-            _short_note = '<div style="font-size:9px;color:#f59e0b;margin-top:3px;">데이터 집계 중(T+2)</div>'
+            _short_note = '<div style="font-size:9px;color:#6b7280;margin-top:3px;">잔고 없음 또는 T+2 집계 중</div>'
         else:
             _short_note = ""
 
@@ -2411,9 +2432,9 @@ if "sniper_code" in st.session_state:
             )
         else:
             _short_score_html = (
-                '<div style="font-size:15px;font-weight:900;color:#f59e0b;line-height:1.4;">'
-                '집계 중<br>'
-                '<span style="font-size:9px;font-weight:600;color:#6b7280;">(T+2 지연)</span></div>'
+                '<div style="font-size:13px;font-weight:900;color:#94a3b8;line-height:1.4;">'
+                '잔고없음<br>'
+                '<span style="font-size:9px;font-weight:600;color:#6b7280;">(미감지·T+2)</span></div>'
             )
 
         # ── 공매도 잔고 추이 HTML (카드 Part2 삽입용) ─────────────────────────
@@ -2519,8 +2540,13 @@ if "sniper_code" in st.session_state:
             f'<div style="font-size:11px;font-weight:800;color:#1d4ed8;text-align:center;'
             f'padding:7px 12px;background:#eff6ff;border-radius:8px;margin-top:8px;'
             f'border:1px dashed #93c5fd;">'
-            f'👇 미반영 호재 {len(_unref_items)}건 감지 — 바로 아래 펼치기 버튼을 클릭하세요</div>'
-            if _unref_items else ''
+            f'👇 뉴스 호재 {len(_all_pos_items)}건 감지 — 바로 아래 펼치기 버튼을 클릭하세요</div>'
+            if _all_pos_items else (
+                f'<div style="font-size:11px;font-weight:700;color:#1d4ed8;text-align:center;'
+                f'padding:7px 12px;background:#eff6ff;border-radius:8px;margin-top:8px;">'
+                f'📰 뉴스 점수 {_news_s:.0f}점 — 아래에서 수집된 뉴스를 확인하세요</div>'
+                if _news_s > 0 else ''
+            )
         )
         st.html(f"""
 <style>
@@ -2595,24 +2621,37 @@ if "sniper_code" in st.session_state:
   {_hint_bar}
 </div>""")
 
-        # ── 미반영 호재 expander (4대 필살기 박스 바로 아래 — 즉시 클릭 가능) ──
-        if _unref_items:
-            with st.expander(
-                f"🔥 미반영 호재 {len(_unref_items)}건 상세 보기  ← 클릭하면 바로 펼쳐집니다",
-                expanded=False
-            ):
-                st.markdown(
-                    f"**{_sn}** 미반영 호재 **{len(_unref_items)}건** "
-                    f"— 현재가에 아직 반영되지 않은 이벤트 드리븐 기회입니다."
-                )
-                for _uidx, (_unh, _unkt) in enumerate(_unref_items, 1):
-                    st.html(
-                        f'<div style="background:#eff6ff;border-radius:10px;padding:9px 14px;'
-                        f'border-left:4px solid #2563eb;margin-bottom:6px;font-size:13px;'
-                        f'color:#1e3a8a;font-weight:700;">'
-                        f'<span style="background:#2563eb;color:#fff;border-radius:4px;'
-                        f'padding:1px 7px;margin-right:8px;font-size:11px;font-weight:900;">{_uidx}</span>'
-                        f'{_unh}{_unkt}</div>'
+        # ── 뉴스 호재 expander (4대 필살기 박스 바로 아래 — 즉시 클릭 가능) ──
+        if _all_pos_items or _news_s > 0:
+            _exp_label = (
+                f"📰 뉴스 호재 {len(_all_pos_items)}건 상세 보기 — 클릭하면 바로 펼쳐집니다"
+                if _all_pos_items
+                else f"📰 뉴스 점수 {_news_s:.0f}점 — 수집된 뉴스 전체 보기"
+            )
+            with st.expander(_exp_label, expanded=False):
+                if _all_pos_items:
+                    st.markdown(
+                        f"**{_sn}** 긍정 뉴스 **{len(_all_pos_items)}건** "
+                        f"(미반영 호재 {len(_unref_items)}건 + 호재 {len(_good_items)}건)"
+                        f" — 현재가에 반영되지 않은 이벤트 드리븐 기회입니다."
+                    )
+                    for _uidx, (_unh, _unkt) in enumerate(_all_pos_items, 1):
+                        _is_unref = _uidx <= len(_unref_items)
+                        _tag_color = "#2563eb" if _is_unref else "#059669"
+                        _tag_txt   = "미반영" if _is_unref else "호재"
+                        st.html(
+                            f'<div style="background:#f0fdf4;border-radius:10px;padding:9px 14px;'
+                            f'border-left:4px solid {_tag_color};margin-bottom:6px;font-size:13px;'
+                            f'color:#1f2937;font-weight:700;">'
+                            f'<span style="background:{_tag_color};color:#fff;border-radius:4px;'
+                            f'padding:1px 7px;margin-right:8px;font-size:11px;font-weight:900;">'
+                            f'{_uidx} {_tag_txt}</span>'
+                            f'{_unh}{_unkt}</div>'
+                        )
+                else:
+                    st.caption(
+                        f"뉴스 점수 {_news_s:.0f}점이 감지되었으나 개별 뉴스 분류가 어렵습니다. "
+                        f"아래 전체 뉴스 분류 탭에서 확인하세요."
                     )
 
         # ── 스나이퍼 카드 Part 2: 기술 지표 + AI 분석 + 점수 산출 ──────────
@@ -2680,11 +2719,14 @@ if "sniper_code" in st.session_state:
 </div>""")
 
         st.html(f"""
-<div style="background:#1e1b4b;border-radius:12px;padding:16px 20px;margin:8px 0 4px;">
-  <div style="font-size:14px;font-weight:900;color:#ffffff;margin-bottom:10px;letter-spacing:-0.3px;">
+<div style="background:#ffffff;border-radius:12px;padding:16px 20px;margin:8px 0 4px;
+            border:2px solid #1e1b4b;color:#000000;
+            font-family:'Pretendard','Noto Sans KR',sans-serif;">
+  <div style="font-size:14px;font-weight:900;color:#1e1b4b;margin-bottom:10px;letter-spacing:-0.3px;">
     🎯 핵심 요약 (42대 필살기 근거)
   </div>
-  <div style="font-size:13px;color:#e2e8f0;line-height:2.1;font-weight:600;">
+  {_special_alert_html}
+  <div style="font-size:13px;color:#000000;line-height:2.2;font-weight:700;">
     {_sum1}<br>{_sum2}<br>{_sum3}
   </div>
 </div>""")
@@ -2722,16 +2764,31 @@ if "sniper_code" in st.session_state:
                 st.caption("yfinance 펀더멘털 데이터 수집 중… 잠시 후 다시 시도해 주세요.")
 
             _moat_lines = _get_moat_analysis(_ss)
+            # ── 한화오션 전문 분석 오버라이드 ───────────────────────────────
+            if _sn == "한화오션":
+                _roe_str = f"{_fund.get('ROE', 0):.1f}%" if _fund.get("ROE") else "회복 진행 중"
+                _pbr_str = f"{_fund.get('PBR', 0):.2f}배" if _fund.get("PBR") else "집계 중"
+                _moat_lines = [
+                    (f"① LNG·암모니아 추진 친환경 선박 독점 기술: 2030년 IMO 탄소중립 규제 직접 수혜 — "
+                     f"글로벌 발주량 약 30% 점유, 설계·건조 내재화로 진입장벽 형성. "
+                     f"고부가 LNG선 단가 상승 사이클 → 매출 구조 고도화."),
+                    (f"② 2~3년 실적 가시성 최고 수준: 수주잔고 대규모 확보(2026~2028 인도분 확정) — "
+                     f"ROE {_roe_str} · PBR {_pbr_str}. 수익성 개선 사이클 진입 확인, "
+                     f"선가 상승 + 환율 우호 환경에서 영업이익 레버리지 극대화."),
+                    (f"③ 42대 관점: 블록딜 오버행 해소 신호 포착 시 — 외국인·기관 쌍끌이 재유입 패턴. "
+                     f"LNG선 수주 발표(미반영 호재) + 기관 연속 순매수 동반 시 즉시 진입 공식 적용. "
+                     f"현 횡보 = 저가 분할 매수 적기(RSI 과매도권 진입 시 1차 타점)."),
+                ]
             st.html(f"""
 <div style="background:#ffffff;border-radius:10px;padding:14px 18px;border:1px solid #c7d2fe;">
   <div style="font-size:12px;font-weight:900;color:#1e1b4b;margin-bottom:10px;">
-    🏰 경제적 해자 분석 (42대 필살기 관점 · {_ss} 섹터)
+    🏰 {"한화오션 전문 분석" if _sn == "한화오션" else f"경제적 해자 분석 · {_ss} 섹터"} (42대 필살기 관점)
   </div>
-  <div style="font-size:13px;color:#000000;line-height:2.1;font-weight:600;">
+  <div style="font-size:12px;color:#000000;line-height:2.0;font-weight:600;">
     {"<br>".join(_moat_lines)}
   </div>
   <div style="font-size:10px;color:#6b7280;margin-top:10px;">
-    ※ 섹터 기반 정성 분석 · 투자 판단은 개인 책임
+    {"※ 블록딜·오버행 이슈 반영 전문 분석 · 투자 판단은 개인 책임" if _sn == "한화오션" else "※ 섹터 기반 정성 분석 · 투자 판단은 개인 책임"}
   </div>
 </div>""")
 
