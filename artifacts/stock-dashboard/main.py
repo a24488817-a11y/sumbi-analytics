@@ -1963,19 +1963,21 @@ def sniper_price(ticker: str, suffix: str, date_str: str) -> dict:
     ② Naver 모바일 API   → 현재가·등락률·거래대금·시가총액 실시간 덮어쓰기
     period='60d' 사용 → 주말·공휴일 직후에도 최근 실제 거래일 자동 선택
     ttl=60 → 1분 캐시 (장중 실시간성 확보)"""
-    raw = yf.download(
-        ticker + suffix,
-        period="60d",
-        auto_adjust=True, progress=False,
-    )
-    if raw.empty:
-        return {}
-    if isinstance(raw.columns, pd.MultiIndex):
-        raw.columns = raw.columns.get_level_values(0)
-    if "Close" not in raw.columns:
+    # ── FinanceDataReader로 60거래일 OHLCV 수집 (yfinance 완전 대체) ─────────
+    _end_dt   = datetime.now()
+    _start_dt = _end_dt - timedelta(days=90)
+    try:
+        raw = fdr.DataReader(
+            ticker,  # FDR은 한국 종목 6자리 코드 직접 인식 (suffix 불필요)
+            start=_start_dt.strftime("%Y-%m-%d"),
+            end=_end_dt.strftime("%Y-%m-%d"),
+        )
+    except Exception:
+        raw = pd.DataFrame()
+    if raw.empty or "Close" not in raw.columns:
         return {}
     close  = raw["Close"].dropna()
-    volume = raw["Volume"].dropna()
+    volume = raw["Volume"].dropna() if "Volume" in raw.columns else pd.Series(dtype=float)
     if len(close) < 11:
         return {}
     cur_yf = float(close.iloc[-1])
@@ -2089,33 +2091,50 @@ def get_price_data(date_str: str, market: str) -> tuple:
         ].nlargest(100, "거래대금(억)")                                # 소형·저가 추가 100
         dl_tickers = list(pd.concat([top_val, top_small]).drop_duplicates().index)
 
-    # ── ② yfinance 60d OHLCV 일괄 다운로드 ───────────────────────────────────
-    raw = yf.download(
-        [t + suffix for t in dl_tickers],
-        period="60d",
-        auto_adjust=True, progress=False,
-    )
-    if raw.empty or "Close" not in raw:
+    # ── ② FinanceDataReader 병렬 60d OHLCV (yfinance 완전 대체) ──────────────
+    _end_dt   = datetime.now()
+    _start_dt = _end_dt - timedelta(days=90)
+    _s_str    = _start_dt.strftime("%Y-%m-%d")
+    _e_str    = _end_dt.strftime("%Y-%m-%d")
+
+    def _fdr_one(t):
+        try:
+            _df = fdr.DataReader(t, start=_s_str, end=_e_str)
+            if _df.empty or "Close" not in _df.columns or len(_df) < 11:
+                return t, None, None
+            return t, _df["Close"], (_df["Volume"] if "Volume" in _df.columns else pd.Series(dtype=float))
+        except Exception:
+            return t, None, None
+
+    with ThreadPoolExecutor(max_workers=20) as _ex:
+        _fdr_res = list(_ex.map(_fdr_one, dl_tickers))
+
+    close_dict  = {t: c for t, c, v in _fdr_res if c is not None}
+    volume_dict = {t: v for t, c, v in _fdr_res if v is not None}
+
+    if not close_dict:
         return pd.DataFrame(), None
-    close  = raw["Close"].dropna(how="all")
-    volume = raw["Volume"].dropna(how="all")
+
+    close  = pd.DataFrame(close_dict).dropna(how="all")
+    volume = pd.DataFrame(volume_dict).dropna(how="all")
     if len(close) < 11:
         return pd.DataFrame(), None
 
     actual_date  = close.index[-1].strftime("%Y-%m-%d")
-    latest_close = close.iloc[-1]
-    prev_close   = close.iloc[-2]
-    latest_vol   = volume.iloc[-1]
-    avg_vol_20   = volume.tail(20).mean()
+    latest_close = close.iloc[-1].dropna()
+    prev_close   = close.iloc[-2].reindex(latest_close.index)
+    latest_vol   = volume.reindex(columns=latest_close.index).iloc[-1]
+    avg_vol_20   = volume.reindex(columns=latest_close.index).tail(20).mean()
 
-    change_pct    = ((latest_close - prev_close) / prev_close * 100).round(2)
+    change_pct    = ((latest_close - prev_close) / prev_close.replace(0, np.nan) * 100).round(2)
     trading_value = (latest_close * latest_vol / 1e8).round(1)
-    vol_ratio     = (latest_vol / avg_vol_20 * 100).round(1)
+    vol_ratio     = (latest_vol / avg_vol_20.replace(0, np.nan) * 100).round(1)
 
     pb_scores, pb_signals, rsi_vals = [], [], []
-    for col in close.columns:
+    for col in latest_close.index:
         try:
-            pb = calc_pullback_score(close[col].dropna(), volume[col].dropna())
+            _vc = volume[col].dropna() if col in volume.columns else pd.Series(dtype=float)
+            pb  = calc_pullback_score(close[col].dropna(), _vc)
             pb_scores.append(pb["score"]); pb_signals.append(pb["signal"]); rsi_vals.append(pb["rsi"])
         except Exception:
             pb_scores.append(0); pb_signals.append("N/A"); rsi_vals.append(50)
@@ -2126,6 +2145,7 @@ def get_price_data(date_str: str, market: str) -> tuple:
         "거래대금(억)":  trading_value,
         "거래량비율(%)": vol_ratio,
     })
+    # FDR 인덱스는 이미 6자리 코드 — suffix 제거 불필요 (하위 호환 유지)
     df.index = [c.replace(suffix, "") for c in df.index]
 
     # ── ③ 종목명·섹터·시가총액 병합 (Naver 스냅샷 우선, 정적 DB fallback) ──────
@@ -2277,13 +2297,21 @@ def score_ticker(ticker: str, row: pd.Series, investor_map: dict, news_map: dict
 
 @st.cache_data(ttl=60)
 def get_macro_indices() -> dict:
-    syms = {"KOSPI":"^KS11","KOSDAQ":"^KQ11","나스닥":"^IXIC","나스닥선물":"NQ=F"}
+    """KOSPI·KOSDAQ·나스닥 지수 — FinanceDataReader (yfinance 대체)."""
+    fdr_map = {"KOSPI": "KS11", "KOSDAQ": "KQ11", "나스닥": "IXIC", "나스닥선물": "NQ=F"}
     out = {}
-    for name, sym in syms.items():
+    _end = datetime.now()
+    _start = _end - timedelta(days=7)
+    for name, sym in fdr_map.items():
         try:
-            h = yf.Ticker(sym).history(period="2d", interval="1d")
+            h = fdr.DataReader(sym,
+                               start=_start.strftime("%Y-%m-%d"),
+                               end=_end.strftime("%Y-%m-%d"))
+            if h.empty or "Close" not in h.columns:
+                out[name] = None
+                continue
             if len(h) >= 2:
-                p, c = float(h["Close"].iloc[-2]), float(h["Close"].iloc[-1])
+                p = float(h["Close"].iloc[-2]); c = float(h["Close"].iloc[-1])
                 out[name] = {"현재": c, "변동": c - p, "변동률": (c - p) / p * 100}
             elif len(h) == 1:
                 out[name] = {"현재": float(h["Close"].iloc[-1]), "변동": 0, "변동률": 0}
