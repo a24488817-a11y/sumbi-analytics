@@ -25,10 +25,6 @@ st.set_page_config(
     layout="wide",
 )
 
-# ── 세션 최초 진입 시 캐시 강제 초기화 (항상 최신 데이터 보장) ─────────────
-if "_session_cache_cleared" not in st.session_state:
-    st.cache_data.clear()
-    st.session_state["_session_cache_cleared"] = True
 
 # ───────────────────────────────────────────────────────────────────────────────
 # CSS — 토스증권 스타일 + 체급 뱃지
@@ -284,6 +280,18 @@ KOSDAQ_STOCKS = {
 # KRX 시장 상태 — 한국 표준시(KST = UTC+9) 기반
 # ───────────────────────────────────────────────────────────────────────────────
 KST = timezone(timedelta(hours=9))
+
+# ── 스마트 캐시 자동 초기화 — 에포크 기반 (18:00 KST 확정치 반영 시점) ──────
+# 에포크: "YYYYMMDD_am" (09:00~17:59) / "YYYYMMDD_pm" (18:00~다음날 08:59)
+# 에포크가 바뀌면 자동으로 전체 캐시를 지우고 최신 확정치로 갱신
+_now_kst_init = datetime.now(KST)
+_cache_epoch  = (
+    _now_kst_init.strftime("%Y%m%d") +
+    ("_pm" if _now_kst_init.hour >= 18 else "_am")
+)
+if st.session_state.get("_cache_epoch") != _cache_epoch:
+    st.cache_data.clear()
+    st.session_state["_cache_epoch"] = _cache_epoch
 
 from datetime import date as _date
 
@@ -950,13 +958,32 @@ def _analyze_investor_flow(inv_data: list) -> dict:
     """5거래일 기관·외국인·개인·기타법인 누적 수급 분석 → 42대 관점 직관적 결론 도출 (표시 전용, 점수 무영향)."""
     if not inv_data:
         return {"verdict": "수급 데이터 없음", "color": "#94a3b8",
-                "inst": 0, "frgn": 0, "indiv": 0, "other": 0, "days": 0}
+                "inst": 0, "frgn": 0, "indiv": 0, "other": 0, "days": 0,
+                "d1_inst": 0, "d1_frgn": 0, "d1_indiv": 0, "d1_other": 0,
+                "d1_date": "", "d1_block_level": None}
     inst  = sum(d.get("기관",    0) for d in inv_data)
     frgn  = sum(d.get("외국인",  0) for d in inv_data)
     indiv = sum(d.get("개인",    0) for d in inv_data)
     other = sum(d.get("기타법인", 0) for d in inv_data)
     days  = len(inv_data)
 
+    # ── 당일(d1) 단일 거래일 수급 — 블록딜 자동 감지용 ─────────────────────
+    d1        = inv_data[0]
+    d1_inst   = d1.get("기관",    0)
+    d1_frgn   = d1.get("외국인",  0)
+    d1_indiv  = d1.get("개인",    0)
+    d1_other  = d1.get("기타법인",0)
+    d1_date   = d1.get("날짜",   "")
+    if d1_other < -200_000 and d1_indiv > 100_000 and d1_inst < 0 and d1_frgn < 0:
+        d1_block_level = "최악"   # 4주체 블록딜 최악 패턴
+    elif d1_other < -100_000 and d1_indiv > 0:
+        d1_block_level = "주의"   # 기타법인 대량 매도 + 개인 수취
+    elif d1_other < -50_000 and d1_indiv > 0:
+        d1_block_level = "관찰"   # 기타법인 중간 매도 + 개인 수취
+    else:
+        d1_block_level = None
+
+    # ── 5거래일 누적 기반 verdict ────────────────────────────────────────────
     # ── 기타법인 대량 매도 + 개인 전량 수취 → 최악의 블록딜 오버행 패턴 ──────
     if other < -200_000 and indiv > 200_000 and inst < 0 and frgn < 0:
         verdict = "🚨 최악 수급 구조 — 기타법인(블록딜) 대량 매도 물량을 개인이 전량 수취. 스마트머니 전원 이탈."
@@ -996,7 +1023,9 @@ def _analyze_investor_flow(inv_data: list) -> dict:
         color   = "#94a3b8"
 
     return {"verdict": verdict, "color": color,
-            "inst": inst, "frgn": frgn, "indiv": indiv, "other": other, "days": days}
+            "inst": inst, "frgn": frgn, "indiv": indiv, "other": other, "days": days,
+            "d1_inst": d1_inst, "d1_frgn": d1_frgn, "d1_indiv": d1_indiv,
+            "d1_other": d1_other, "d1_date": d1_date, "d1_block_level": d1_block_level}
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -1524,6 +1553,17 @@ def _investor_html_table(inv_data: list, ticker: str) -> str:
             f'</tr>'
         )
 
+    # ── 확정 행 T-offset 계산 (T-1/T-2 자동 라벨용) ─────────────────────────
+    def _t_label(date_str: str) -> str:
+        """날짜 문자열 → "T-1" / "T-2" / "T-3" 등 자동 계산."""
+        try:
+            from datetime import datetime as _dt
+            d_obj = _dt.strptime(date_str, "%Y.%m.%d").date()
+            delta = (today_d - d_obj).days
+            return f"T-{delta}" if delta > 0 else "T(당일)"
+        except Exception:
+            return ""
+
     # 기타법인 열 존재 여부 확인 (데이터에 기타법인 키가 있고 0이 아닌 경우)
     has_other = any(d.get("기타법인", 0) != 0 for d in inv_data)
 
@@ -1538,7 +1578,8 @@ def _investor_html_table(inv_data: list, ticker: str) -> str:
         indiv_html = _sign_html(indiv_v)
         other_v   = d.get("기타법인", 0)
         hold_str  = f'{d["보유율"]:.2f}%'
-        status    = "✅ KRX확정 (최신)" if is_latest else "✅ KRX확정"
+        _tl = _t_label(date_val)
+        status    = f"✅ KRX확정 ({_tl}·최신)" if is_latest else f"✅ KRX확정 ({_tl})"
         other_cell = (
             f'<td style="padding:7px 10px;text-align:right;">{_sign_html(other_v)}</td>'
             if has_other else ""
@@ -1559,19 +1600,34 @@ def _investor_html_table(inv_data: list, ticker: str) -> str:
     # note_other 반드시 note 문자열 이전에 정의 (UnboundLocalError 방지)
     note_other = " | 기타법인=블록딜 추적용 역산값 (개인+기관+외국인+기타법인≈0)" if has_other else ""
     krx_ref_display = f"KRX 기준: <strong>{krx_ref_date}</strong>" if krx_ref_date else ""
+    _t_conf = _t_label(confirmed_date) if confirmed_date != "—" else ""
     note_suffix = (
         (f" | {krx_ref_display}" if krx_ref_display else "") +
-        (" | 기관·외국인 가집계는 KRX 공식 포털(data.krx.co.kr) 로그인 후 조회 가능 — "
-         "네이버금융 확정치는 당일 ~18:00 KST 자동 반영" if need_provisional else "")
+        (" | ⏱ 네이버금융 확정치 ~18:00 KST 반영 — 현재 표시는 가장 최근 KRX 확정 데이터 기준"
+         if need_provisional else "")
     )
     note = (
         f'<div style="font-size:11px;color:#9ca3af;margin-top:4px;padding:0 4px;line-height:1.6;">'
         f'※ 소스: 네이버금융 frgn.naver | 기관합계=연기금 포함'
         f'{note_other}'
-        f' | KRX 확정 최신일: <strong>{confirmed_date}</strong>'
-        f'{note_suffix}'
+        f' | 최근 확정 기준일: <strong>{confirmed_date}</strong>'
+        + (f' <span style="color:#f97316;font-weight:700;">({_t_conf})</span>' if _t_conf else "")
+        + f'{note_suffix}'
         f'</div>'
     )
+
+    # ── 당일 확정 데이터 미발표 시 T-1 기준일 배너 ─────────────────────────────
+    t1_banner = ""
+    if need_provisional and confirmed_date != "—":
+        _t_str = _t_label(confirmed_date)
+        t1_banner = (
+            f'<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;'
+            f'padding:7px 12px;margin-bottom:8px;font-size:12px;font-weight:700;color:#1d4ed8;">'
+            f'📅 당일 확정 데이터 미발표 — 가장 최근 KRX 확정치 자동 표시: '
+            f'<strong>{confirmed_date} ({_t_str} 기준)</strong>'
+            f' | 네이버금융 확정치는 ~18:00 KST 반영됩니다.'
+            f'</div>'
+        )
 
     th = '<th style="padding:6px 10px;text-align:{a};background:#f8fafc;font-size:12px;color:#000000;font-weight:800;">{t}</th>'
     def _th(t, a="right"): return th.format(a=a, t=t)
@@ -1589,6 +1645,7 @@ def _investor_html_table(inv_data: list, ticker: str) -> str:
         )
 
     return (
+        t1_banner +
         f'<div style="overflow-x:auto;border-radius:8px;border:1px solid #e2e8f0;">'
         f'<table style="width:100%;border-collapse:collapse;font-size:13px;">'
         f'<thead><tr>{col_headers}</tr></thead>'
@@ -2844,21 +2901,23 @@ if "sniper_code" in st.session_state:
             _sum3 = (f"③ ⚠️ {_r['title']}: {_r['desc'][:60]}"
                      f" — 수급 개선 확인 전 보수적 접근 권고.")
 
-        # ── 종목 특수 오버라이드 (한화오션 블록딜/오버행) ──────────────────────
+        # ── 기타법인 블록딜/오버행 자동 감지 (모든 종목 범용) ─────────────────
+        # 우선순위: ① 한화오션 하드코드 확정치 ② 임의 종목 자동 패턴 감지
         _special_alert_html = ""
+        _blk_level = _flow.get("d1_block_level")  # "최악"/"주의"/"관찰"/None
+
         if _sn == "한화오션":
-            # 확정 수급: _INVESTOR_OVERRIDE 우선 → _sinv_detail 순서
-            _ov506 = _INVESTOR_OVERRIDE.get((_sc, "2026.05.06"), {})
-            _hw_inst  = _ov506.get("기관",    (_sinv_detail[0].get("기관",    0) if _sinv_detail else 0))
-            _hw_frgn  = _ov506.get("외국인",  (_sinv_detail[0].get("외국인",  0) if _sinv_detail else 0))
-            _hw_indiv = _ov506.get("개인",    (_sinv_detail[0].get("개인",    0) if _sinv_detail else 0))
-            _hw_other = _ov506.get("기타법인",(_sinv_detail[0].get("기타법인",0) if _sinv_detail else 0))
+            # ── ① 한화오션: HTS 확정치 고정 (GOLDEN RULE: override 직접 참조) ──
+            _ov_latest = _INVESTOR_OVERRIDE.get((_sc, "2026.05.06"), {})
+            _hw_inst  = _ov_latest.get("기관",    (_sinv_detail[0].get("기관",    0) if _sinv_detail else 0))
+            _hw_frgn  = _ov_latest.get("외국인",  (_sinv_detail[0].get("외국인",  0) if _sinv_detail else 0))
+            _hw_indiv = _ov_latest.get("개인",    (_sinv_detail[0].get("개인",    0) if _sinv_detail else 0))
+            _hw_other = _ov_latest.get("기타법인",(_sinv_detail[0].get("기타법인",0) if _sinv_detail else 0))
             _hw_date  = "2026.05.06 (HTS 최종 확정)"
-            _hw_other_str = f"{abs(_hw_other):,}주 순매도" if _hw_other < 0 else f"{_hw_other:,}주 순매수"
-            _hw_indiv_str = f"+{_hw_indiv:,}주" if _hw_indiv > 0 else f"{_hw_indiv:,}주"
-            _hw_inst_str  = f"+{_hw_inst:,}주"  if _hw_inst  > 0 else f"{_hw_inst:,}주"
-            _hw_frgn_str  = f"+{_hw_frgn:,}주"  if _hw_frgn  > 0 else f"{_hw_frgn:,}주"
-            # 42대 관점 핵심 팩트체크 문장 (대표 지시 원문 고정)
+            _oth_s = f"{abs(_hw_other):,}주 순매도" if _hw_other < 0 else f"{_hw_other:,}주 순매수"
+            _ind_s = f"+{_hw_indiv:,}주" if _hw_indiv > 0 else f"{_hw_indiv:,}주"
+            _ins_s = f"+{_hw_inst:,}주"  if _hw_inst  > 0 else f"{_hw_inst:,}주"
+            _frg_s = f"+{_hw_frgn:,}주"  if _hw_frgn  > 0 else f"{_hw_frgn:,}주"
             _hw_factcheck = (
                 "기타법인 -39만 주 매도는 블록딜 오버행 팩트이며, "
                 "개인이 78만 주를 고점에서 받아낸 최악의 수급 설거지 구간임. "
@@ -2870,9 +2929,9 @@ if "sniper_code" in st.session_state:
                 '<div style="font-size:13px;font-weight:900;color:#991b1b;margin-bottom:8px;">'
                 f'🚨 팩트체크 경보 · 한화오션 블록딜 오버행 수급 구조 ({_hw_date})</div>'
                 '<div style="font-size:12px;color:#000000;font-weight:800;line-height:2.2;">'
-                f'📊 <strong>기타법인(블록딜 주체)</strong> {_hw_other_str}'
-                f' / <strong>개인</strong> {_hw_indiv_str} 전량 수취<br>'
-                f'🏦 기관 {_hw_inst_str} &nbsp;·&nbsp; 🌍 외국인 {_hw_frgn_str}'
+                f'📊 <strong>기타법인(블록딜 주체)</strong> {_oth_s}'
+                f' / <strong>개인</strong> {_ind_s} 전량 수취<br>'
+                f'🏦 기관 {_ins_s} &nbsp;·&nbsp; 🌍 외국인 {_frg_s}'
                 f' &nbsp;·&nbsp; 💥 공매도 비중 6.4%<br><br>'
                 f'⛔ <strong style="font-size:13px;color:#000000;">{_hw_factcheck}</strong>'
                 '</div></div>'
@@ -2880,6 +2939,56 @@ if "sniper_code" in st.session_state:
             _sum1 = "① 🚨 기타법인 블록딜 오버행 미해소 — 잠재 매도 물량이 지속 출회, 상단 강력 압박."
             _sum2 = f"② 개인이 블록딜 물량 전량 수취 중(RSI {_rsi:.0f}) — 스마트머니 재진입 확인 전 추격매수 금지."
             _sum3 = "③ 기관 순매수 전환 + LNG선 수주 공시 + 오버행 해소 3가지 동시 충족 시 분할 진입 공식 적용."
+
+        elif _blk_level in ("최악", "주의", "관찰"):
+            # ── ② 임의 종목: 자동 패턴 감지 결과 경보 생성 ────────────────────
+            _d1_o = _flow["d1_other"]
+            _d1_i = _flow["d1_indiv"]
+            _d1_n = _flow["d1_inst"]
+            _d1_f = _flow["d1_frgn"]
+            _d1_dt = _flow["d1_date"]
+            _d1_oth_s = f"{abs(_d1_o):,}주 순매도" if _d1_o < 0 else f"{_d1_o:,}주 순매수"
+            _d1_ind_s = f"+{_d1_i:,}주" if _d1_i > 0 else f"{_d1_i:,}주"
+            _d1_ins_s = f"+{_d1_n:,}주" if _d1_n > 0 else f"{_d1_n:,}주"
+            _d1_frg_s = f"+{_d1_f:,}주" if _d1_f > 0 else f"{_d1_f:,}주"
+
+            if _blk_level == "최악":
+                _blk_bg    = "#fef2f2"
+                _blk_bdr   = "#dc2626"
+                _blk_icon  = "🚨"
+                _blk_title = f"팩트체크 경보 · {_sn} 블록딜 최악 수급 구조 자동 감지 ({_d1_dt})"
+                _blk_conc  = (f"기타법인 {_d1_oth_s} + 개인 {_d1_ind_s} 전량 수취 + 스마트머니 동반 이탈."
+                              " 블록딜 오버행 이슈 발생 가능성 매우 높음. 진입 절대 금지.")
+            elif _blk_level == "주의":
+                _blk_bg    = "#fff7f0"
+                _blk_bdr   = "#f97316"
+                _blk_icon  = "⚠️"
+                _blk_title = f"기타법인 블록딜 의심 자동 감지 · {_sn} ({_d1_dt})"
+                _blk_conc  = (f"기타법인 {_d1_oth_s} 대량 출회, 개인 {_d1_ind_s} 수취."
+                              " 블록딜/오버행 이슈 발생 가능성 높음. 기관 재진입 확인 전 관망.")
+            else:  # 관찰
+                _blk_bg    = "#fffbeb"
+                _blk_bdr   = "#b45309"
+                _blk_icon  = "👀"
+                _blk_title = f"기타법인 매도 패턴 관찰 · {_sn} ({_d1_dt})"
+                _blk_conc  = (f"기타법인 {_d1_oth_s} 소규모 출회, 개인 {_d1_ind_s} 수취."
+                              " 블록딜 여부 불확실. 5거래일 누적 추이 추가 확인 권고.")
+
+            _special_alert_html = (
+                f'<div style="background:{_blk_bg};border-radius:10px;padding:13px 17px;'
+                f'margin-bottom:14px;border-left:5px solid {_blk_bdr};">'
+                f'<div style="font-size:12px;font-weight:900;color:{_blk_bdr};margin-bottom:7px;">'
+                f'{_blk_icon} {_blk_title}</div>'
+                f'<div style="font-size:12px;color:#000000;font-weight:700;line-height:2.0;">'
+                f'📊 <strong>기타법인</strong> {_d1_oth_s} &nbsp;|&nbsp;'
+                f' <strong>개인</strong> {_d1_ind_s} 수취<br>'
+                f'🏦 기관 {_d1_ins_s} &nbsp;·&nbsp; 🌍 외국인 {_d1_frg_s}<br><br>'
+                f'⛔ <strong>{_blk_conc}</strong>'
+                f'</div></div>'
+            )
+            if _blk_level in ("최악", "주의"):
+                _sum1 = f"① {_blk_icon} 기타법인 블록딜 패턴 자동 감지 — 오버행 해소 전 강한 반등 구조적 차단."
+                _sum2 = f"② 개인이 기타법인 물량 수취 중(RSI {_rsi:.0f}) — 스마트머니 재진입 확인 전 추격매수 금지."
 
         # ── 미반영 호재 필터박스 HTML (클릭 불가 iframe → 안내 텍스트만) ──────
         _unref_box_html = f'<div class="filter-score" style="color:#2563eb;">{_sscore["뉴스호재"]:.0f}</div>'
