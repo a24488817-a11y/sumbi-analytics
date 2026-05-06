@@ -27,19 +27,9 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# 전체 텍스트 무조건 검정 고정
 st.markdown("""
 <style>
-*, *::before, *::after { color: #000000 !important; }
-[data-testid="stSidebar"] { background: #111827 !important; }
-[data-testid="stSidebar"] * { color: #f9fafb !important; }
-[data-testid="stSidebar"] .stButton button { color: #000 !important; }
-div[data-testid="metric-container"] { background: #fff; border-radius: 10px; padding: 12px; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
-div[data-testid="metric-container"] label { color: #555 !important; font-size: .85rem; }
-div[data-testid="metric-container"] [data-testid="stMetricValue"] { color: #000 !important; font-weight: 800; }
-.stAlert { color: #000 !important; }
-.stSpinner p { color: #000 !important; }
-[data-testid="stExpander"] summary { color: #000 !important; }
+div[data-testid="metric-container"] { border-radius: 10px; padding: 12px; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
 </style>
 """, unsafe_allow_html=True)
 
@@ -560,20 +550,20 @@ def ui_price_header(r: dict):
 
     _html_block(f"""
 <style>
-  .ph {{ background:#fff; border-radius:16px; padding:28px 32px;
-          box-shadow:0 2px 16px rgba(0,0,0,.1); margin-bottom:8px; }}
+  :root {{ color-scheme: light dark; }}
+  .ph {{ border-radius:16px; padding:28px 32px;
+          box-shadow:0 2px 16px rgba(0,0,0,.1); margin-bottom:8px;
+          background: light-dark(#ffffff, #1e293b); }}
   .ph-top {{ display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; }}
-  .ph-name {{ font-size:1.6rem; font-weight:900; color:#111 !important; }}
-  .ph-code {{ font-size:1rem; color:#555 !important; }}
-  .ph-mkt  {{ background:#e8f4fd; color:#1565c0 !important; border-radius:6px;
+  .ph-name {{ font-size:1.6rem; font-weight:900; }}
+  .ph-code {{ font-size:1rem; opacity:.65; }}
+  .ph-mkt  {{ background:#e8f4fd; color:#1565c0; border-radius:6px;
                padding:2px 10px; font-size:.85rem; font-weight:700; }}
-  .ph-price {{ font-size:3.5rem; font-weight:900; color:{c_price} !important;
+  .ph-price {{ font-size:3.5rem; font-weight:900; color:{c_price};
                 line-height:1.1; margin:8px 0 4px; }}
-  .ph-chg   {{ font-size:1.4rem; font-weight:700; color:{c_chg} !important; }}
+  .ph-chg   {{ font-size:1.4rem; font-weight:700; color:{c_chg}; }}
   .ph-meta  {{ display:flex; gap:20px; flex-wrap:wrap; margin-top:12px;
-                font-size:.9rem; color:#444 !important; }}
-  .ph-meta span {{ color:#000 !important; }}
-  .ph-meta b   {{ color:#000 !important; }}
+                font-size:.9rem; opacity:.8; }}
 </style>
 <div class="ph">
   <div class="ph-top">
@@ -589,7 +579,7 @@ def ui_price_header(r: dict):
     <span>PBR <b>{pbr_str}</b></span>
     <span>목표주가 <b>{tp_str}</b></span>
     <span>52주 <b>{hi_str} / {lo_str}</b></span>
-    <span style="color:#888 !important;">{r['collected_at']}</span>
+    <span style="opacity:.55">{r['collected_at']}</span>
   </div>
 </div>
 """)
@@ -599,10 +589,12 @@ def ui_block_alert(msg: str):
     """블록딜·오버행·설거지 경보 카드."""
     _html_block(f"""
 <style>
-  .ba {{ background:#fdf2f8; border:2.5px solid #c0392b; border-radius:12px;
+  :root {{ color-scheme: light dark; }}
+  .ba {{ background: light-dark(#fdf2f8, #2d1515);
+          border:2.5px solid #c0392b; border-radius:12px;
           padding:20px 24px; margin:8px 0; }}
-  .ba-title {{ font-size:1.1rem; font-weight:900; color:#000 !important; margin-bottom:8px; }}
-  .ba-body  {{ font-size:.97rem; color:#000 !important; line-height:1.7; }}
+  .ba-title {{ font-size:1.1rem; font-weight:900; margin-bottom:8px; }}
+  .ba-body  {{ font-size:.97rem; line-height:1.7; }}
 </style>
 <div class="ba">
   <div class="ba-title">⚠️ 블록딜 오버행 및 개인 설거지 주의</div>
@@ -643,22 +635,25 @@ def ui_score_card(r: dict):
 
     _html_block(f"""
 <style>
-  .sc {{ background:#fff; border-radius:16px; padding:28px 32px;
+  :root {{ color-scheme: light dark; }}
+  .sc {{ background: light-dark(#ffffff, #1e293b);
+          border-radius:16px; padding:28px 32px;
           box-shadow:0 2px 16px rgba(0,0,0,.1); margin:8px 0; }}
   .sc-head {{ display:flex; align-items:baseline; gap:16px; margin-bottom:20px; }}
-  .sc-big  {{ font-size:3rem; font-weight:900; color:#000 !important; }}
-  .sc-v    {{ font-size:1.2rem; font-weight:700; color:#000 !important; }}
+  .sc-big  {{ font-size:3rem; font-weight:900; }}
+  .sc-v    {{ font-size:1.2rem; font-weight:700; }}
   .sc-row  {{ margin:12px 0; }}
   .sc-rl   {{ display:flex; justify-content:space-between; margin-bottom:4px; }}
-  .sc-label  {{ font-weight:700; color:#000 !important; font-size:.97rem; }}
-  .sc-score  {{ font-weight:900; color:#000 !important; }}
-  .sc-bar-wrap {{ background:#f0f0f0; border-radius:8px; height:14px; overflow:hidden; }}
+  .sc-label  {{ font-weight:700; font-size:.97rem; }}
+  .sc-score  {{ font-weight:900; }}
+  .sc-bar-wrap {{ background: light-dark(#f0f0f0, #334155);
+                  border-radius:8px; height:14px; overflow:hidden; }}
   .sc-bar-fill {{ height:14px; border-radius:8px; transition:width .3s; }}
-  .sc-detail {{ font-size:.85rem; color:#555 !important; margin-top:3px; }}
+  .sc-detail {{ font-size:.85rem; opacity:.7; margin-top:3px; }}
 </style>
 <div class="sc">
   <div class="sc-head">
-    <div class="sc-big">{total}<span style="font-size:1.3rem;color:#888 !important;">/ 100</span></div>
+    <div class="sc-big">{total}<span style="font-size:1.3rem;opacity:.5"> / 100</span></div>
     <div class="sc-v">{r['verdict']}</div>
   </div>
   {rows_html}
@@ -690,23 +685,27 @@ def ui_investor_table(inv_data: list[dict]):
     header = "".join(f"<th>{c}</th>" for c in col_heads)
     body   = ""
     for r in inv_data:
-        cells = f"<td style='font-weight:600;color:#000'>{r['날짜']}</td>"
+        cells = f"<td style='font-weight:600'>{r['날짜']}</td>"
         for key in ["기관", "외국인", "개인"] + (["기타법인"] if has_other else []):
             v = int(r.get(key, 0))
             cells += f"<td style='{_color(v)};text-align:right'>{_fmt(v)}</td>"
         body += f"<tr>{cells}</tr>"
 
     note = "" if has_other else \
-        "<p style='color:#888 !important;font-size:.82rem;margin-top:6px'>※ 개인 = 역산(기관+외국인 零合). 기타법인 별도 집계 없음.</p>"
+        "<p style='font-size:.82rem;margin-top:6px;opacity:.6'>※ 개인 = 역산(기관+외국인 零合). 기타법인 별도 집계 없음.</p>"
 
     _html_block(f"""
 <style>
+  :root {{ color-scheme: light dark; }}
   .inv {{ overflow-x:auto; }}
-  .inv table {{ width:100%; border-collapse:collapse; background:#fff;
+  .inv table {{ width:100%; border-collapse:collapse;
+                background: light-dark(#ffffff, #1e293b);
                 border-radius:12px; overflow:hidden; font-size:.95rem; }}
-  .inv th {{ background:#1e293b; color:#f8fafc !important; padding:10px 16px; text-align:center; }}
-  .inv td {{ padding:9px 16px; border-bottom:1px solid #f1f5f9; text-align:center; color:#000 !important; }}
-  .inv tr:hover {{ background:#f8fafc; }}
+  .inv th {{ background:#1e293b; color:#f8fafc; padding:10px 16px; text-align:center; }}
+  .inv td {{ padding:9px 16px;
+              border-bottom: 1px solid light-dark(#f1f5f9, #334155);
+              text-align:center; }}
+  .inv tr:hover {{ background: light-dark(#f8fafc, #253347); }}
 </style>
 <div class="inv">
   <table>
