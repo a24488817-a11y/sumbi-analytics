@@ -13,7 +13,7 @@ import pandas as pd
 import numpy as np
 import requests
 from bs4 import BeautifulSoup
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from concurrent.futures import ThreadPoolExecutor
 from streamlit_autorefresh import st_autorefresh
 import warnings
@@ -106,6 +106,18 @@ html, body, [class*="css"] { font-family: 'Pretendard','Noto Sans KR',sans-serif
 
 /* 사이드바 */
 section[data-testid="stSidebar"] { background:#fff; border-right:1px solid #f0f0f5; }
+
+/* 시장 상태 뱃지 */
+.market-status-badge {
+    display:flex; align-items:center; gap:8px;
+    border-radius:12px; padding:10px 14px;
+    border:1px solid; margin:4px 0 8px;
+    font-family:'Pretendard','Noto Sans KR',sans-serif;
+}
+.market-status-dot { font-size:16px; line-height:1; }
+.market-status-text { flex:1; }
+.market-status-label { font-size:13px; font-weight:800; line-height:1.3; }
+.market-status-time  { font-size:11px; color:#9ca3af; margin-top:1px; }
 
 /* 버튼 */
 .stButton > button {
@@ -254,6 +266,51 @@ KOSDAQ_STOCKS = {
     "067160": ("아프리카TV",         "인터넷/플랫폼"),
     "108490": ("로보티즈",           "로봇/AI"),
 }
+
+# ───────────────────────────────────────────────────────────────────────────────
+# KRX 시장 상태 — 한국 표준시(KST = UTC+9) 기반
+# ───────────────────────────────────────────────────────────────────────────────
+KST = timezone(timedelta(hours=9))
+
+def get_krx_market_status() -> dict:
+    """
+    Returns a dict with:
+      status : "open" | "pre" | "after" | "closed"
+      label  : Korean display text
+      emoji  : status emoji
+      color  : hex color for badge
+      time_kst: current KST time string (HH:MM)
+    """
+    now_kst = datetime.now(KST)
+    weekday = now_kst.weekday()   # 0=Mon … 4=Fri, 5=Sat, 6=Sun
+    t = now_kst.hour * 60 + now_kst.minute   # minutes since midnight KST
+
+    if weekday >= 5:
+        return {"status": "closed", "label": "휴장 (주말)",
+                "emoji": "⚫", "color": "#6b7280",
+                "time_kst": now_kst.strftime("%H:%M")}
+
+    # Pre-market:   08:00 – 09:00
+    # Regular:      09:00 – 15:30
+    # After-hours:  15:30 – 18:00
+    # Closed:       otherwise
+    if 8 * 60 <= t < 9 * 60:
+        return {"status": "pre", "label": "장 시작 전 (Pre-market)",
+                "emoji": "🟡", "color": "#f59e0b",
+                "time_kst": now_kst.strftime("%H:%M")}
+    elif 9 * 60 <= t < 15 * 60 + 30:
+        return {"status": "open", "label": "정규장 운영 중 (Open)",
+                "emoji": "🟢", "color": "#16a34a",
+                "time_kst": now_kst.strftime("%H:%M")}
+    elif 15 * 60 + 30 <= t < 18 * 60:
+        return {"status": "after", "label": "장 마감 후 (After-hours)",
+                "emoji": "🟠", "color": "#ea580c",
+                "time_kst": now_kst.strftime("%H:%M")}
+    else:
+        return {"status": "closed", "label": "장 마감 (Closed)",
+                "emoji": "⚫", "color": "#6b7280",
+                "time_kst": now_kst.strftime("%H:%M")}
+
 
 OVERHANG_DB = {
     "042660": {"type": "블록딜(PRS)", "safe": True,
@@ -1239,6 +1296,32 @@ if auto_refresh:
 if auto_refresh and st.session_state.get("analysis_run"):
     cnt = st_autorefresh(interval=refresh_interval * 1000, key="autorefresh")
     if cnt > 0: st.cache_data.clear()
+
+st.sidebar.markdown("---")
+
+# ── KRX 시장 상태 뱃지 ──────────────────────────────────────────────────────
+_ms = get_krx_market_status()
+_bg_map = {
+    "open":   ("#f0fdf4", "#16a34a", "#16a34a"),
+    "pre":    ("#fffbeb", "#f59e0b", "#d97706"),
+    "after":  ("#fff7ed", "#fdba74", "#ea580c"),
+    "closed": ("#f8f9fc", "#e5e7eb", "#6b7280"),
+}
+_bg, _border, _label_color = _bg_map[_ms["status"]]
+with st.sidebar:
+    st.html(f"""
+<div style="font-size:11px;font-weight:700;color:#8c8c9e;margin-bottom:4px;letter-spacing:.4px;">
+  KRX 시장 상태
+</div>
+<div class="market-status-badge"
+     style="background:{_bg};border-color:{_border};">
+  <div class="market-status-dot">{_ms["emoji"]}</div>
+  <div class="market-status-text">
+    <div class="market-status-label" style="color:{_label_color};">{_ms["label"]}</div>
+    <div class="market-status-time">현재 KST {_ms["time_kst"]}</div>
+  </div>
+</div>
+""")
 
 st.sidebar.markdown("---")
 with st.sidebar:
