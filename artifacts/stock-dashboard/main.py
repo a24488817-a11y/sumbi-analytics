@@ -1009,25 +1009,83 @@ def get_short_balance_naver(ticker: str) -> dict:
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_fundamentals(ticker: str, market: str = "KOSPI") -> dict:
-    """yfinance로 PER·PBR·ROE 등 펀더멘털 수집 (표시 전용, 42대 점수 무영향)."""
-    suffix = ".KS" if market == "KOSPI" else ".KQ"
-    for sym in [ticker + suffix, ticker + (".KQ" if suffix == ".KS" else ".KS")]:
+    """네이버금융 기업분석에서 PER·PBR·ROE·배당수익률 실시간 크롤링 (표시 전용, 42대 점수 무영향).
+
+    소스 우선순위:
+    1차 — 네이버 모바일 JSON API: PER, PBR (가장 정확한 실시간치)
+    2차 — 네이버 기업분석 HTML (coinfo.naver): ROE, 배당수익률 직접 파싱
+    3차 — yfinance fallback: 누락 지표 보완
+    """
+    def _sf(s) -> float | None:
         try:
-            info = yf.Ticker(sym).info
-            per = info.get("trailingPE") or info.get("forwardPE")
-            pbr = info.get("priceToBook")
-            roe = info.get("returnOnEquity")
-            div = info.get("dividendYield")
-            if any([per, pbr, roe]):
-                return {
-                    "PER": round(float(per), 1) if per else None,
-                    "PBR": round(float(pbr), 2) if pbr else None,
-                    "ROE": round(float(roe) * 100, 1) if roe else None,
-                    "배당수익률": round(float(div) * 100, 2) if div else None,
-                }
+            v = float(str(s).replace(",", "").replace("%", "").strip())
+            return v if v != 0 else None
         except Exception:
-            pass
-    return {}
+            return None
+
+    result: dict = {}
+
+    # ── 1차: 네이버 모바일 JSON API (PER·PBR) ─────────────────────────────
+    try:
+        r1 = requests.get(
+            f"https://m.stock.naver.com/api/stock/{ticker}/basic",
+            headers={"User-Agent": NAVER_HDR["User-Agent"],
+                     "Referer": "https://m.stock.naver.com/"},
+            timeout=6)
+        if r1.status_code == 200:
+            d = r1.json()
+            per_v = _sf(d.get("per"))
+            pbr_v = _sf(d.get("pbr"))
+            if per_v and per_v > 0: result["PER"] = round(per_v, 1)
+            if pbr_v and pbr_v > 0: result["PBR"] = round(pbr_v, 2)
+    except Exception:
+        pass
+
+    # ── 2차: 네이버 기업분석 HTML (ROE·배당수익률) ─────────────────────────
+    try:
+        r2 = requests.get(
+            "https://finance.naver.com/item/coinfo.naver",
+            params={"code": ticker, "target": "finsum_more"},
+            headers=NAVER_HDR, timeout=8)
+        r2.encoding = "euc-kr"
+        soup2 = BeautifulSoup(r2.text, "html.parser")
+        for tbl in soup2.find_all("table"):
+            for row in tbl.find_all("tr"):
+                cells = [td.get_text(strip=True) for td in row.find_all("td")]
+                if len(cells) >= 2:
+                    lbl = cells[0]
+                    val = _sf(cells[-1])
+                    if val and "ROE" in lbl and "ROE" not in result:
+                        result["ROE"] = round(val, 1)
+                    if val and "배당" in lbl and "배당수익률" not in result:
+                        result["배당수익률"] = round(val, 2)
+    except Exception:
+        pass
+
+    # ── 3차: yfinance fallback (누락 지표 보완) ────────────────────────────
+    if len(result) < 4:
+        suffix = ".KS" if market == "KOSPI" else ".KQ"
+        for sym in [ticker + suffix, ticker + (".KQ" if suffix == ".KS" else ".KS")]:
+            try:
+                info = yf.Ticker(sym).info
+                if "PER" not in result:
+                    per = info.get("trailingPE") or info.get("forwardPE")
+                    if per: result["PER"] = round(float(per), 1)
+                if "PBR" not in result:
+                    pbr = info.get("priceToBook")
+                    if pbr and pbr > 0: result["PBR"] = round(float(pbr), 2)
+                if "ROE" not in result:
+                    roe = info.get("returnOnEquity")
+                    if roe: result["ROE"] = round(float(roe) * 100, 1)
+                if "배당수익률" not in result:
+                    div = info.get("dividendYield")
+                    if div: result["배당수익률"] = round(float(div) * 100, 2)
+                if result:
+                    break
+            except Exception:
+                pass
+
+    return result
 
 
 def _get_moat_analysis(sector: str) -> list:
@@ -2791,13 +2849,16 @@ if "sniper_code" in st.session_state:
             _sum2 = f"② 개인이 블록딜 물량 전량 수취 중(RSI {_rsi:.0f}) — 스마트머니 재진입 확인 전 추격매수 금지."
             _sum3 = "③ 기관 순매수 전환 + LNG선 수주 공시 + 오버행 해소 3가지 동시 충족 시 분할 진입 공식 적용."
 
-        # ── 미반영 호재 필터박스 HTML (숫자만 — 상세는 아래 expander로) ────────
+        # ── 미반영 호재 필터박스 HTML (클릭 불가 iframe → 안내 텍스트만) ──────
         _unref_box_html = f'<div class="filter-score" style="color:#2563eb;">{_sscore["뉴스호재"]:.0f}</div>'
-        if _all_pos_items:
-            _unref_box_html += (f'<div style="font-size:9px;color:#2563eb;font-weight:800;margin-top:3px;">'
-                                f'▾ {len(_all_pos_items)}건 클릭 확인</div>')
+        if _unref_items:
+            _unref_box_html += (f'<div style="font-size:9px;color:#dc2626;font-weight:900;margin-top:3px;">'
+                                f'🔥 미반영호재 {len(_unref_items)}건</div>')
+        elif _all_pos_items:
+            _unref_box_html += (f'<div style="font-size:9px;color:#059669;font-weight:800;margin-top:3px;">'
+                                f'✅ 호재 {len(_good_items)}건</div>')
         elif _news_s > 0:
-            _unref_box_html += '<div style="font-size:9px;color:#374151;font-weight:600;margin-top:3px;">(아래 뉴스탭 확인)</div>'
+            _unref_box_html += '<div style="font-size:9px;color:#374151;font-weight:600;margin-top:3px;">뉴스 감지됨</div>'
 
         # ── 공매도상환 박스 서브 노트 (비중/평균가 오버라이드 포함) ───────────
         # _SHORT_OVERRIDE: HTS 확정 공매도 비중·평균가 (파싱 불가 시 fallback)
@@ -2946,18 +3007,28 @@ if "sniper_code" in st.session_state:
   {_time_span}
 </div>""")
 
-        _hint_bar = (
-            f'<div style="font-size:11px;font-weight:800;color:#1d4ed8;text-align:center;'
-            f'padding:7px 12px;background:#eff6ff;border-radius:8px;margin-top:8px;'
-            f'border:1px dashed #93c5fd;">'
-            f'👇 뉴스 호재 {len(_all_pos_items)}건 감지 — 바로 아래 펼치기 버튼을 클릭하세요</div>'
-            if _all_pos_items else (
-                f'<div style="font-size:11px;font-weight:700;color:#1d4ed8;text-align:center;'
-                f'padding:7px 12px;background:#eff6ff;border-radius:8px;margin-top:8px;">'
-                f'📰 뉴스 점수 {_news_s:.0f}점 — 아래에서 수집된 뉴스를 확인하세요</div>'
-                if _news_s > 0 else ''
+        if _unref_items:
+            _hint_bar = (
+                f'<div style="font-size:11px;font-weight:900;color:#991b1b;text-align:center;'
+                f'padding:8px 14px;background:#fef2f2;border-radius:8px;margin-top:8px;'
+                f'border:1px solid #fca5a5;">'
+                f'🔥 미반영 호재 {len(_unref_items)}건 — 아래에서 자동 펼침됩니다</div>'
             )
-        )
+        elif _all_pos_items:
+            _hint_bar = (
+                f'<div style="font-size:11px;font-weight:800;color:#065f46;text-align:center;'
+                f'padding:7px 12px;background:#f0fdf4;border-radius:8px;margin-top:8px;'
+                f'border:1px solid #6ee7b7;">'
+                f'✅ 뉴스 호재 {len(_all_pos_items)}건 — 아래에서 자동 펼침됩니다</div>'
+            )
+        elif _news_s > 0:
+            _hint_bar = (
+                f'<div style="font-size:11px;font-weight:700;color:#374151;text-align:center;'
+                f'padding:7px 12px;background:#f8fafc;border-radius:8px;margin-top:8px;">'
+                f'📰 뉴스 점수 {_news_s:.0f}점 — 아래 뉴스탭에서 확인하세요</div>'
+            )
+        else:
+            _hint_bar = ''
         st.html(f"""
 <style>
 .filter-box{{background:#f8fafc;border-radius:12px;padding:12px 14px;text-align:center;border:1px solid #e2e8f0;}}
@@ -3031,14 +3102,16 @@ if "sniper_code" in st.session_state:
   {_hint_bar}
 </div>""")
 
-        # ── 뉴스 호재 expander (4대 필살기 박스 바로 아래 — 즉시 클릭 가능) ──
+        # ── 뉴스 호재 expander (미반영 호재 존재 시 자동 펼침) ───────────────
         if _all_pos_items or _news_s > 0:
-            _exp_label = (
-                f"📰 뉴스 호재 {len(_all_pos_items)}건 상세 보기 — 클릭하면 바로 펼쳐집니다"
-                if _all_pos_items
-                else f"📰 뉴스 점수 {_news_s:.0f}점 — 수집된 뉴스 전체 보기"
-            )
-            with st.expander(_exp_label, expanded=False):
+            _has_unref_flag = len(_unref_items) > 0
+            if _unref_items:
+                _exp_label = f"🔥 미반영 호재 {len(_unref_items)}건 + 호재 {len(_good_items)}건 — 원문 링크 포함"
+            elif _all_pos_items:
+                _exp_label = f"✅ 뉴스 호재 {len(_all_pos_items)}건 — 원문 링크 포함"
+            else:
+                _exp_label = f"📰 뉴스 점수 {_news_s:.0f}점 — 수집된 뉴스 전체 보기"
+            with st.expander(_exp_label, expanded=_has_unref_flag):
                 if _all_pos_items:
                     st.markdown(
                         f"**{_sn}** 긍정 뉴스 **{len(_all_pos_items)}건** "

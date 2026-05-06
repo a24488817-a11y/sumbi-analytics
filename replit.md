@@ -62,7 +62,7 @@ Primary product: **숨비 애널리틱스 (SOOMBI Analytics)** — Korean KRX st
 - **5거래일 수급 결론 카드**: 4주체 누적 → "세력 쌍끌이 매집" / "기타법인 블록딜 최악 수급" 등 직관적 판정
 - KRX 시장 상태 실시간 표시 (장 중 / 장 마감 / 공휴일)
 - **심층 팩트체크**: 블록딜·오버행·수주·유상증자 등 10+7종 키워드 자동 감지 → 핵심 분석 카드
-- **기업 펀더멘털**: yfinance PER/PBR/ROE + 12개 섹터 해자 분석 3줄 (expander)
+- **기업 펀더멘털**: 네이버 모바일 API(PER/PBR) + 네이버 기업분석 HTML(ROE/배당수익률) + yfinance fallback, 12개 섹터 해자 분석 3줄 (expander)
 - **공매도 T+2 보정**: 점수 0 → `T+2 집계 대기 중 (확정 데이터 미반영)` 명시
 - **한화오션 특수 경보**: 기타법인 블록딜 + 개인 전량 수취 구조 자동 감지 → 최악 수급 서사 출력
 
@@ -70,7 +70,7 @@ Primary product: **숨비 애널리틱스 (SOOMBI Analytics)** — Korean KRX st
 
 - `_get_investor_detail_naver(ticker, ttl=60s)` — 4주체 수급 상세 (기타법인 역산 포함)
 - `get_short_balance_naver(ticker, ttl=300s)` — 네이버 공매도 잔고 현황
-- `get_fundamentals(ticker, market, ttl=3600s)` — yfinance PER/PBR/ROE
+- `get_fundamentals(ticker, market, ttl=3600s)` — 네이버 모바일 JSON API(PER·PBR) → 네이버 기업분석 HTML(ROE·배당수익률) → yfinance fallback 순서로 수집
 - `_get_moat_analysis(sector)` — 12개 섹터 해자 DB 3줄 분석
 - `_build_factcheck_alerts(news_list, stock_name)` — 블록딜·수주 등 키워드 감지
 - `_analyze_investor_flow(inv_data)` — 누적 수급 결론 도출
