@@ -1062,6 +1062,143 @@ def _build_factcheck_alerts(news_list: list, stock_name: str) -> list:
     return alerts
 
 
+def _generate_factcheck_narrative(
+    stock_name: str,
+    factcheck_alerts: list,
+    flow: dict,
+    inst_s: float,
+    short_s: float,
+    rsi: float,
+) -> str:
+    """42대 필살기 관점 — 주가 변동의 진짜 이유를 문장으로 서술 (표시 전용, 점수 무영향).
+    뉴스 이벤트·수급 흐름·기술 신호를 종합해 한국어 서사 분석 2-4문장을 생성한다.
+    """
+    risks = [a for a in factcheck_alerts if a["type"] == "risk"]
+    opps  = [a for a in factcheck_alerts if a["type"] == "opp"]
+    inst  = flow.get("inst",  0)
+    frgn  = flow.get("frgn",  0)
+    lines = []  # (text, style_key)
+
+    # ── 리스크 서사 ──────────────────────────────────────────────────────────
+    for r in risks[:2]:
+        hl = r["headline"]
+        if any(k in hl for k in ("블록딜", "오버행")):
+            lines.append(("risk",
+                f"⚠️ <strong>{stock_name}</strong> 주가 상단 압박의 핵심 원인: "
+                f"블록딜·오버행 잠재 매물이 해소되지 않아 강한 반등이 제한됩니다. "
+                f"기관 수급이 해당 물량을 흡수하는 시점까지 보수적 관망이 합리적입니다."))
+            break
+        elif any(k in hl for k in ("유상증자", "전환사채", "신주인수권")):
+            lines.append(("risk",
+                f"⚠️ <strong>{stock_name}</strong> 주식 희석 이벤트 진행 중: "
+                f"신주 발행·전환에 따른 물량 압박이 지속될 수 있습니다. "
+                f"발행가·전환가 대비 현재가를 확인하고 완납·전환 일정 이후 재진입을 검토하십시오."))
+            break
+        elif "파업" in hl:
+            lines.append(("risk",
+                f"⚠️ <strong>{stock_name}</strong> 노사 갈등으로 생산 차질 위험: "
+                f"실적 하향 조정 리스크가 있습니다. "
+                f"파업 종결 공시 후 기관 수급 재진입을 확인하십시오."))
+            break
+        elif any(k in hl for k in ("횡령", "배임", "분식")):
+            lines.append(("danger",
+                f"🛑 <strong>{stock_name}</strong> 경영진 신뢰도 훼손 이슈: "
+                f"기관 수급 이탈 가능성이 높습니다. 포지션 즉각 재검토를 권고합니다."))
+            break
+        else:
+            lines.append(("risk",
+                f"⚠️ <strong>{stock_name}</strong> 리스크 이벤트: "
+                f"{r['desc'][:55]} — 추가 확인 후 진입 여부를 결정하십시오."))
+            break
+
+    # ── 기회 서사 ──────────────────────────────────────────────────────────
+    for o in opps[:1]:
+        hl = o["headline"]
+        if "수주" in hl:
+            lines.append(("opp",
+                f"🔥 <strong>{stock_name}</strong> 신규 수주·계약 공시 감지: "
+                f"미반영 실적 기여가 예상됩니다. "
+                f"공시 직후 기관·외국인 선취매 패턴을 확인하고 눌림목 타점에서 진입 공식을 적용하십시오."))
+        elif any(k in hl for k in ("임상 성공", "임상성공", "FDA", "품목허가")):
+            lines.append(("opp",
+                f"🔥 <strong>{stock_name}</strong> 바이오 최대 호재 감지: "
+                f"임상 성공·허가 소식은 갭업의 핵심 트리거입니다. "
+                f"거래량 급증 여부와 기관·외국인 동반 매집을 반드시 확인하십시오."))
+        elif any(k in hl for k in ("자사주 매입", "자사주매입")):
+            lines.append(("good",
+                f"✅ <strong>{stock_name}</strong> 자사주 매입 공시 감지: "
+                f"주주 환원 신호로 하방이 지지됩니다. 기관 매집 유인으로 수급 안정 효과가 기대됩니다."))
+        elif any(k in hl for k in ("MOU", "협약")):
+            lines.append(("good",
+                f"✅ <strong>{stock_name}</strong> MOU·협약 체결 감지: "
+                f"본 계약 전환 시 추가 상승 여력이 있습니다. 이후 공시 흐름을 주시하십시오."))
+        else:
+            lines.append(("good",
+                f"✅ <strong>{stock_name}</strong> 호재 이벤트 감지: "
+                f"{o['desc'][:55]}. 기관 수급 동반 여부를 확인하십시오."))
+
+    # ── 수급 서사 ──────────────────────────────────────────────────────────
+    if inst > 0 and frgn > 0:
+        if (inst + frgn) > 200_000:
+            lines.append(("buy",
+                f"📊 <strong>스마트머니 쌍끌이 대규모 매집 중</strong>: "
+                f"기관 누적 {inst:+,}주 · 외국인 누적 {frgn:+,}주. "
+                f"개인이 팔면 세력이 받는 전형적 매집 구도 — 42대 최강 시그널. "
+                f"눌림목 타점에서 진입 공식 즉시 적용하십시오."))
+        else:
+            lines.append(("buy",
+                f"📊 기관·외국인 동반 순매수 확인 (기관 {inst:+,}주 · 외국인 {frgn:+,}주): "
+                f"스마트머니 유입 중입니다. 쌍끌이 지속성 확인하며 분할 매수를 검토하십시오."))
+    elif inst < 0 and frgn < 0:
+        lines.append(("warn",
+            f"📊 기관·외국인 동반 이탈 중 (기관 {inst:+,}주 · 외국인 {frgn:+,}주): "
+            f"개인만 남는 구도로 단기 하방 압력이 있습니다. "
+            f"기관 재진입 신호가 포착될 때까지 신규 매수를 자제하십시오."))
+    elif inst > 0 and frgn < 0:
+        lines.append(("neutral",
+            f"📊 기관 순매수({inst:+,}주) · 외국인 순매도({frgn:+,}주) 이분화: "
+            f"기관 주도 매집 패턴입니다. 외국인 전환 여부가 추가 상승의 핵심 변수입니다."))
+    elif frgn > 0 and inst < 0:
+        lines.append(("neutral",
+            f"📊 외국인 순매수({frgn:+,}주) · 기관 순매도({inst:+,}주): "
+            f"외국인 주도 장세입니다. 기관 동반 매집 전환 시 추가 상승 기대."))
+
+    # ── 팩트체크 이벤트도 수급도 없을 때 기술 신호 서사 ───────────────────────
+    if not lines:
+        if inst_s >= 20:
+            lines.append(("buy",
+                f"📊 <strong>{stock_name}</strong>: 기관·연기금 강한 순매수로 42대 기관 점수가 높습니다. "
+                f"눌림목 타점이 확인되면 진입 공식을 즉시 적용하십시오."))
+        elif rsi <= 35:
+            lines.append(("neutral",
+                f"📊 <strong>{stock_name}</strong>: RSI {rsi:.0f} 과매도 구간 — "
+                f"기술적 반등 가능성이 있습니다. 거래량 동반 반등 + 기관 매집 여부를 확인하십시오."))
+        else:
+            lines.append(("neutral",
+                f"📊 <strong>{stock_name}</strong>: 현재 뚜렷한 팩트체크 이벤트가 감지되지 않았습니다. "
+                f"4대 필살기 점수와 수급 흐름을 종합하여 진입 시점을 결정하십시오."))
+
+    # ── HTML 렌더링 ──────────────────────────────────────────────────────────
+    _style_map = {
+        "danger":  ("#fef2f2", "#dc2626"),
+        "risk":    ("#fff7f0", "#f97316"),
+        "opp":     ("#eff6ff", "#2563eb"),
+        "good":    ("#f0fdf4", "#16a34a"),
+        "buy":     ("#fdf2f8", "#7c3aed"),
+        "warn":    ("#fffbeb", "#b45309"),
+        "neutral": ("#f8fafc", "#64748b"),
+    }
+    html_parts = []
+    for key, text in lines:
+        bg, border = _style_map.get(key, ("#f8fafc", "#94a3b8"))
+        html_parts.append(
+            f'<div style="background:{bg};border-left:4px solid {border};border-radius:6px;'
+            f'padding:9px 12px;margin-bottom:6px;font-size:12px;font-weight:700;'
+            f'color:#000000;line-height:1.7;">{text}</div>'
+        )
+    return "\n".join(html_parts)
+
+
 @st.cache_data(ttl=60, show_spinner=False)
 def _get_krx_ref_date(ticker: str) -> str:
     """frgn.naver <em class='date'> 에서 KRX 기준일(장마감 기준) 파싱.
@@ -2402,15 +2539,15 @@ if "sniper_code" in st.session_state:
             or _snews_full
         )
 
-        _unref_items = []; _good_items = []; _bad_items = []
+        _unref_items = []; _good_items = []; _bad_items = []; _neutral_items = []
         # URL 매핑 (title 기반 빠른 조회)
         _url_map = {_nf["title"]: _nf["url"] for _nf in _snews_full}
         _date_map = {_nf["title"]: _nf["date"] for _nf in _snews_full}
 
         for _nh in _news_src:
-            # _nh 형식: "[날짜] 제목" → 제목 추출
-            _nh_title = _nh[12:].strip() if _nh.startswith("[") and "]" in _nh[:13] else _nh
-            _nc, _nk = classify_news_item(_nh)
+            # _nh 형식: "[2026.05.06 08:30] 제목" — ] 이후 공백까지 제거
+            _nh_title = _nh[_nh.index("]")+2:].strip() if "]" in _nh else _nh
+            _nc, _nk = classify_news_item(_nh_title)   # 제목만 분류 (날짜 제외)
             _nkt = (f'<span style="font-size:10px;color:#6b7280;margin-left:4px;">'
                     f'[{", ".join(_nk)}]</span>' if _nk else "")
             _nurl = _url_map.get(_nh_title, "")
@@ -2418,6 +2555,7 @@ if "sniper_code" in st.session_state:
             if   _nc == "미반영 호재": _unref_items.append(_item)
             elif _nc == "호재":        _good_items.append(_item)
             elif _nc == "악재":        _bad_items.append(_item)
+            else:                      _neutral_items.append(_item)
         _total_sig = len(_unref_items) + len(_good_items) + len(_bad_items)
         _all_pos_items = _unref_items + _good_items  # 미반영 호재 + 호재 통합
         if _unref_items:
@@ -2468,8 +2606,11 @@ if "sniper_code" in st.session_state:
             _reason_row("📰", "미반영호재",  _news_s,  20, _news_detail)
         )
 
-        # ── 심층 팩트체크 이벤트 추출 (sum3 오버라이드용 사전 계산) ─────────────
+        # ── 심층 팩트체크 이벤트 추출 + 지능형 서사 생성 ────────────────────────
         _factcheck_alerts = _build_factcheck_alerts(_news_src, _sn)
+        _factcheck_narrative = _generate_factcheck_narrative(
+            _sn, _factcheck_alerts, _flow, _inst_s, _short_s, _rsi
+        )
 
         # ── 핵심 요약 3줄 ─────────────────────────────────────────────────────
         if _inst_s >= 20 and "쌍끌이" in _sig_all:
@@ -2867,7 +3008,9 @@ if "sniper_code" in st.session_state:
     🎯 핵심 요약 (42대 필살기 근거)
   </div>
   {_special_alert_html}
-  <div style="font-size:13px;color:#000000;line-height:2.2;font-weight:700;">
+  {_factcheck_narrative}
+  <div style="font-size:13px;color:#000000;line-height:2.2;font-weight:700;
+              margin-top:10px;padding-top:10px;border-top:1px solid #e2e8f0;">
     {_sum1}<br>{_sum2}<br>{_sum3}
   </div>
 </div>""")
@@ -3003,20 +3146,23 @@ if "sniper_code" in st.session_state:
                 f'📊 {_sn} 뉴스 종합 (유의미 {_total_sig}건): {_sum_text}</div>'
             )
 
-            # 4) 탭: 미반영 호재 / 호재 / 악재 (비어있는 탭 제외)
+            # 4) 탭: 미반영 호재 / 호재 / 악재 / 중립·기타 (비어있는 탭 제외)
             _tab_defs = []
-            if _unref_items: _tab_defs.append(("🔥 미반영 호재", _unref_items, "#2563eb", "nc-unref"))
-            if _good_items:  _tab_defs.append(("🟢 호재",        _good_items,  "#16a34a", "nc-good"))
-            if _bad_items:   _tab_defs.append(("🔴 악재",        _bad_items,   "#dc2626", "nc-bad"))
+            if _unref_items:    _tab_defs.append(("🔥 미반영 호재", _unref_items,         "#2563eb", "nc-unref"))
+            if _good_items:     _tab_defs.append(("🟢 호재",        _good_items,           "#16a34a", "nc-good"))
+            if _bad_items:      _tab_defs.append(("🔴 악재",        _bad_items,            "#dc2626", "nc-bad"))
+            if _neutral_items:  _tab_defs.append(("⚪ 중립·기타",   _neutral_items[:20],   "#6b7280", "nc-neutral"))
 
             if _tab_defs:
                 _tab_labels = [f"{td[0]} ({len(td[1])})" for td in _tab_defs]
                 _tabs = st.tabs(_tab_labels)
                 for _tab_ui, (_label, _items, _color, _cls) in zip(_tabs, _tab_defs):
                     with _tab_ui:
-                        _html_block = ""
+                        _html_block = (
+                            f'<div style="font-family:\'Pretendard\',\'Noto Sans KR\',sans-serif;">'
+                        )
                         for _h, _kw_tag, _hurl in _items:
-                            _icon = "🔥" if "미반영" in _label else ("🟢" if "호재" in _label else "🔴")
+                            _icon = "🔥" if "미반영" in _label else ("🟢" if "호재" in _label else ("🔴" if "악재" in _label else "⚪"))
                             _link = (
                                 f' <a href="{_hurl}" target="_blank" '
                                 f'style="font-size:10px;color:{_color};text-decoration:none;'
@@ -3024,13 +3170,38 @@ if "sniper_code" in st.session_state:
                                 if _hurl else ""
                             )
                             _html_block += (
-                                f'<div class="{_cls}" style="margin-bottom:6px;padding:8px 10px;'
-                                f'border-radius:7px;border-left:3px solid {_color};">'
+                                f'<div class="{_cls}" style="margin-bottom:6px;padding:9px 12px;'
+                                f'border-radius:7px;border-left:3px solid {_color};background:#fafafa;'
+                                f'font-size:12px;font-weight:700;color:#000000;line-height:1.6;">'
                                 f'{_icon} {_h}{_link}{_kw_tag}</div>'
                             )
+                        _html_block += '</div>'
                         st.html(_html_block)
             else:
-                st.info("종목 관련 유의미 뉴스(호재·악재)가 감지되지 않았습니다.")
+                # 분류 결과가 전혀 없는 경우 — URL 포함 전체 뉴스 표시
+                if _snews_full_filtered:
+                    st.markdown(f"**{_sn}** 수집 뉴스 전체 ({len(_snews_full_filtered)}건) — 키워드 매칭 없음, 원문에서 직접 확인하세요.")
+                    _all_news_html = '<div style="font-family:\'Pretendard\',\'Noto Sans KR\',sans-serif;">'
+                    for _nfd2 in _snews_full_filtered[:20]:
+                        _nurl2 = _nfd2.get("url", "")
+                        _ntitle2 = _nfd2.get("title", "")
+                        _ndate2 = _nfd2.get("date", "")
+                        _nlink2 = (
+                            f' <a href="{_nurl2}" target="_blank" '
+                            f'style="font-size:10px;color:#6b7280;font-weight:700;'
+                            f'text-decoration:none;border-bottom:1px solid #d1d5db;">🔗 원문</a>'
+                            if _nurl2 else ""
+                        )
+                        _all_news_html += (
+                            f'<div style="padding:8px 12px;border-radius:6px;margin-bottom:5px;'
+                            f'background:#f8fafc;border-left:3px solid #94a3b8;font-size:12px;'
+                            f'font-weight:700;color:#000000;">'
+                            f'⚪ [{_ndate2}] {_ntitle2}{_nlink2}</div>'
+                        )
+                    _all_news_html += '</div>'
+                    st.html(_all_news_html)
+                else:
+                    st.info(f"{_sn} 관련 뉴스가 수집되지 않았습니다.")
 
     # ── 결과 닫기 ──────────────────────────────────────────────────────────────
     if st.button("✕ 스나이퍼 결과 닫기", key="sniper_clear"):
