@@ -329,55 +329,100 @@ def _fetch_krx_holidays_api(year: int) -> frozenset | None:
       1. GET  GenerateOTP.jspx  → one-time code
       2. POST OPN99000001.jspx  → JSON with block1[] rows, each having a calnd_dd field (YYYYMMDD)
 
-    Returns a frozenset of date objects on success, or None on any network/parse error
-    so callers can fall back to the hardcoded table.
-    """
-    try:
-        sess = requests.Session()
-        sess.headers.update({
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-            ),
-            "Referer": "http://open.krx.co.kr/",
-        })
+    Retries up to 3 times (with exponential back-off: 1 s, 2 s) on transient
+    network / 5xx errors.  Permanent 4xx responses are not retried.
 
-        otp_resp = sess.get(
-            "https://open.krx.co.kr/contents/COM/GenerateOTP.jspx",
-            params={"bld": "MKD/01/0110/01100305/mkd01100305", "name": "form"},
-            timeout=10,
-        )
-        otp_resp.raise_for_status()
-        otp = otp_resp.text.strip()
-        if not otp:
+    Returns a frozenset of date objects on success, or None on any
+    network/parse error so callers can fall back to the hardcoded table.
+    """
+    import time as _time
+
+    _TRANSIENT_EXC = (
+        requests.exceptions.Timeout,
+        requests.exceptions.ConnectionError,
+        requests.exceptions.ChunkedEncodingError,
+    )
+    # Timing budget: 3 attempts × (2 s OTP + 2 s POST) + back-off (1 s + 2 s) = 15 s worst case
+    _MAX_ATTEMPTS = 3
+    _BACKOFF_BASE = 1.0
+    _PER_REQUEST_TIMEOUT = 2
+
+    last_exc: Exception | None = None
+
+    for attempt in range(_MAX_ATTEMPTS):
+        if attempt > 0:
+            _time.sleep(_BACKOFF_BASE * (2 ** (attempt - 1)))
+
+        try:
+            sess = requests.Session()
+            sess.headers.update({
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                ),
+                "Referer": "http://open.krx.co.kr/",
+            })
+
+            otp_resp = sess.get(
+                "https://open.krx.co.kr/contents/COM/GenerateOTP.jspx",
+                params={"bld": "MKD/01/0110/01100305/mkd01100305", "name": "form"},
+                timeout=_PER_REQUEST_TIMEOUT,
+            )
+            otp_resp.raise_for_status()
+            otp = otp_resp.text.strip()
+            if not otp:
+                return None
+
+            data_resp = sess.post(
+                "https://open.krx.co.kr/contents/OPN/99/OPN99000001.jspx",
+                data={"search_bas_yy": str(year), "code": otp},
+                timeout=_PER_REQUEST_TIMEOUT,
+            )
+            data_resp.raise_for_status()
+            payload = data_resp.json()
+
+            holidays: set[_date] = set()
+            for row in payload.get("block1", []):
+                raw = row.get("calnd_dd", "")
+                if len(raw) == 8:
+                    try:
+                        holidays.add(_date(int(raw[:4]), int(raw[4:6]), int(raw[6:])))
+                    except ValueError:
+                        pass
+
+            return frozenset(holidays) if holidays else None
+
+        except requests.exceptions.HTTPError as _exc:
+            resp = _exc.response
+            if resp is not None and 400 <= resp.status_code < 500:
+                import warnings as _w
+                _w.warn(
+                    f"KRX holiday API returned {resp.status_code} for {year} — "
+                    "permanent error, not retrying. Falling back to hardcoded table.",
+                    stacklevel=2,
+                )
+                return None
+            last_exc = _exc
+
+        except _TRANSIENT_EXC as _exc:
+            last_exc = _exc
+
+        except Exception as _exc:
+            import warnings as _w
+            _w.warn(
+                f"KRX holiday API fetch failed for {year}: {type(_exc).__name__}: {_exc}. "
+                "Falling back to hardcoded holiday table.",
+                stacklevel=2,
+            )
             return None
 
-        data_resp = sess.post(
-            "https://open.krx.co.kr/contents/OPN/99/OPN99000001.jspx",
-            data={"search_bas_yy": str(year), "code": otp},
-            timeout=10,
-        )
-        data_resp.raise_for_status()
-        payload = data_resp.json()
-
-        holidays: set[_date] = set()
-        for row in payload.get("block1", []):
-            raw = row.get("calnd_dd", "")
-            if len(raw) == 8:
-                try:
-                    holidays.add(_date(int(raw[:4]), int(raw[4:6]), int(raw[6:])))
-                except ValueError:
-                    pass
-
-        return frozenset(holidays) if holidays else None
-    except Exception as _exc:
-        import warnings as _w
-        _w.warn(
-            f"KRX holiday API fetch failed for {year}: {type(_exc).__name__}: {_exc}. "
-            "Falling back to hardcoded holiday table.",
-            stacklevel=2,
-        )
-        return None
+    import warnings as _w
+    _w.warn(
+        f"KRX holiday API fetch failed for {year} after {_MAX_ATTEMPTS} attempts: "
+        f"{type(last_exc).__name__}: {last_exc}. Falling back to hardcoded holiday table.",
+        stacklevel=2,
+    )
+    return None
 
 
 def _get_krx_holidays(year: int) -> frozenset[_date]:
