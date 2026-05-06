@@ -830,6 +830,20 @@ def get_investor_batch(tickers: tuple) -> dict:
     return {t: get_investor_data_naver(t) for t in tickers}
 
 
+# ── KRX HTS 확정치 수동 보정 DB (frgn.naver 파싱 실패 시 fallback) ──────────
+# 형식: {("종목코드", "YYYY.MM.DD"): {"기관":int, "외국인":int, "개인":int, "기타법인":int}}
+# 공매도 정보는 별도 _SHORT_OVERRIDE 사용
+_INVESTOR_OVERRIDE: dict = {
+    ("042660", "2026.05.06"): {
+        "기관": -230_484, "외국인": -157_924,
+        "개인": +780_980, "기타법인": -394_325,
+    },
+}
+_SHORT_OVERRIDE: dict = {
+    ("042660", "2026.05.06"): {"비중": 6.4, "평균가": 130_725},
+}
+
+
 @st.cache_data(ttl=60, show_spinner=False)
 def _get_investor_detail_naver(ticker: str) -> list:
     """기관·외국인·개인·기타법인 4주체 순매수 상세 데이터 (표시 전용, 42대 점수 무영향).
@@ -837,6 +851,8 @@ def _get_investor_detail_naver(ticker: str) -> list:
     frgn.naver 테이블 cells[7]에서 개인 순매수를 직접 파싱하고
     기타법인 = -(개인 + 기관 + 외국인) 으로 역산한다.
     기타법인 대규모 순매도 = 블록딜 물량 출회 핵심 신호.
+
+    파싱 실패(기타법인=0) 시 _INVESTOR_OVERRIDE 확정치로 자동 보정.
     """
     try:
         r = requests.get("https://finance.naver.com/item/frgn.naver",
@@ -853,7 +869,7 @@ def _get_investor_detail_naver(ticker: str) -> list:
             try:    return int(s)
             except: return None
 
-        def _float(s: str) -> float:
+        def _float_v(s: str) -> float:
             try:    return float(s.replace("%","").strip())
             except: return 0.0
 
@@ -863,6 +879,7 @@ def _get_investor_detail_naver(ticker: str) -> list:
             if len(cells) >= 7 and len(cells[0]) == 10 and cells[0][4] == ".":
                 inst = _int_or_none(cells[5]) or 0
                 frgn = _int_or_none(cells[6]) or 0
+                date_str = cells[0]
 
                 # cells[7] 직접 파싱 시도 → 개인 순매수
                 indiv_parsed = _int_or_none(cells[7]) if len(cells) > 7 else None
@@ -880,9 +897,17 @@ def _get_investor_detail_naver(ticker: str) -> list:
                     indiv = -(inst + frgn)
                     other = 0
 
-                hold_r = _float(cells[8]) if len(cells) > 8 else 0.0
+                # ── HTS 확정치 수동 보정 적용 (기타법인 파싱 실패 시) ──────────
+                override = _INVESTOR_OVERRIDE.get((ticker, date_str))
+                if override and other == 0:
+                    inst  = override["기관"]
+                    frgn  = override["외국인"]
+                    indiv = override["개인"]
+                    other = override["기타법인"]
+
+                hold_r = _float_v(cells[8]) if len(cells) > 8 else 0.0
                 result.append({
-                    "날짜": cells[0],
+                    "날짜": date_str,
                     "기관": inst,
                     "외국인": frgn,
                     "개인": indiv,
@@ -1445,6 +1470,8 @@ def _investor_html_table(inv_data: list, ticker: str) -> str:
         )
 
     # ── 하단 주석 ─────────────────────────────────────────────────────────────
+    # note_other 반드시 note 문자열 이전에 정의 (UnboundLocalError 방지)
+    note_other = " | 기타법인=블록딜 추적용 역산값 (개인+기관+외국인+기타법인≈0)" if has_other else ""
     krx_ref_display = f"KRX 기준: <strong>{krx_ref_date}</strong>" if krx_ref_date else ""
     note_suffix = (
         (f" | {krx_ref_display}" if krx_ref_display else "") +
@@ -1474,7 +1501,6 @@ def _investor_html_table(inv_data: list, ticker: str) -> str:
             _th("날짜", "left") + _th("기관 순매수(주)") + _th("외국인 순매수(주)") +
             _th("개인 순매수(주)") + _other_th + _th("외국인 보유율") + _th("상태")
         )
-    note_other = " | 기타법인=블록딜 추적용 역산값 (개인+기관+외국인+기타법인≈0)" if has_other else ""
 
     return (
         f'<div style="overflow-x:auto;border-radius:8px;border:1px solid #e2e8f0;">'
@@ -2773,15 +2799,32 @@ if "sniper_code" in st.session_state:
         elif _news_s > 0:
             _unref_box_html += '<div style="font-size:9px;color:#374151;font-weight:600;margin-top:3px;">(아래 뉴스탭 확인)</div>'
 
-        # ── 공매도상환 박스 서브 노트 ─────────────────────────────────────────
+        # ── 공매도상환 박스 서브 노트 (비중/평균가 오버라이드 포함) ───────────
+        # _SHORT_OVERRIDE: HTS 확정 공매도 비중·평균가 (파싱 불가 시 fallback)
+        _today_kst_str = datetime.now(KST).strftime("%Y.%m.%d")
+        _sh_override = _SHORT_OVERRIDE.get((_sc, _today_kst_str), {})
         if _sshort:
             _short_note = (
-                f'<div style="font-size:9px;color:#374151;margin-top:3px;font-weight:700;">'
+                f'<div style="font-size:9px;color:#000000;margin-top:3px;font-weight:700;">'
                 f'잔고 {_sshort["잔고"]:,}주 ({_sshort["잔고율"]:.2f}%)'
-                f'<span style="color:#9ca3af;font-weight:400;"> {_sshort["날짜"]}</span></div>'
+                f'<span style="color:#6b7280;font-weight:400;"> {_sshort["날짜"]}</span>'
             )
+            if _sh_override:
+                _short_note += (
+                    f'<br><span style="color:#dc2626;font-weight:800;">'
+                    f'공매도 비중 {_sh_override["비중"]:.1f}% · 평균가 {_sh_override["평균가"]:,}원</span>'
+                )
+            _short_note += '</div>'
         elif _short_s == 0:
-            _short_note = '<div style="font-size:9px;color:#6b7280;margin-top:3px;">T+2 집계 대기 중 (확정 데이터 미반영)</div>'
+            if _sh_override:
+                _short_note = (
+                    f'<div style="font-size:9px;color:#000000;margin-top:3px;font-weight:700;">'
+                    f'<span style="color:#dc2626;">공매도 비중 {_sh_override["비중"]:.1f}% · '
+                    f'평균가 {_sh_override["평균가"]:,}원</span>'
+                    f'<br><span style="color:#6b7280;font-weight:400;">T+2 집계 대기 중 (확정 데이터 미반영)</span></div>'
+                )
+            else:
+                _short_note = '<div style="font-size:9px;color:#6b7280;margin-top:3px;">T+2 집계 대기 중 (확정 데이터 미반영)</div>'
         else:
             _short_note = ""
 
