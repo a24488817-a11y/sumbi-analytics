@@ -823,6 +823,30 @@ def get_investor_batch(tickers: tuple) -> dict:
     return {t: get_investor_data_naver(t) for t in tickers}
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def get_short_balance_naver(ticker: str) -> dict:
+    """네이버 공매도 현황에서 최근 공매도 잔고 수집 (표시 전용, 42대 점수 무영향)."""
+    try:
+        url = f"https://finance.naver.com/item/short.nhn?code={ticker}"
+        r = requests.get(url, headers=NAVER_HDR, timeout=8)
+        r.encoding = "euc-kr"
+        soup = BeautifulSoup(r.text, "html.parser")
+        for tbl in soup.find_all("table"):
+            for row in tbl.find_all("tr"):
+                cells = [td.get_text(strip=True) for td in row.find_all("td")]
+                if len(cells) >= 3 and len(cells[0]) == 10 and cells[0][4] == ".":
+                    try:
+                        bal = int(cells[1].replace(",", ""))
+                        rat = float(cells[2].replace("%", "").replace(",", ""))
+                        if bal > 0:
+                            return {"날짜": cells[0], "잔고": bal, "잔고율": rat}
+                    except Exception:
+                        pass
+        return {}
+    except Exception:
+        return {}
+
+
 @st.cache_data(ttl=60, show_spinner=False)
 def _get_krx_ref_date(ticker: str) -> str:
     """frgn.naver <em class='date'> 에서 KRX 기준일(장마감 기준) 파싱.
@@ -2088,6 +2112,126 @@ if "sniper_code" in st.session_state:
 
         _pb_sig_short = _sp["눌림목신호"][:10] if len(_sp["눌림목신호"]) > 10 else _sp["눌림목신호"]
 
+        # ── 뉴스 사전 분류 (카드 드롭다운 + 탭 공유) ─────────────────────────
+        _snews_filtered = filter_news_by_name(_snews, _sn)
+        _news_src       = _snews_filtered if _snews_filtered else _snews
+        _filtered_note  = (f"({len(_snews_filtered)}/{len(_snews)}건 종목 관련)"
+                           if _snews_filtered else f"({len(_snews)}건 전체 — 종목명 매칭 없음)")
+        _unref_items = []; _good_items = []; _bad_items = []
+        for _nh in _news_src:
+            _nc, _nk = classify_news_item(_nh)
+            _nkt = (f'<span style="font-size:10px;color:#6b7280;margin-left:4px;">'
+                    f'[{", ".join(_nk)}]</span>' if _nk else "")
+            if   _nc == "미반영 호재": _unref_items.append((_nh, _nkt))
+            elif _nc == "호재":        _good_items.append((_nh, _nkt))
+            elif _nc == "악재":        _bad_items.append((_nh, _nkt))
+        _total_sig = len(_unref_items) + len(_good_items) + len(_bad_items)
+        if _unref_items:
+            _sum_color = "#2563eb"; _sum_text = f"🔥 미반영 호재 {len(_unref_items)}건 감지 — 선취매 검토"
+        elif len(_good_items) > len(_bad_items):
+            _sum_color = "#16a34a"; _sum_text = f"호재 {len(_good_items)}건 우세 — 긍정 편향"
+        elif len(_bad_items) > len(_good_items):
+            _sum_color = "#dc2626"; _sum_text = f"악재 {len(_bad_items)}건 우세 — 부정 편향"
+        else:
+            _sum_color = "#94a3b8"; _sum_text = "중립 — 유의미 시그널 없음"
+
+        # ── 공매도 잔고 조회 (표시 전용) ─────────────────────────────────────
+        _sshort = get_short_balance_naver(_sc)
+
+        # ── 점수 산출 근거 HTML ───────────────────────────────────────────────
+        _inst_s  = _sscore["기관/연기금"]
+        _short_s = _sscore["숏스퀴즈"]
+        _pb_s    = _sscore["눌림목"]
+        _news_s  = _sscore["뉴스호재"]
+        _sig_all = _sscore["수급신호"]
+        _inst_labels  = [l for l in _sig_all.split(" | ")
+                         if any(x in l for x in ["기관","연기금","쌍끌이","외국인매집"])]
+        _short_labels = [l for l in _sig_all.split(" | ")
+                         if any(x in l for x in ["공매도","숏","매수전환","보유율","방어","3일연속매수"])]
+
+        def _reason_row(icon, label, pts, max_pts, detail):
+            bar_w = int(pts / max_pts * 100) if max_pts > 0 else 0
+            bar_c = "#ef4444" if pts >= max_pts * 0.8 else "#f59e0b" if pts >= max_pts * 0.4 else "#94a3b8"
+            return (
+                f'<div style="display:flex;align-items:center;gap:8px;margin-bottom:7px;">'
+                f'<div style="width:80px;font-size:11px;font-weight:700;color:#374151;white-space:nowrap;">{icon} {label}</div>'
+                f'<div style="flex:1;background:#f1f5f9;border-radius:4px;height:5px;">'
+                f'<div style="width:{bar_w}%;height:5px;background:{bar_c};border-radius:4px;"></div></div>'
+                f'<div style="width:44px;text-align:right;font-size:12px;font-weight:900;color:{bar_c};">+{pts:.0f}점</div>'
+                f'<div style="font-size:10px;color:#6b7280;flex:1;padding-left:8px;">{detail}</div>'
+                f'</div>'
+            )
+
+        _inst_detail  = (", ".join(_inst_labels[:2])  or "당일 수급 미해당") if _inst_s > 0 else "당일 순매도 또는 미수집"
+        _short_detail = (", ".join(_short_labels[:2]) or "보유율 상승 또는 방어") if _short_s > 0 else "수급 전환 신호 미감지"
+        _pb_detail    = _sp.get("눌림목신호", "—")[:30]
+        _news_detail  = (f"호재 키워드 {_sscore['_news_cnt']}건 감지" if _news_s > 0 else "유의미 호재 키워드 미감지")
+
+        _reason_html = (
+            _reason_row("🏦", "기관/연기금", _inst_s,  30, _inst_detail) +
+            _reason_row("💥", "공매도상환",  _short_s, 20, _short_detail) +
+            _reason_row("📈", "눌림목",      _pb_s,    30, _pb_detail) +
+            _reason_row("📰", "미반영호재",  _news_s,  20, _news_detail)
+        )
+
+        # ── 핵심 요약 3줄 ─────────────────────────────────────────────────────
+        if _inst_s >= 20 and "쌍끌이" in _sig_all:
+            _sum1 = "① 기관(연기금 포함)·외국인 쌍끌이 매집 확인 — 공적 자금 유입으로 하방이 막혔습니다."
+        elif _inst_s >= 15:
+            _sum1 = f"① 기관 강한 순매수 {_sscore['_기관연속일']}일 연속 — 스마트머니 지속 유입, 눌림목 시 추가 매집 예상."
+        elif _inst_s > 0:
+            _sum1 = "① 기관 소폭 순매수 — 초기 매집 단계, 연속성 확인 전 관망 병행."
+        else:
+            _sum1 = "① 기관·외국인 순매수 미확인 — 개별 모멘텀 또는 개인 주도 장세."
+
+        if _pb_s >= 20:
+            _sum2 = f"② 5/10일선 최적 눌림목 구간(RSI {_rsi:.0f}) — 기술적 타점과 수급이 일치합니다."
+        elif _pb_s >= 10:
+            _sum2 = f"② 이동평균선 지지 확인 중(RSI {_rsi:.0f}) — 추가 확인 후 분할 진입 유효."
+        else:
+            _sum2 = f"② 이동평균선 지지 미확인(RSI {_rsi:.0f}) — 기술적 타점 미성숙, 관망 우선."
+
+        if _sscore.get("폭발후보"):
+            _sum3 = "③ 외국인 매수 전환 감지(공매도 상환 추정) — 숏커버링 시 급등 폭발 가능, 단기 트레이딩 유효."
+        elif _news_s >= 12:
+            _sum3 = f"③ 미반영 호재 {_sscore['_news_cnt']}건 집중 — 현재가 미반영 이벤트 드리븐 수익 기회, 선취매 유효."
+        elif _short_s >= 10:
+            _sum3 = "③ 보유율 상승·기관 방어 확인 — 하방 경직 구간에서 리스크 대비 기대 수익 우위."
+        else:
+            _sum3 = "③ 공매도 잔고 T+2 집계 대기 — 실제 잔고 확인 후 숏스퀴즈 가능성 재평가 필요."
+
+        # ── 미반영 호재 드롭다운 HTML ─────────────────────────────────────────
+        if _unref_items:
+            _unref_li = "".join(
+                f'<div style="padding:4px 0;border-bottom:1px solid #dbeafe;font-size:10px;'
+                f'color:#1e40af;line-height:1.5;">🔥 {_nh[:45]}{"…" if len(_nh)>45 else ""}'
+                f'{_nkt}</div>'
+                for _nh, _nkt in _unref_items
+            )
+            _unref_box_html = (
+                f'<details style="cursor:pointer;outline:none;">'
+                f'<summary style="font-size:26px;font-weight:900;color:#2563eb;'
+                f'list-style:none;cursor:pointer;">{_sscore["뉴스호재"]:.0f}'
+                f'<sup style="font-size:11px;color:#2563eb;margin-left:2px;">▾</sup></summary>'
+                f'<div style="background:#eff6ff;border-radius:8px;padding:8px;margin-top:4px;'
+                f'border:1px solid #bfdbfe;max-height:180px;overflow-y:auto;text-align:left;">'
+                f'{_unref_li}</div></details>'
+            )
+        else:
+            _unref_box_html = f'<div class="filter-score" style="color:#2563eb;">{_sscore["뉴스호재"]:.0f}</div>'
+
+        # ── 공매도상환 박스 서브 노트 ─────────────────────────────────────────
+        if _sshort:
+            _short_note = (
+                f'<div style="font-size:9px;color:#374151;margin-top:3px;font-weight:700;">'
+                f'잔고 {_sshort["잔고"]:,}주 ({_sshort["잔고율"]:.2f}%)'
+                f'<span style="color:#9ca3af;font-weight:400;"> {_sshort["날짜"]}</span></div>'
+            )
+        elif _short_s == 0:
+            _short_note = '<div style="font-size:9px;color:#f59e0b;margin-top:3px;">데이터 집계 중(T+2)</div>'
+        else:
+            _short_note = ""
+
         # 특수 배지
         _s_badges = ""
         if _sscore.get("폭발후보"):
@@ -2156,15 +2300,17 @@ if "sniper_code" in st.session_state:
       <div class="filter-name">💥 공매도상환</div>
       <div class="filter-score" style="color:#ea580c;">{_sscore["숏스퀴즈"]:.0f}</div>
       <div class="filter-max">/ 20점</div>
+      <div style="font-size:9px;color:#9ca3af;margin-top:2px;">수급 기반 추정·T+2</div>
+      {_short_note}
     </div>
     <div class="filter-box">
       <div class="filter-name">📈 눌림목</div>
       <div class="filter-score" style="color:#16a34a;">{_sscore["눌림목"]:.1f}</div>
       <div class="filter-max">/ 30점</div>
     </div>
-    <div class="filter-box">
+    <div class="filter-box" style="overflow:visible;position:relative;">
       <div class="filter-name">📰 미반영호재</div>
-      <div class="filter-score" style="color:#2563eb;">{_sscore["뉴스호재"]:.0f}</div>
+      {_unref_box_html}
       <div class="filter-max">/ 20점</div>
     </div>
   </div>
@@ -2216,6 +2362,21 @@ if "sniper_code" in st.session_state:
   <div style="margin-top:2px;padding-top:12px;border-top:1px solid #f1f5f9;font-size:13px;color:#374151;line-height:1.7;">
     💬 <strong>AI 타점 분석:</strong> {_sscore["타점분석"]}
   </div>
+  <div style="margin-top:12px;padding:12px 16px;background:#f8fafc;border-radius:10px;border:1px solid #e2e8f0;">
+    <div style="font-size:12px;font-weight:800;color:#374151;margin-bottom:10px;">📊 점수 산출 근거</div>
+    {_reason_html}
+  </div>
+</div>""")
+
+        st.html(f"""
+<div style="background:linear-gradient(135deg,#1e1b4b08,#312e8112);border:1px solid #c7d2fe;
+            border-radius:12px;padding:14px 18px;margin:8px 0 4px;">
+  <div style="font-size:13px;font-weight:900;color:#3730a3;margin-bottom:10px;">
+    🎯 핵심 요약 (42대 필살기 근거)
+  </div>
+  <div style="font-size:13px;color:#374151;line-height:2.0;">
+    {_sum1}<br>{_sum2}<br>{_sum3}
+  </div>
 </div>""")
 
         # ── 기관·외국인 수급 ─────────────────────────────────────────────────
@@ -2229,50 +2390,13 @@ if "sniper_code" in st.session_state:
         st.html(_investor_html_table(_sinv, _sc))
 
         # ── 뉴스 분류 ────────────────────────────────────────────────────────
-        # 1) 종목명 필터링: 해당 종목명이 제목에 포함된 기사만
-        _snews_filtered = filter_news_by_name(_snews, _sn)
-        _news_src = _snews_filtered if _snews_filtered else _snews  # fallback: 전체
-        _filtered_note = (f"({len(_snews_filtered)}/{len(_snews)}건 종목 관련)"
-                          if _snews_filtered else f"({len(_snews)}건 전체 — 종목명 매칭 없음)")
-
+        # 분류는 카드 렌더링 전 사전 계산됨 (위 pre-compute 섹션 참조)
         if _news_src:
             st.html(
                 f'<div style="font-size:14px;font-weight:800;color:#13131a;margin:12px 0 4px;">'
                 f'📰 뉴스 자동 분류 <span style="font-size:11px;font-weight:400;'
                 f'color:#6b7280;">{_filtered_note}</span></div>'
             )
-
-            # 2) 3-카테고리 분류 (중립 제외)
-            _unref_items = []   # 미반영 호재
-            _good_items  = []   # 호재
-            _bad_items   = []   # 악재
-
-            for _h in _news_src:
-                _cat, _kws = classify_news_item(_h)
-                _kw_tag = (f'<span style="font-size:10px;color:#6b7280;margin-left:4px;">'
-                           f'[{", ".join(_kws)}]</span>') if _kws else ""
-                if _cat == "미반영 호재":
-                    _unref_items.append((_h, _kw_tag))
-                elif _cat == "호재":
-                    _good_items.append((_h, _kw_tag))
-                elif _cat == "악재":
-                    _bad_items.append((_h, _kw_tag))
-                # 중립은 표시 안 함
-
-            # 3) 종합 요약 배너
-            _total_sig = len(_unref_items) + len(_good_items) + len(_bad_items)
-            if _unref_items:
-                _sum_color = "#2563eb"
-                _sum_text  = f"🔥 미반영 호재 {len(_unref_items)}건 감지 — 선취매 검토"
-            elif len(_good_items) > len(_bad_items):
-                _sum_color = "#16a34a"
-                _sum_text  = f"호재 {len(_good_items)}건 우세 — 긍정 편향"
-            elif len(_bad_items) > len(_good_items):
-                _sum_color = "#dc2626"
-                _sum_text  = f"악재 {len(_bad_items)}건 우세 — 부정 편향"
-            else:
-                _sum_color = "#94a3b8"
-                _sum_text  = "중립 — 유의미 시그널 없음"
 
             st.html(
                 f'<div style="background:{_sum_color}18;border-radius:10px;padding:9px 14px;'
