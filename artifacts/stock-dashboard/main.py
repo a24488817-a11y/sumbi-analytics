@@ -116,8 +116,9 @@ section[data-testid="stSidebar"] { background:#fff; border-right:1px solid #f0f0
 }
 .market-status-dot { font-size:16px; line-height:1; }
 .market-status-text { flex:1; }
-.market-status-label { font-size:13px; font-weight:800; line-height:1.3; }
-.market-status-time  { font-size:11px; color:#9ca3af; margin-top:1px; }
+.market-status-label      { font-size:13px; font-weight:800; line-height:1.3; }
+.market-status-time       { font-size:11px; color:#9ca3af; margin-top:1px; }
+.market-status-countdown  { font-size:12px; font-weight:700; margin-top:4px; }
 
 /* 버튼 */
 .stButton > button {
@@ -332,14 +333,36 @@ def _is_krx_holiday(d: _date) -> bool:
     return d in year_holidays
 
 
+def _next_trading_open_minutes(now_kst: datetime) -> int:
+    """Return minutes from now_kst until the next KRX regular session open (09:00 KST).
+
+    Searches up to 14 days ahead, skipping weekends and KRX holidays.
+    Uses concrete datetime arithmetic so multi-day gaps (e.g. Friday → Monday,
+    or multi-day holiday spans) are handled correctly.
+    """
+    from datetime import timedelta as _td
+    candidate = now_kst.date()
+    for _ in range(14):
+        if candidate.weekday() < 5 and not _is_krx_holiday(candidate):
+            target = datetime(
+                candidate.year, candidate.month, candidate.day,
+                9, 0, 0, tzinfo=KST
+            )
+            if target > now_kst:
+                return int((target - now_kst).total_seconds() // 60)
+        candidate += _td(days=1)
+    return 0
+
+
 def get_krx_market_status() -> dict:
     """
     Returns a dict with:
-      status : "open" | "pre" | "after" | "closed"
-      label  : Korean display text
-      emoji  : status emoji
-      color  : hex color for badge
-      time_kst: current KST time string (HH:MM)
+      status        : "open" | "pre" | "after" | "closed"
+      label         : Korean display text
+      emoji         : status emoji
+      color         : hex color for badge
+      time_kst      : current KST time string (HH:MM)
+      countdown_text: Korean countdown string, e.g. "30분 후 개장" or "45분 후 마감"
     """
     now_kst = datetime.now(KST)
     weekday = now_kst.weekday()   # 0=Mon … 4=Fri, 5=Sat, 6=Sun
@@ -349,33 +372,47 @@ def get_krx_market_status() -> dict:
     if weekday >= 5:
         return {"status": "closed", "label": "휴장 (주말)",
                 "emoji": "⚫", "color": "#6b7280",
-                "time_kst": now_kst.strftime("%H:%M")}
+                "time_kst": now_kst.strftime("%H:%M"),
+                "countdown_text": ""}
 
     if _is_krx_holiday(today):
+        mins = _next_trading_open_minutes(now_kst)
+        countdown = f"{mins}분 후 개장" if mins > 0 else ""
         return {"status": "closed", "label": "휴장 (공휴일)",
                 "emoji": "⚫", "color": "#6b7280",
-                "time_kst": now_kst.strftime("%H:%M")}
+                "time_kst": now_kst.strftime("%H:%M"),
+                "countdown_text": countdown}
 
     # Pre-market:   08:00 – 09:00
     # Regular:      09:00 – 15:30
     # After-hours:  15:30 – 18:00
     # Closed:       otherwise
     if 8 * 60 <= t < 9 * 60:
+        mins = 9 * 60 - t
         return {"status": "pre", "label": "장 시작 전 (Pre-market)",
                 "emoji": "🟡", "color": "#f59e0b",
-                "time_kst": now_kst.strftime("%H:%M")}
+                "time_kst": now_kst.strftime("%H:%M"),
+                "countdown_text": f"{mins}분 후 개장"}
     elif 9 * 60 <= t < 15 * 60 + 30:
+        mins = (15 * 60 + 30) - t
         return {"status": "open", "label": "정규장 운영 중 (Open)",
                 "emoji": "🟢", "color": "#16a34a",
-                "time_kst": now_kst.strftime("%H:%M")}
+                "time_kst": now_kst.strftime("%H:%M"),
+                "countdown_text": f"{mins}분 후 마감"}
     elif 15 * 60 + 30 <= t < 18 * 60:
+        mins = _next_trading_open_minutes(now_kst)
+        countdown = f"{mins}분 후 개장" if mins > 0 else ""
         return {"status": "after", "label": "장 마감 후 (After-hours)",
                 "emoji": "🟠", "color": "#ea580c",
-                "time_kst": now_kst.strftime("%H:%M")}
+                "time_kst": now_kst.strftime("%H:%M"),
+                "countdown_text": countdown}
     else:
+        mins = _next_trading_open_minutes(now_kst)
+        countdown = f"{mins}분 후 개장" if mins > 0 else ""
         return {"status": "closed", "label": "장 마감 (Closed)",
                 "emoji": "⚫", "color": "#6b7280",
-                "time_kst": now_kst.strftime("%H:%M")}
+                "time_kst": now_kst.strftime("%H:%M"),
+                "countdown_text": countdown}
 
 
 OVERHANG_DB = {
@@ -1439,6 +1476,11 @@ _bg_map = {
 }
 _bg, _border, _label_color = _bg_map[_ms["status"]]
 with st.sidebar:
+    _countdown_html = (
+        f'<div class="market-status-countdown" style="color:{_label_color};">'
+        f'{_ms["countdown_text"]}</div>'
+        if _ms["countdown_text"] else ""
+    )
     st.html(f"""
 <div style="font-size:11px;font-weight:700;color:#8c8c9e;margin-bottom:4px;letter-spacing:.4px;">
   KRX 시장 상태
@@ -1449,6 +1491,7 @@ with st.sidebar:
   <div class="market-status-text">
     <div class="market-status-label" style="color:{_label_color};">{_ms["label"]}</div>
     <div class="market-status-time">현재 KST {_ms["time_kst"]}</div>
+    {_countdown_html}
   </div>
 </div>
 """)
