@@ -272,6 +272,66 @@ KOSDAQ_STOCKS = {
 # ───────────────────────────────────────────────────────────────────────────────
 KST = timezone(timedelta(hours=9))
 
+from datetime import date as _date
+
+# KRX-observed public holidays by year (update annually).
+# Includes substitute holidays (대체공휴일) when the original falls on a weekend.
+_KRX_HOLIDAYS: dict[int, frozenset[_date]] = {
+    2025: frozenset({
+        _date(2025,  1,  1),   # 신정
+        _date(2025,  1, 28),   # 설날 연휴 (전날)
+        _date(2025,  1, 29),   # 설날
+        _date(2025,  1, 30),   # 설날 연휴 (다음날)
+        _date(2025,  3,  3),   # 삼일절 대체공휴일 (3/1 토요일)
+        _date(2025,  5,  5),   # 어린이날
+        _date(2025,  5,  6),   # 석가탄신일 대체공휴일 (5/5 중복)
+        _date(2025,  6,  6),   # 현충일
+        _date(2025,  8, 15),   # 광복절
+        _date(2025, 10,  3),   # 개천절
+        _date(2025, 10,  6),   # 추석
+        _date(2025, 10,  7),   # 추석 연휴 (다음날)
+        _date(2025, 10,  8),   # 추석 대체공휴일 (10/5 전날 일요일)
+        _date(2025, 10,  9),   # 한글날
+        _date(2025, 12, 25),   # 성탄절
+    }),
+    2026: frozenset({
+        _date(2026,  1,  1),   # 신정
+        _date(2026,  2, 16),   # 설날 연휴 (전날)
+        _date(2026,  2, 17),   # 설날
+        _date(2026,  2, 18),   # 설날 연휴 (다음날)
+        _date(2026,  3,  2),   # 삼일절 대체공휴일 (3/1 일요일)
+        _date(2026,  5,  5),   # 어린이날
+        _date(2026,  5, 25),   # 석가탄신일 (음력 4월 8일)
+        _date(2026,  6,  6),   # 현충일 (토요일)
+        _date(2026,  6,  8),   # 현충일 대체공휴일
+        _date(2026,  8, 15),   # 광복절 (토요일)
+        _date(2026,  8, 17),   # 광복절 대체공휴일
+        _date(2026,  9, 23),   # 추석 연휴 (전날)
+        _date(2026,  9, 24),   # 추석
+        _date(2026,  9, 25),   # 추석 연휴 (다음날)
+        _date(2026, 10,  3),   # 개천절 (토요일)
+        _date(2026, 10,  5),   # 개천절 대체공휴일
+        _date(2026, 10,  9),   # 한글날
+        _date(2026, 12, 25),   # 성탄절
+    }),
+}
+
+_warned_missing_years: set[int] = set()
+
+def _is_krx_holiday(d: _date) -> bool:
+    """Return True if *d* is a KRX-observed public holiday."""
+    if d.year not in _KRX_HOLIDAYS and d.year not in _warned_missing_years:
+        import warnings as _warnings
+        _warnings.warn(
+            f"KRX holiday calendar has no entry for {d.year}. "
+            "Update _KRX_HOLIDAYS in main.py so the market-status badge stays accurate.",
+            stacklevel=2,
+        )
+        _warned_missing_years.add(d.year)
+    year_holidays = _KRX_HOLIDAYS.get(d.year, frozenset())
+    return d in year_holidays
+
+
 def get_krx_market_status() -> dict:
     """
     Returns a dict with:
@@ -284,9 +344,15 @@ def get_krx_market_status() -> dict:
     now_kst = datetime.now(KST)
     weekday = now_kst.weekday()   # 0=Mon … 4=Fri, 5=Sat, 6=Sun
     t = now_kst.hour * 60 + now_kst.minute   # minutes since midnight KST
+    today = now_kst.date()
 
     if weekday >= 5:
         return {"status": "closed", "label": "휴장 (주말)",
+                "emoji": "⚫", "color": "#6b7280",
+                "time_kst": now_kst.strftime("%H:%M")}
+
+    if _is_krx_holiday(today):
+        return {"status": "closed", "label": "휴장 (공휴일)",
                 "emoji": "⚫", "color": "#6b7280",
                 "time_kst": now_kst.strftime("%H:%M")}
 
