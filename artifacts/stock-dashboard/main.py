@@ -915,7 +915,8 @@ def _get_investor_detail_naver(ticker: str) -> list:
         soup = BeautifulSoup(r.text, "html.parser")
         tables = soup.find_all("table")
         if len(tables) < 4:
-            return []
+            # 테이블 파싱 실패 → HTS 확정 override 즉시 반환 (빈 리스트 반환 금지)
+            return _ov_rows if _ov_rows else []
 
         def _int_or_none(s: str):
             s = s.replace(",","").replace("+","")
@@ -3186,7 +3187,7 @@ if "sniper_code" in st.session_state:
         # 수집시각 & 데이터소스 배지
         _collected_at = _sp.get("수집시각", "")
         _naver_ok     = _sp.get("_naver_ok", False)
-        _src_label    = "📡 네이버 금융 실시간 API" if _naver_ok else "📊 yfinance (전일 종가)"
+        _src_label    = "📡 네이버 금융 실시간 API" if _naver_ok else "📊 네이버 금융 (전일 종가 기준)"
         _src_color    = "#15803d" if _naver_ok else "#b45309"
         _src_bg       = "#f0fdf4" if _naver_ok else "#fffbeb"
         _src_border   = "#bbf7d0" if _naver_ok else "#fde68a"
