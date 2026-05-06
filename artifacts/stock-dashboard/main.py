@@ -736,7 +736,7 @@ def stock_card_html(rank: int, r: pd.Series) -> str:
 # ───────────────────────────────────────────────────────────────────────────────
 # 데이터 함수
 # ───────────────────────────────────────────────────────────────────────────────
-@st.cache_data(ttl=120)
+@st.cache_data(ttl=60)
 def get_investor_data_naver(ticker: str) -> list:
     try:
         r = requests.get("https://finance.naver.com/item/frgn.naver",
@@ -770,9 +770,32 @@ def get_investor_data_naver(ticker: str) -> list:
         return []
 
 
-@st.cache_data(ttl=120)
+@st.cache_data(ttl=60)
 def get_investor_batch(tickers: tuple) -> dict:
     return {t: get_investor_data_naver(t) for t in tickers}
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _get_krx_ref_date(ticker: str) -> str:
+    """frgn.naver <em class='date'> 에서 KRX 기준일(장마감 기준) 파싱.
+
+    예) '2026.05.06기준(KRX 장마감)' → '2026.05.06'
+    확정 데이터 행의 날짜와 비교해 투자자 테이블의 상태 배지를 결정하는 데 사용.
+    42대 점수 로직에는 일절 사용하지 않음.
+    """
+    try:
+        import re as _re
+        r = requests.get("https://finance.naver.com/item/frgn.naver",
+                         headers=NAVER_HDR, params={"code": ticker}, timeout=8)
+        r.encoding = "euc-kr"
+        soup = BeautifulSoup(r.text, "html.parser")
+        for em in soup.find_all("em", class_="date"):
+            dates = _re.findall(r"20\d{2}\.\d{2}\.\d{2}", em.get_text())
+            if dates:
+                return dates[0]
+        return ""
+    except Exception:
+        return ""
 
 
 # ── 오늘 가격 잠정 행 (sise_day.naver) ──────────────────────────────────────
@@ -835,38 +858,64 @@ def _investor_html_table(inv_data: list, ticker: str) -> str:
 
     rows_html = ""
 
-    # ── 잠정 행 (오늘, 기관 미확정) ──────────────────────────────────────────
+    # ── KRX 기준일 파싱 (frgn.naver em.date) ─────────────────────────────────
+    # 예: "2026.05.06 기준(KRX 장마감)" → '2026.05.06'
+    # 확정 데이터 날짜(confirmed_date)와 비교해 상태를 정확히 결정
+    krx_ref_date = _get_krx_ref_date(ticker)
+
+    # ── 잠정 행 (오늘이 거래일이나 확정 데이터 미발표) ───────────────────────
     if need_provisional:
         after_close = now_kst.hour > 15 or (now_kst.hour == 15 and now_kst.minute >= 30)
-        badge_txt   = "마감후집계중" if after_close else "장중잠정"
-        badge_bg    = "#dbeafe" if not after_close else "#fef3c7"
-        badge_color = "#1d4ed8" if not after_close else "#92400e"
+
+        # KRX 기준일이 오늘이면 → 가집계 발표는 됐지만 frgn.naver 미반영 상태
+        # KRX 기준일이 오늘이 아니면 → 아직 장이 진행 중이거나 데이터 집계 전
+        krx_matches_today = (krx_ref_date == today_str)
+
+        if after_close and krx_matches_today:
+            # 장 마감 후, KRX 기준일=오늘: 가집계 완료됐으나 frgn.naver D+1 반영 대기
+            badge_txt   = "가집계완료·확정대기"
+            badge_bg    = "#fef3c7"
+            badge_color = "#92400e"
+            inst_cell   = '<td style="padding:7px 10px;color:#92400e;font-size:12px;text-align:right;">가집계완료 (D+1 반영)</td>'
+            frgn_cell   = '<td style="padding:7px 10px;color:#92400e;font-size:12px;text-align:right;">가집계완료 (D+1 반영)</td>'
+        elif after_close:
+            # 장 마감 후, KRX 기준일 미확인: 가집계 발표 예정 / 대기
+            badge_txt   = "가집계대기"
+            badge_bg    = "#fef3c7"
+            badge_color = "#b45309"
+            inst_cell   = '<td style="padding:7px 10px;color:#9ca3af;font-size:12px;text-align:right;">가집계 발표 대기</td>'
+            frgn_cell   = '<td style="padding:7px 10px;color:#9ca3af;font-size:12px;text-align:right;">가집계 발표 대기</td>'
+        else:
+            # 장 중
+            badge_txt   = "장중"
+            badge_bg    = "#dbeafe"
+            badge_color = "#1d4ed8"
+            inst_cell   = '<td style="padding:7px 10px;color:#9ca3af;font-size:12px;text-align:right;">장중 (미집계)</td>'
+            frgn_cell   = '<td style="padding:7px 10px;color:#9ca3af;font-size:12px;text-align:right;">장중 (미집계)</td>'
 
         price_row = _get_sise_today_price(ticker)
         if price_row:
-            price_str = f"{price_row['종가']:,}원"
-            chg_v = price_row["전일비"]
+            chg_v     = price_row["전일비"]
             chg_color = "#ef4444" if chg_v >= 0 else "#1d6ce8"
-            chg_str   = f'{chg_v:+,}'
-            vol_str   = f"{price_row['거래량']:,}주"
-            extra_td  = (
-                f'<td style="font-size:11px;color:{chg_color};">'
-                f'{price_str} ({chg_str})</td>'
-                f'<td style="font-size:11px;color:#6b7280;">{vol_str}</td>'
+            price_td  = (
+                f'<td style="padding:7px 10px;font-size:12px;color:{chg_color};text-align:right;">'
+                f'{price_row["종가"]:,}원 ({chg_v:+,})</td>'
+                f'<td style="padding:7px 10px;font-size:11px;color:#6b7280;text-align:right;">'
+                f'{price_row["거래량"]:,}주</td>'
             )
         else:
-            extra_td = '<td colspan="2" style="color:#9ca3af;font-size:11px;">가격 로딩 중…</td>'
+            price_td = '<td colspan="2" style="padding:7px 10px;color:#9ca3af;font-size:11px;">가격 로딩 중…</td>'
 
         rows_html += f"""
-<tr style="background:#f0f9ff;border-left:3px solid #3b82f6;">
+<tr style="background:#fffbeb;border-left:3px solid #f59e0b;">
   <td style="padding:7px 10px;font-weight:700;">
     {today_str}
     <span style="font-size:10px;background:{badge_bg};color:{badge_color};
                  padding:1px 6px;border-radius:10px;margin-left:4px;">{badge_txt}</span>
   </td>
-  <td style="padding:7px 10px;color:#9ca3af;font-size:12px;">집계 중</td>
-  <td style="padding:7px 10px;color:#9ca3af;font-size:12px;">집계 중</td>
-  {extra_td}
+  {inst_cell}
+  {frgn_cell}
+  {price_td}
 </tr>"""
 
     # ── 확정 행 ───────────────────────────────────────────────────────────────
@@ -875,33 +924,48 @@ def _investor_html_table(inv_data: list, ticker: str) -> str:
         row_bg = "#fafafa" if is_latest else "#ffffff"
         rows_html += f"""
 <tr style="background:{row_bg};border-bottom:1px solid #f1f5f9;">
-  <td style="padding:7px 10px;{"font-weight:700;" if is_latest else ""}">{d["날짜"]}</td>
+  <td style="padding:7px 10px;{"font-weight:700;" if is_latest else ""}">
+    {d["날짜"]}{"&nbsp;<span style='font-size:10px;color:#16a34a;'>◀ 확정최신</span>" if is_latest else ""}
+  </td>
   <td style="padding:7px 10px;text-align:right;">{_sign_html(d["기관"])}</td>
   <td style="padding:7px 10px;text-align:right;">{_sign_html(d["외국인"])}</td>
   <td style="padding:7px 10px;text-align:right;color:#374151;">{d["보유율"]:.2f}%</td>
-  <td style="padding:7px 10px;text-align:right;color:#9ca3af;font-size:11px;">확정</td>
+  <td style="padding:7px 10px;text-align:right;color:#16a34a;font-size:11px;">✅ KRX확정</td>
 </tr>"""
 
+    # ── 하단 주석 ─────────────────────────────────────────────────────────────
+    krx_ref_display = f"KRX 기준: <strong>{krx_ref_date}</strong>" if krx_ref_date else ""
+    if need_provisional:
+        note_extra = (
+            f" | {krx_ref_display}" if krx_ref_display else ""
+        ) + (
+            " | 기관·외국인 가집계는 KRX 공식 포털(data.krx.co.kr) 로그인 후 조회 가능 — "
+            "네이버금융 확정치는 익일 09:00 이후 자동 반영"
+        )
+    else:
+        note_extra = f" | {krx_ref_display}" if krx_ref_display else ""
+
     note = (
-        f'<div style="font-size:11px;color:#9ca3af;margin-top:4px;padding:0 4px;">'
+        f'<div style="font-size:11px;color:#9ca3af;margin-top:4px;padding:0 4px;line-height:1.6;">'
         f'※ 소스: 네이버금융 frgn.naver (기관합계 = 연기금 포함) '
-        f'| KRX 확정 공시 최신일: <strong>{confirmed_date}</strong>'
-        f'{"  | 오늘 기관·외국인 수급은 KRX 익일 오전 공시 후 자동 반영" if need_provisional else ""}'
+        f'| KRX 확정 최신일: <strong>{confirmed_date}</strong>'
+        f'{note_extra}'
         f'</div>'
     )
 
-    col_headers = (
-        '<th style="padding:6px 10px;text-align:left;background:#f8fafc;font-size:12px;">날짜</th>'
-        '<th style="padding:6px 10px;text-align:right;background:#f8fafc;font-size:12px;">기관 순매수(주)</th>'
-        '<th style="padding:6px 10px;text-align:right;background:#f8fafc;font-size:12px;">외국인 순매수(주)</th>'
-        '<th style="padding:6px 10px;text-align:right;background:#f8fafc;font-size:12px;">오늘 가격/거래량</th>'
-        '<th style="padding:6px 10px;text-align:right;background:#f8fafc;font-size:12px;">상태</th>'
-        if need_provisional else
-        '<th style="padding:6px 10px;text-align:left;background:#f8fafc;font-size:12px;">날짜</th>'
-        '<th style="padding:6px 10px;text-align:right;background:#f8fafc;font-size:12px;">기관 순매수(주)</th>'
-        '<th style="padding:6px 10px;text-align:right;background:#f8fafc;font-size:12px;">외국인 순매수(주)</th>'
-        '<th style="padding:6px 10px;text-align:right;background:#f8fafc;font-size:12px;">외국인 보유율</th>'
-    )
+    th = '<th style="padding:6px 10px;text-align:{a};background:#f8fafc;font-size:12px;">{t}</th>'
+    def _th(t, a="right"): return th.format(a=a, t=t)
+
+    if need_provisional:
+        col_headers = (
+            _th("날짜", "left") + _th("기관 순매수(주)") + _th("외국인 순매수(주)") +
+            _th("오늘 종가/등락") + _th("거래량")
+        )
+    else:
+        col_headers = (
+            _th("날짜", "left") + _th("기관 순매수(주)") + _th("외국인 순매수(주)") +
+            _th("외국인 보유율") + _th("상태")
+        )
 
     return (
         f'<div style="overflow-x:auto;border-radius:8px;border:1px solid #e2e8f0;">'
