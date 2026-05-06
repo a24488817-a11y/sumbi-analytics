@@ -832,12 +832,14 @@ def get_investor_batch(tickers: tuple) -> dict:
 
 @st.cache_data(ttl=300, show_spinner=False)
 def get_short_balance_naver(ticker: str) -> dict:
-    """네이버 공매도 현황에서 최근 공매도 잔고 수집 (표시 전용, 42대 점수 무영향)."""
+    """네이버 공매도 현황에서 최근 5거래일 공매도 잔고 수집 (표시 전용, 42대 점수 무영향).
+    반환: {날짜, 잔고, 잔고율, history=[{날짜,잔고,잔고율}×최대5]}"""
     try:
         url = f"https://finance.naver.com/item/short.nhn?code={ticker}"
         r = requests.get(url, headers=NAVER_HDR, timeout=8)
         r.encoding = "euc-kr"
         soup = BeautifulSoup(r.text, "html.parser")
+        rows = []
         for tbl in soup.find_all("table"):
             for row in tbl.find_all("tr"):
                 cells = [td.get_text(strip=True) for td in row.find_all("td")]
@@ -846,9 +848,16 @@ def get_short_balance_naver(ticker: str) -> dict:
                         bal = int(cells[1].replace(",", ""))
                         rat = float(cells[2].replace("%", "").replace(",", ""))
                         if bal > 0:
-                            return {"날짜": cells[0], "잔고": bal, "잔고율": rat}
+                            rows.append({"날짜": cells[0], "잔고": bal, "잔고율": rat})
                     except Exception:
                         pass
+            if len(rows) >= 5:
+                break
+        rows = rows[:5]
+        if rows:
+            result = rows[0].copy()
+            result["history"] = rows
+            return result
         return {}
     except Exception:
         return {}
@@ -2335,6 +2344,9 @@ if "sniper_code" in st.session_state:
             _reason_row("📰", "미반영호재",  _news_s,  20, _news_detail)
         )
 
+        # ── 심층 팩트체크 이벤트 추출 (sum3 오버라이드용 사전 계산) ─────────────
+        _factcheck_alerts = _build_factcheck_alerts(_news_src, _sn)
+
         # ── 핵심 요약 3줄 ─────────────────────────────────────────────────────
         if _inst_s >= 20 and "쌍끌이" in _sig_all:
             _sum1 = "① 기관(연기금 포함)·외국인 쌍끌이 매집 확인 — 공적 자금 유입으로 하방이 막혔습니다."
@@ -2360,6 +2372,13 @@ if "sniper_code" in st.session_state:
             _sum3 = "③ 보유율 상승·기관 방어 확인 — 하방 경직 구간에서 리스크 대비 기대 수익 우위."
         else:
             _sum3 = "③ 공매도 잔고 T+2 집계 대기 — 실제 잔고 확인 후 숏스퀴즈 가능성 재평가 필요."
+
+        # ── 팩트체크 리스크 감지 → _sum3 오버라이드 ──────────────────────────
+        _fa_risks = [a for a in _factcheck_alerts if a["type"] == "risk"]
+        if _fa_risks:
+            _r = _fa_risks[0]
+            _sum3 = (f"③ ⚠️ {_r['title']}: {_r['desc'][:60]}"
+                     f" — 수급 개선 확인 전 보수적 접근 권고.")
 
         # ── 미반영 호재 필터박스 HTML (숫자만 — 상세는 아래 expander로) ────────
         _unref_box_html = f'<div class="filter-score" style="color:#2563eb;">{_sscore["뉴스호재"]:.0f}</div>'
@@ -2397,8 +2416,37 @@ if "sniper_code" in st.session_state:
                 '<span style="font-size:9px;font-weight:600;color:#6b7280;">(T+2 지연)</span></div>'
             )
 
-        # ── 심층 팩트체크 이벤트 추출 ─────────────────────────────────────────
-        _factcheck_alerts = _build_factcheck_alerts(_news_src, _sn)
+        # ── 공매도 잔고 추이 HTML (카드 Part2 삽입용) ─────────────────────────
+        _short_hist = _sshort.get("history", []) if _sshort else []
+        if len(_short_hist) > 1:
+            _sh_rows = ""
+            _max_bal = max(h["잔고"] for h in _short_hist) or 1
+            for _hi, _h in enumerate(_short_hist):
+                _bar_pct = int(_h["잔고"] / _max_bal * 100)
+                _bar_c = "#ef4444" if _hi == 0 else "#94a3b8"
+                _sh_rows += (
+                    f'<tr style="border-bottom:1px solid #f8fafc;">'
+                    f'<td style="padding:5px 8px;color:#374151;font-weight:600;font-size:11px;">{_h["날짜"]}</td>'
+                    f'<td style="padding:5px 8px;text-align:right;color:#1f2937;font-weight:800;font-size:11px;">{_h["잔고"]:,}</td>'
+                    f'<td style="padding:5px 8px;min-width:100px;">'
+                    f'<div style="background:#f1f5f9;border-radius:3px;height:8px;display:inline-block;width:80px;vertical-align:middle;">'
+                    f'<div style="width:{_bar_pct}%;height:8px;background:{_bar_c};border-radius:3px;"></div></div>'
+                    f'<span style="font-size:10px;color:#6b7280;margin-left:4px;">{_h["잔고율"]:.2f}%</span>'
+                    f'</td></tr>'
+                )
+            _short_hist_html = (
+                f'<div style="margin-top:14px;padding-top:12px;border-top:1px solid #f1f5f9;">'
+                f'<div style="font-size:12px;font-weight:800;color:#374151;margin-bottom:8px;">'
+                f'📉 공매도 잔고 추이 (최근 {len(_short_hist)}거래일 · T+2 집계)</div>'
+                f'<table style="width:100%;border-collapse:collapse;">'
+                f'<thead><tr style="background:#f8fafc;border-bottom:2px solid #e2e8f0;">'
+                f'<th style="padding:5px 8px;text-align:left;color:#374151;font-weight:800;font-size:11px;">날짜</th>'
+                f'<th style="padding:5px 8px;text-align:right;color:#374151;font-weight:800;font-size:11px;">잔고(주)</th>'
+                f'<th style="padding:5px 8px;text-align:left;color:#374151;font-weight:800;font-size:11px;">잔고율 추이</th>'
+                f'</tr></thead><tbody>{_sh_rows}</tbody></table></div>'
+            )
+        else:
+            _short_hist_html = ""
 
         # 특수 배지
         _s_badges = ""
@@ -2467,16 +2515,19 @@ if "sniper_code" in st.session_state:
   {_time_span}
 </div>""")
 
+        _hint_bar = (
+            f'<div style="font-size:11px;font-weight:800;color:#1d4ed8;text-align:center;'
+            f'padding:7px 12px;background:#eff6ff;border-radius:8px;margin-top:8px;'
+            f'border:1px dashed #93c5fd;">'
+            f'👇 미반영 호재 {len(_unref_items)}건 감지 — 바로 아래 펼치기 버튼을 클릭하세요</div>'
+            if _unref_items else ''
+        )
         st.html(f"""
 <style>
-.sniper-card{{background:#fff;border-radius:20px;padding:22px 26px;box-shadow:0 6px 24px rgba(0,0,0,.10);margin:6px 0 14px;border:1px solid #f0f0f5;color:#1f2937;font-family:'Pretendard','Noto Sans KR',sans-serif;}}
 .filter-box{{background:#f8fafc;border-radius:12px;padding:12px 14px;text-align:center;border:1px solid #e2e8f0;}}
 .filter-name{{font-size:11px;font-weight:800;color:#31333F;margin-bottom:5px;display:block;}}
 .filter-score{{font-size:26px;font-weight:900;line-height:1.1;display:block;}}
 .filter-max{{font-size:10px;color:#6b7280;margin-top:2px;display:block;}}
-.ma-row{{display:flex;align-items:center;gap:10px;margin-bottom:5px;font-size:13px;color:#1f2937;}}
-.ma-label{{font-weight:800;min-width:44px;color:#31333F;}}
-.ma-val{{font-weight:900;color:#000000;}}
 .grade-badge{{font-size:15px;font-weight:800;border-radius:12px;padding:6px 14px;display:inline-flex;align-items:center;gap:5px;}}
 .grade-bluechip{{background:#7c3aed;color:#fff;}}.grade-midcap{{background:#059669;color:#fff;}}.grade-small{{background:#d97706;color:#fff;}}
 .badge{{display:inline-block;border-radius:8px;padding:3px 10px;font-size:12px;font-weight:700;margin:2px 3px 2px 0;}}
@@ -2486,7 +2537,9 @@ if "sniper_code" in st.session_state:
 .signal-wait{{background:#94a3b8;color:#fff;border-radius:10px;padding:4px 14px;font-size:13px;display:inline-block;}}
 .signal-stop{{background:#e2e8f0;color:#64748b;border-radius:10px;padding:4px 14px;font-size:13px;display:inline-block;}}
 </style>
-<div class="sniper-card">
+<div style="background:#ffffff;border-radius:20px 20px 0 0;padding:22px 26px 16px;
+            box-shadow:0 2px 6px rgba(0,0,0,.06);border:1px solid #f0f0f5;
+            border-bottom:none;color:#1f2937;font-family:'Pretendard','Noto Sans KR',sans-serif;">
   <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:16px;margin-bottom:16px;">
     <div>
       <div class="sniper-name">{_sn}</div>
@@ -2539,7 +2592,39 @@ if "sniper_code" in st.session_state:
       <div class="filter-max">/ 20점</div>
     </div>
   </div>
+  {_hint_bar}
+</div>""")
 
+        # ── 미반영 호재 expander (4대 필살기 박스 바로 아래 — 즉시 클릭 가능) ──
+        if _unref_items:
+            with st.expander(
+                f"🔥 미반영 호재 {len(_unref_items)}건 상세 보기  ← 클릭하면 바로 펼쳐집니다",
+                expanded=False
+            ):
+                st.markdown(
+                    f"**{_sn}** 미반영 호재 **{len(_unref_items)}건** "
+                    f"— 현재가에 아직 반영되지 않은 이벤트 드리븐 기회입니다."
+                )
+                for _uidx, (_unh, _unkt) in enumerate(_unref_items, 1):
+                    st.html(
+                        f'<div style="background:#eff6ff;border-radius:10px;padding:9px 14px;'
+                        f'border-left:4px solid #2563eb;margin-bottom:6px;font-size:13px;'
+                        f'color:#1e3a8a;font-weight:700;">'
+                        f'<span style="background:#2563eb;color:#fff;border-radius:4px;'
+                        f'padding:1px 7px;margin-right:8px;font-size:11px;font-weight:900;">{_uidx}</span>'
+                        f'{_unh}{_unkt}</div>'
+                    )
+
+        # ── 스나이퍼 카드 Part 2: 기술 지표 + AI 분석 + 점수 산출 ──────────
+        st.html(f"""
+<style>
+.ma-row{{display:flex;align-items:center;gap:10px;margin-bottom:5px;font-size:13px;color:#1f2937;}}
+.ma-label{{font-weight:800;min-width:44px;color:#31333F;}}
+.ma-val{{font-weight:900;color:#000000;}}</style>
+<div style="background:#ffffff;border-radius:0 0 20px 20px;padding:16px 26px 22px;
+            box-shadow:0 6px 16px rgba(0,0,0,.08);border:1px solid #f0f0f5;
+            border-top:2px dashed #f1f5f9;color:#1f2937;
+            font-family:'Pretendard','Noto Sans KR',sans-serif;margin-bottom:14px;">
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:14px;">
     <div>
       <div style="font-size:13px;font-weight:800;color:#374151;margin-bottom:8px;">📐 이동평균선 분석</div>
@@ -2591,6 +2676,7 @@ if "sniper_code" in st.session_state:
     <div style="font-size:12px;font-weight:800;color:#374151;margin-bottom:10px;">📊 점수 산출 근거</div>
     {_reason_html}
   </div>
+  {_short_hist_html}
 </div>""")
 
         st.html(f"""
@@ -2603,18 +2689,6 @@ if "sniper_code" in st.session_state:
   </div>
 </div>""")
 
-        # ── 미반영 호재 상세 expander ────────────────────────────────────────
-        if _unref_items:
-            with st.expander(f"🔥 미반영 호재 {len(_unref_items)}건 상세 — 클릭하여 뉴스 헤드라인 확인"):
-                for _uidx, (_unh, _unkt) in enumerate(_unref_items, 1):
-                    st.html(
-                        f'<div style="background:#eff6ff;border-radius:10px;padding:9px 14px;'
-                        f'border-left:3px solid #2563eb;margin-bottom:6px;font-size:13px;'
-                        f'color:#1e3a8a;font-weight:700;font-family:\'Pretendard\',\'Noto Sans KR\',sans-serif;">'
-                        f'<strong style="color:#1e3a8a;margin-right:6px;">{_uidx}.</strong>'
-                        f'{_unh}{_unkt}</div>'
-                    )
-
         # ── 펀더멘털 & 해자 분석 expander ───────────────────────────────────
         with st.expander("📊 기업 펀더멘털 & 경제적 해자 분석 — 클릭하여 보기"):
             _fund = get_fundamentals(_sc, _smkt)
@@ -2626,36 +2700,37 @@ if "sniper_code" in st.session_state:
             ]
             if _fund:
                 _fund_html = (
-                    '<table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:12px;">'
-                    '<thead><tr style="background:#f8fafc;">'
-                    '<th style="padding:9px 12px;text-align:left;color:#1f2937;font-weight:800;border-bottom:2px solid #e2e8f0;">지표</th>'
-                    '<th style="padding:9px 12px;text-align:right;color:#1f2937;font-weight:800;border-bottom:2px solid #e2e8f0;">수치</th>'
-                    '<th style="padding:9px 12px;text-align:left;color:#1f2937;font-weight:800;border-bottom:2px solid #e2e8f0;">42대 필살기 해석</th>'
+                    '<div style="background:#ffffff;color:#000000;border-radius:8px;overflow:hidden;margin-bottom:12px;">'
+                    '<table style="width:100%;border-collapse:collapse;font-size:13px;">'
+                    '<thead><tr style="background:#f0f2f6;">'
+                    '<th style="padding:9px 12px;text-align:left;color:#000000;font-weight:800;border-bottom:2px solid #d1d5db;">지표</th>'
+                    '<th style="padding:9px 12px;text-align:right;color:#000000;font-weight:800;border-bottom:2px solid #d1d5db;">수치</th>'
+                    '<th style="padding:9px 12px;text-align:left;color:#000000;font-weight:800;border-bottom:2px solid #d1d5db;">42대 필살기 해석</th>'
                     '</tr></thead><tbody>'
                 )
                 for _fn, _fv, _ft in _fund_rows:
                     _fund_html += (
-                        f'<tr style="border-bottom:1px solid #f1f5f9;">'
-                        f'<td style="padding:9px 12px;font-weight:700;color:#31333F;">{_fn}</td>'
-                        f'<td style="padding:9px 12px;text-align:right;font-weight:900;color:#1f2937;font-size:16px;">{_fv}</td>'
-                        f'<td style="padding:9px 12px;color:#374151;font-size:12px;font-weight:600;">{_ft}</td>'
+                        f'<tr style="border-bottom:1px solid #e5e7eb;background:#ffffff;">'
+                        f'<td style="padding:9px 12px;font-weight:700;color:#000000;">{_fn}</td>'
+                        f'<td style="padding:9px 12px;text-align:right;font-weight:900;color:#000000;font-size:16px;">{_fv}</td>'
+                        f'<td style="padding:9px 12px;color:#000000;font-size:12px;font-weight:600;">{_ft}</td>'
                         f'</tr>'
                     )
-                _fund_html += '</tbody></table>'
+                _fund_html += '</tbody></table></div>'
                 st.html(_fund_html)
             else:
                 st.caption("yfinance 펀더멘털 데이터 수집 중… 잠시 후 다시 시도해 주세요.")
 
             _moat_lines = _get_moat_analysis(_ss)
             st.html(f"""
-<div style="background:#f8fafc;border-radius:10px;padding:14px 18px;border:1px solid #c7d2fe;">
+<div style="background:#ffffff;border-radius:10px;padding:14px 18px;border:1px solid #c7d2fe;">
   <div style="font-size:12px;font-weight:900;color:#1e1b4b;margin-bottom:10px;">
     🏰 경제적 해자 분석 (42대 필살기 관점 · {_ss} 섹터)
   </div>
-  <div style="font-size:13px;color:#1f2937;line-height:2.1;font-weight:600;">
+  <div style="font-size:13px;color:#000000;line-height:2.1;font-weight:600;">
     {"<br>".join(_moat_lines)}
   </div>
-  <div style="font-size:10px;color:#9ca3af;margin-top:10px;">
+  <div style="font-size:10px;color:#6b7280;margin-top:10px;">
     ※ 섹터 기반 정성 분석 · 투자 판단은 개인 책임
   </div>
 </div>""")
