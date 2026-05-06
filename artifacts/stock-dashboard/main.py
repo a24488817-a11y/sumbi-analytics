@@ -806,8 +806,11 @@ def get_investor_data_naver(ticker: str) -> list:
         for row in tables[3].find_all("tr"):
             cells = [td.get_text(strip=True) for td in row.find_all("td")]
             if len(cells) >= 7 and len(cells[0]) == 10 and cells[0][4] == ".":
-                result.append({"날짜": cells[0], "기관": _int(cells[5]),
-                                "외국인": _int(cells[6]),
+                inst  = _int(cells[5])
+                frgn  = _int(cells[6])
+                indiv = -(inst + frgn)   # 개인 순매수 = -(기관+외국인)
+                result.append({"날짜": cells[0], "기관": inst,
+                                "외국인": frgn, "개인": indiv,
                                 "보유율": _float(cells[8]) if len(cells) > 8 else 0.0})
                 if len(result) >= 5: break
         return result
@@ -916,27 +919,27 @@ def _investor_html_table(inv_data: list, ticker: str) -> str:
         # KRX 기준일이 오늘이 아니면 → 아직 장이 진행 중이거나 데이터 집계 전
         krx_matches_today = (krx_ref_date == today_str)
 
+        _td_pend = lambda txt, color="#9ca3af": (
+            f'<td style="padding:7px 10px;color:{color};font-size:12px;text-align:right;">{txt}</td>'
+        )
         if after_close and krx_matches_today:
-            # 장 마감 후, KRX 기준일=오늘: 가집계 완료됐으나 frgn.naver D+1 반영 대기
             badge_txt   = "가집계완료·확정대기"
-            badge_bg    = "#fef3c7"
-            badge_color = "#92400e"
-            inst_cell   = '<td style="padding:7px 10px;color:#92400e;font-size:12px;text-align:right;">가집계완료 (D+1 반영)</td>'
-            frgn_cell   = '<td style="padding:7px 10px;color:#92400e;font-size:12px;text-align:right;">가집계완료 (D+1 반영)</td>'
+            badge_bg    = "#fef3c7"; badge_color = "#92400e"
+            inst_cell   = _td_pend("가집계완료 (D+1)", "#92400e")
+            frgn_cell   = _td_pend("가집계완료 (D+1)", "#92400e")
+            indiv_cell  = _td_pend("가집계완료 (D+1)", "#92400e")
         elif after_close:
-            # 장 마감 후, KRX 기준일 미확인: 가집계 발표 예정 / 대기
             badge_txt   = "가집계대기"
-            badge_bg    = "#fef3c7"
-            badge_color = "#b45309"
-            inst_cell   = '<td style="padding:7px 10px;color:#9ca3af;font-size:12px;text-align:right;">가집계 발표 대기</td>'
-            frgn_cell   = '<td style="padding:7px 10px;color:#9ca3af;font-size:12px;text-align:right;">가집계 발표 대기</td>'
+            badge_bg    = "#fef3c7"; badge_color = "#b45309"
+            inst_cell   = _td_pend("가집계 대기")
+            frgn_cell   = _td_pend("가집계 대기")
+            indiv_cell  = _td_pend("가집계 대기")
         else:
-            # 장 중
             badge_txt   = "장중"
-            badge_bg    = "#dbeafe"
-            badge_color = "#1d4ed8"
-            inst_cell   = '<td style="padding:7px 10px;color:#9ca3af;font-size:12px;text-align:right;">장중 (미집계)</td>'
-            frgn_cell   = '<td style="padding:7px 10px;color:#9ca3af;font-size:12px;text-align:right;">장중 (미집계)</td>'
+            badge_bg    = "#dbeafe"; badge_color = "#1d4ed8"
+            inst_cell   = _td_pend("장중 (미집계)")
+            frgn_cell   = _td_pend("장중 (미집계)")
+            indiv_cell  = _td_pend("장중 (미집계)")
 
         price_row = _get_sise_today_price(ticker)
         if price_row:
@@ -951,17 +954,14 @@ def _investor_html_table(inv_data: list, ticker: str) -> str:
         else:
             price_td = '<td colspan="2" style="padding:7px 10px;color:#9ca3af;font-size:11px;">가격 로딩 중…</td>'
 
-        rows_html += f"""
-<tr style="background:#fffbeb;border-left:3px solid #f59e0b;">
-  <td style="padding:7px 10px;font-weight:700;">
-    {today_str}
-    <span style="font-size:10px;background:{badge_bg};color:{badge_color};
-                 padding:1px 6px;border-radius:10px;margin-left:4px;">{badge_txt}</span>
-  </td>
-  {inst_cell}
-  {frgn_cell}
-  {price_td}
-</tr>"""
+        badge_span = (f'<span style="font-size:10px;background:{badge_bg};color:{badge_color};'
+                      f'padding:1px 6px;border-radius:10px;margin-left:4px;">{badge_txt}</span>')
+        rows_html += (
+            f'<tr style="background:#fffbeb;border-left:3px solid #f59e0b;">'
+            f'<td style="padding:7px 10px;font-weight:700;">{today_str}{badge_span}</td>'
+            f'{inst_cell}{frgn_cell}{indiv_cell}{price_td}'
+            f'</tr>'
+        )
 
     # ── 확정 행 ───────────────────────────────────────────────────────────────
     for d in inv_data:
@@ -970,6 +970,8 @@ def _investor_html_table(inv_data: list, ticker: str) -> str:
         date_val  = d["날짜"]
         inst_html = _sign_html(d["기관"])
         frgn_html = _sign_html(d["외국인"])
+        indiv_v   = d.get("개인", -(d["기관"] + d["외국인"]))
+        indiv_html = _sign_html(indiv_v)
         hold_str  = f'{d["보유율"]:.2f}%'
         status    = "✅ KRX확정 (최신)" if is_latest else "✅ KRX확정"
         rows_html += (
@@ -977,6 +979,7 @@ def _investor_html_table(inv_data: list, ticker: str) -> str:
             f'<td style="padding:7px 10px;color:#000000;">{date_val}</td>'
             f'<td style="padding:7px 10px;text-align:right;">{inst_html}</td>'
             f'<td style="padding:7px 10px;text-align:right;">{frgn_html}</td>'
+            f'<td style="padding:7px 10px;text-align:right;">{indiv_html}</td>'
             f'<td style="padding:7px 10px;text-align:right;color:#374151;">{hold_str}</td>'
             f'<td style="padding:7px 10px;text-align:right;color:#16a34a;font-size:11px;">{status}</td>'
             f'</tr>'
@@ -984,21 +987,16 @@ def _investor_html_table(inv_data: list, ticker: str) -> str:
 
     # ── 하단 주석 ─────────────────────────────────────────────────────────────
     krx_ref_display = f"KRX 기준: <strong>{krx_ref_date}</strong>" if krx_ref_date else ""
-    if need_provisional:
-        note_extra = (
-            f" | {krx_ref_display}" if krx_ref_display else ""
-        ) + (
-            " | 기관·외국인 가집계는 KRX 공식 포털(data.krx.co.kr) 로그인 후 조회 가능 — "
-            "네이버금융 확정치는 익일 09:00 이후 자동 반영"
-        )
-    else:
-        note_extra = f" | {krx_ref_display}" if krx_ref_display else ""
-
+    note_suffix = (
+        (f" | {krx_ref_display}" if krx_ref_display else "") +
+        (" | 기관·외국인 가집계는 KRX 공식 포털(data.krx.co.kr) 로그인 후 조회 가능 — "
+         "네이버금융 확정치는 당일 ~18:00 KST 자동 반영" if need_provisional else "")
+    )
     note = (
         f'<div style="font-size:11px;color:#9ca3af;margin-top:4px;padding:0 4px;line-height:1.6;">'
-        f'※ 소스: 네이버금융 frgn.naver (기관합계 = 연기금 포함) '
-        f'| KRX 확정 최신일: <strong>{confirmed_date}</strong>'
-        f'{note_extra}'
+        f'※ 소스: 네이버금융 frgn.naver | 기관합계=연기금 포함 | 개인=-(기관+외국인) 산출'
+        f' | KRX 확정 최신일: <strong>{confirmed_date}</strong>'
+        f'{note_suffix}'
         f'</div>'
     )
 
@@ -1008,12 +1006,12 @@ def _investor_html_table(inv_data: list, ticker: str) -> str:
     if need_provisional:
         col_headers = (
             _th("날짜", "left") + _th("기관 순매수(주)") + _th("외국인 순매수(주)") +
-            _th("오늘 종가/등락") + _th("거래량")
+            _th("개인 순매수(주)") + _th("오늘 종가/등락") + _th("거래량")
         )
     else:
         col_headers = (
             _th("날짜", "left") + _th("기관 순매수(주)") + _th("외국인 순매수(주)") +
-            _th("외국인 보유율") + _th("상태")
+            _th("개인 순매수(주)") + _th("외국인 보유율") + _th("상태")
         )
 
     return (
@@ -2232,7 +2230,7 @@ if "sniper_code" in st.session_state:
 
         # ── 뉴스 분류 ────────────────────────────────────────────────────────
         # 1) 종목명 필터링: 해당 종목명이 제목에 포함된 기사만
-        _snews_filtered = filter_news_by_name(_snews, _sname)
+        _snews_filtered = filter_news_by_name(_snews, _sn)
         _news_src = _snews_filtered if _snews_filtered else _snews  # fallback: 전체
         _filtered_note = (f"({len(_snews_filtered)}/{len(_snews)}건 종목 관련)"
                           if _snews_filtered else f"({len(_snews)}건 전체 — 종목명 매칭 없음)")
@@ -2280,7 +2278,7 @@ if "sniper_code" in st.session_state:
                 f'<div style="background:{_sum_color}18;border-radius:10px;padding:9px 14px;'
                 f'margin-bottom:8px;border:1px solid {_sum_color}40;font-size:13px;'
                 f'font-weight:700;color:{_sum_color};">'
-                f'📊 {_sname} 뉴스 종합 (유의미 {_total_sig}건): {_sum_text}</div>'
+                f'📊 {_sn} 뉴스 종합 (유의미 {_total_sig}건): {_sum_text}</div>'
             )
 
             # 4) 탭: 미반영 호재 / 호재 / 악재 (비어있는 탭 제외)
