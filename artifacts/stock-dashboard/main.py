@@ -768,6 +768,40 @@ def fetch_naver_market_list(market: str, max_pages: int = 15) -> pd.DataFrame:
     return df[df["거래대금(억)"] >= 0]
 
 
+def fetch_naver_stock_realtime(ticker: str) -> dict:
+    """Naver 모바일 JSON API로 단일 종목 장중 실시간 현재가·등락률·시가총액·거래대금 수집
+    엔드포인트: m.stock.naver.com/api/stock/{code}/basic (suffix 불필요, 6자리 코드만)
+    반환: {"현재가": int, "등락률": float, "시가총액": float(억), "거래대금": float(억)} or {}
+    """
+    try:
+        url = f"https://m.stock.naver.com/api/stock/{ticker}/basic"
+        r = requests.get(url, headers=NAVER_HDR, timeout=5)
+        if r.status_code != 200:
+            return {}
+        d = r.json()
+        def _clean_num(val) -> float:
+            if val is None:
+                return 0.0
+            return float(str(val).replace(",", "").replace("%", "").strip() or 0)
+        price   = int(_clean_num(d.get("closePrice", 0)))
+        chg_pct = _clean_num(d.get("fluctuationsRatio", 0))
+        # accumulatedTradingValue 는 원 단위
+        trade_val_won = _clean_num(d.get("accumulatedTradingValue", 0))
+        trade_val_eok = round(trade_val_won / 1e8, 1)
+        # marketValue 는 억원 단위
+        mcap_eok = round(_clean_num(d.get("marketValue", 0)), 0)
+        if price <= 0:
+            return {}
+        return {
+            "현재가":    price,
+            "등락률":    chg_pct,
+            "시가총액":  mcap_eok,
+            "거래대금":  trade_val_eok,
+        }
+    except Exception:
+        return {}
+
+
 # ── 뉴스 분류 키워드 ──────────────────────────────────────────────────────────
 _GOOD_KW = [
     "수주","계약체결","계약","임상성공","기술수출","어닝서프라이즈","흑자전환","흑자",
@@ -791,10 +825,13 @@ def classify_news_item(headline: str) -> tuple:
     return "중립", []
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=60)
 def sniper_price(ticker: str, suffix: str, date_str: str) -> dict:
     """단일 종목 가격·기술분석 데이터
-    period='60d' 사용 → 주말·공휴일 직후에도 최근 실제 거래일 자동 선택"""
+    ① yfinance 60d OHLCV → RSI·눌림목·이동평균 계산 (역사 데이터)
+    ② Naver 모바일 API   → 현재가·등락률·거래대금·시가총액 실시간 덮어쓰기
+    period='60d' 사용 → 주말·공휴일 직후에도 최근 실제 거래일 자동 선택
+    ttl=60 → 1분 캐시 (장중 실시간성 확보)"""
     raw = yf.download(
         ticker + suffix,
         period="60d",
@@ -802,7 +839,6 @@ def sniper_price(ticker: str, suffix: str, date_str: str) -> dict:
     )
     if raw.empty:
         return {}
-    # 단일 종목은 컬럼이 MultiIndex 아닐 수 있음
     if isinstance(raw.columns, pd.MultiIndex):
         raw.columns = raw.columns.get_level_values(0)
     if "Close" not in raw.columns:
@@ -811,29 +847,30 @@ def sniper_price(ticker: str, suffix: str, date_str: str) -> dict:
     volume = raw["Volume"].dropna()
     if len(close) < 11:
         return {}
-    cur   = float(close.iloc[-1])
-    prev  = float(close.iloc[-2])
-    vol   = float(volume.iloc[-1])
-    avg20 = float(volume.tail(20).mean())
-    pb    = calc_pullback_score(close, volume)
-    ma5   = float(close.rolling(5).mean().iloc[-1])
-    ma10  = float(close.rolling(10).mean().iloc[-1])
-    ma20_ = float(close.rolling(20).mean().iloc[-1])
-    try:
-        _fi  = yf.Ticker(ticker + suffix).fast_info
-        _cap = getattr(_fi, "market_cap", None)
-        if not (_cap and _cap > 0):
-            _shares = getattr(_fi, "shares", None)
-            _price  = getattr(_fi, "last_price", None)
-            _cap = (_shares * _price) if (_shares and _price and _shares > 0) else 0
-        mcap = round(_cap / 1e8, 0) if (_cap and _cap > 0) else 0.0
-    except Exception:
-        mcap = 0.0
+    cur_yf = float(close.iloc[-1])
+    prev   = float(close.iloc[-2])
+    vol    = float(volume.iloc[-1])
+    avg20  = float(volume.tail(20).mean())
+    pb     = calc_pullback_score(close, volume)
+    ma5    = float(close.rolling(5).mean().iloc[-1])
+    ma10   = float(close.rolling(10).mean().iloc[-1])
+    ma20_  = float(close.rolling(20).mean().iloc[-1])
+
+    # ── ② Naver 실시간 덮어쓰기 ─────────────────────────────────────────────
+    nv = fetch_naver_stock_realtime(ticker)
+    cur       = nv["현재가"]   if nv.get("현재가",   0) > 0 else round(cur_yf)
+    chg_pct   = nv["등락률"]   if nv                         else round((cur_yf - prev) / prev * 100, 2)
+    trade_eok = nv["거래대금"] if nv.get("거래대금", 0) > 0 else round(cur_yf * vol / 1e8, 1)
+    mcap      = nv["시가총액"] if nv.get("시가총액", 0) > 0 else 0.0
+
+    # 수집 시각 (KST, 초 단위)
+    collected_at = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
+
     return {
-        "현재가":      round(cur),
-        "등락률":      round((cur - prev) / prev * 100, 2),
+        "현재가":      cur,
+        "등락률":      chg_pct,
         "거래량비율":  round(vol / avg20 * 100, 1),
-        "거래대금":    round(cur * vol / 1e8, 1),
+        "거래대금":    trade_eok,
         "눌림목점수":  pb["score"],
         "눌림목신호":  pb["signal"],
         "RSI":         pb["rsi"],
@@ -841,6 +878,8 @@ def sniper_price(ticker: str, suffix: str, date_str: str) -> dict:
         "ma10":        round(ma10),
         "ma20":        round(ma20_),
         "시가총액":    mcap,
+        "수집시각":    collected_at,
+        "_naver_ok":   bool(nv),
     }
 
 
@@ -895,11 +934,13 @@ def calc_pullback_score(close_s: pd.Series, vol_s: pd.Series) -> dict:
 
 @st.cache_data(ttl=300)
 def get_price_data(date_str: str, market: str) -> tuple:
-    """전종목 파이프라인 v2.0
-    ① Naver 시가총액 랭킹 전종목 스냅샷 (병렬) → 종목명·시가총액(억) 일괄 취득
+    """전종목 파이프라인 v3.1
+    ① Naver 시가총액 랭킹 전종목 스냅샷 (병렬) → 실시간 현재가·등락률·거래대금·시가총액
     ② 거래대금 상위 300 + 소형/저가주 추가 100 선별 → yfinance 일괄 60d OHLCV
-    ③ RSI·눌림목 계산 후 병합 반환 (yf.fast_info 루프 완전 제거 → 고속화)
-    date_str은 캐시 키 전용; 실다운로드는 항상 최신 60거래일 기준"""
+    ③ RSI·눌림목 계산
+    ④ Naver 실시간값(현재가·등락률·거래대금)으로 yfinance 전일종가 기반값 완전 덮어쓰기
+    date_str은 캐시 키 전용; 실다운로드는 항상 최신 60거래일 기준
+    반환: (df, actual_date, collection_time_kst)"""
     suffix       = SUFFIX[market]
     known_stocks = {**KOSPI_STOCKS, **KOSDAQ_STOCKS}
 
@@ -975,7 +1016,25 @@ def get_price_data(date_str: str, market: str) -> tuple:
         for t in df.index
     ]
 
-    return df.dropna(subset=["현재가", "거래대금(억)"]).query("`거래대금(억)` > 0"), actual_date
+    # ── ④ Naver 실시간값으로 yfinance 전일종가 기반값 완전 덮어쓰기 ──────────
+    # 현재가·등락률·거래대금 은 Naver 스냅샷(장중 누적) 값이 훨씬 정확함
+    if snapshot is not None:
+        snap_rt = snapshot[["현재가", "등락률(%)", "거래대금(억)"]].reindex(df.index)
+        # 유효한 Naver 값만 덮어쓰기 (0·NaN 은 yfinance 값 유지)
+        mask_price = snap_rt["현재가"].notna() & (snap_rt["현재가"] > 0)
+        mask_amt   = snap_rt["거래대금(억)"].notna() & (snap_rt["거래대금(억)"] > 0)
+        df.loc[mask_price, "현재가"]      = snap_rt.loc[mask_price, "현재가"].astype("Int64")
+        df.loc[mask_price, "등락률(%)"]   = snap_rt.loc[mask_price, "등락률(%)"]
+        df.loc[mask_amt,   "거래대금(억)"] = snap_rt.loc[mask_amt,   "거래대금(억)"]
+
+    # 수집 시각 (KST 초 단위) — cache 저장 시점 = 실제 Naver 데이터 수집 시점
+    collection_time = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S KST")
+
+    return (
+        df.dropna(subset=["현재가", "거래대금(억)"]).query("`거래대금(억)` > 0"),
+        actual_date,
+        collection_time,
+    )
 
 
 def score_ticker(ticker: str, row: pd.Series, investor_map: dict, news_map: dict) -> dict:
@@ -1348,6 +1407,11 @@ target_date = st.sidebar.date_input("기준일", datetime.now() - timedelta(days
 date_str = target_date.strftime("%Y%m%d")
 
 st.sidebar.markdown("---")
+if st.sidebar.button("⚡ 실시간 수급/현재가 갱신", use_container_width=True, type="primary"):
+    st.cache_data.clear()
+    st.session_state["analysis_run"] = True
+    st.rerun()
+
 if st.sidebar.button("🔄 데이터 새로고침", use_container_width=True):
     if st.session_state.get("analysis_run"):
         st.cache_data.clear(); st.rerun()
@@ -1412,6 +1476,38 @@ st.html("""
     </div>
 </div>
 """)
+
+# ── 실시간 데이터 수집 시각 배너 ─────────────────────────────────────────────
+_ct_kp = st.session_state.get("kospi_collect_time", "")
+_ct_kq = st.session_state.get("kosdaq_collect_time", "")
+if _ct_kp or _ct_kq:
+    _ct_display = _ct_kp or _ct_kq
+    _naver_src  = "네이버 금융 실시간 API (장중 현재가·등락률·거래대금)"
+    st.html(f"""
+<div style="display:flex;align-items:center;gap:10px;background:#f0fdf4;
+            border:1px solid #bbf7d0;border-radius:10px;padding:8px 16px;
+            margin-bottom:10px;font-size:12px;">
+  <span style="font-size:16px;">📡</span>
+  <div>
+    <span style="font-weight:800;color:#15803d;">실시간 수집 완료</span>
+    <span style="color:#374151;margin-left:8px;">데이터 소스: {_naver_src}</span>
+    <span style="color:#9ca3af;margin-left:12px;">|</span>
+    <span style="font-weight:700;color:#15803d;margin-left:12px;">수집 시각: {_ct_display}</span>
+  </div>
+</div>""")
+else:
+    st.html("""
+<div style="display:flex;align-items:center;gap:10px;background:#fff7ed;
+            border:1px solid #fed7aa;border-radius:10px;padding:8px 16px;
+            margin-bottom:10px;font-size:12px;">
+  <span style="font-size:16px;">⚡</span>
+  <div>
+    <span style="font-weight:800;color:#c2410c;">분석 대기 중</span>
+    <span style="color:#374151;margin-left:8px;">
+      사이드바의 <strong>⚡ 실시간 수급/현재가 갱신</strong> 버튼을 눌러 장중 실시간 데이터를 수집하세요.
+    </span>
+  </div>
+</div>""")
 
 # ── 지수 전광판 — CSS Grid (모바일 강제 2×2, 데스크톱 1×4) ──────────────────
 macro = get_macro_indices()
@@ -1596,6 +1692,27 @@ if "sniper_code" in st.session_state:
             _s_badges += "<span class='badge badge-explode'>💥 공매도 상환 감지</span> "
         if _sscore.get("안전핀"):
             _s_badges += "<span class='badge badge-safe'>🛡️ 안전핀 타점</span>"
+
+        # 수집시각 & 데이터소스 배지
+        _collected_at = _sp.get("수집시각", "")
+        _naver_ok     = _sp.get("_naver_ok", False)
+        _src_label    = "📡 네이버 금융 실시간 API" if _naver_ok else "📊 yfinance (전일 종가)"
+        _src_color    = "#15803d" if _naver_ok else "#b45309"
+        _src_bg       = "#f0fdf4" if _naver_ok else "#fffbeb"
+        _src_border   = "#bbf7d0" if _naver_ok else "#fde68a"
+
+        _time_span = (
+            f'<span style="color:#9ca3af;margin-left:8px;">수집 시각: '
+            f'<strong style="color:{_src_color};">{_collected_at}</strong></span>'
+            if _collected_at else ""
+        )
+        st.html(f"""
+<div style="display:flex;align-items:center;gap:10px;background:{_src_bg};
+            border:1px solid {_src_border};border-radius:8px;padding:6px 14px;
+            margin-bottom:8px;font-size:11px;">
+  <span style="font-weight:800;color:{_src_color};">{_src_label}</span>
+  {_time_span}
+</div>""")
 
         st.html(f"""
 <div class="sniper-card">
@@ -1786,18 +1903,20 @@ st.html("""
 # ───────────────────────────────────────────────────────────────────────────────
 if st.session_state.get("analysis_run"):
     with st.spinner("📈 KOSPI · KOSDAQ 주가 데이터 동시 수집 중…"):
-        _kp_df, _kp_date = get_price_data(date_str, "KOSPI")
-        _kq_df, _kq_date = get_price_data(date_str, "KOSDAQ")
+        _kp_df, _kp_date, _kp_ctime = get_price_data(date_str, "KOSPI")
+        _kq_df, _kq_date, _kq_ctime = get_price_data(date_str, "KOSDAQ")
 
     if _kp_df is not None and not _kp_df.empty:
-        st.session_state["kospi_result"] = _kp_df
-        st.session_state["kospi_date"]   = _kp_date
+        st.session_state["kospi_result"]       = _kp_df
+        st.session_state["kospi_date"]         = _kp_date
+        st.session_state["kospi_collect_time"] = _kp_ctime
     else:
         st.session_state["kospi_result"] = None
 
     if _kq_df is not None and not _kq_df.empty:
-        st.session_state["kosdaq_result"] = _kq_df
-        st.session_state["kosdaq_date"]   = _kq_date
+        st.session_state["kosdaq_result"]       = _kq_df
+        st.session_state["kosdaq_date"]         = _kq_date
+        st.session_state["kosdaq_collect_time"] = _kq_ctime
     else:
         st.session_state["kosdaq_result"] = None
 
