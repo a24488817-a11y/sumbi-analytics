@@ -830,6 +830,51 @@ def get_investor_batch(tickers: tuple) -> dict:
     return {t: get_investor_data_naver(t) for t in tickers}
 
 
+def _analyze_investor_flow(inv_data: list) -> dict:
+    """5거래일 기관·외국인·개인 누적 수급 분석 → 42대 관점 직관적 결론 도출 (표시 전용, 점수 무영향)."""
+    if not inv_data:
+        return {"verdict": "수급 데이터 없음", "color": "#94a3b8",
+                "inst": 0, "frgn": 0, "indiv": 0, "days": 0}
+    inst  = sum(d.get("기관",   0) for d in inv_data)
+    frgn  = sum(d.get("외국인", 0) for d in inv_data)
+    indiv = sum(d.get("개인",   0) for d in inv_data)
+    days  = len(inv_data)
+
+    if inst > 0 and frgn > 0 and (inst + frgn) > 200_000:
+        verdict = "🔥 세력 쌍끌이 초강세 매집 — 기관·외국인 동반 대규모 순매수. 42대 최강 시그널."
+        color   = "#dc2626"
+    elif inst > 0 and frgn > 0:
+        verdict = "✅ 기관·외국인 동반 매수 — 스마트머니 쌍끌이 유입 확인. 눌림목 타점 유효."
+        color   = "#059669"
+    elif inst > 200_000:
+        verdict = "✅ 기관 대규모 주도 매집 — 연기금 포함 지속 순매수. 하방 지지 강함."
+        color   = "#059669"
+    elif inst > 0:
+        verdict = "→ 기관 소폭 순매수 — 초기 매집 신호. 연속성·외국인 동반 여부 확인 필요."
+        color   = "#2563eb"
+    elif frgn > 200_000:
+        verdict = "✅ 외국인 집중 매집 — 글로벌 자금 대규모 유입. 외인 보유율 상승 추세."
+        color   = "#2563eb"
+    elif frgn > 0:
+        verdict = "→ 외국인 소폭 순매수 — 방향성 탐색 중. 기관 동반 여부가 핵심."
+        color   = "#2563eb"
+    elif indiv > 0 and inst < 0 and frgn < 0:
+        verdict = "⚠️ 개인 물량 떠넘기기 — 기관·외국인 동반 이탈. 추격매수 위험 구간."
+        color   = "#f59e0b"
+    elif inst < 0 and frgn < 0:
+        verdict = "🔵 기관·외국인 동반 매도 — 쌍끌이 이탈. 방어적 포지션 권고."
+        color   = "#6b7280"
+    elif inst < -200_000:
+        verdict = "🔵 기관 대규모 이탈 — 연속 매도. 추격매수 금지."
+        color   = "#6b7280"
+    else:
+        verdict = "→ 수급 방향성 불명확 — 관망 또는 개별 이벤트 촉매 주시."
+        color   = "#94a3b8"
+
+    return {"verdict": verdict, "color": color,
+            "inst": inst, "frgn": frgn, "indiv": indiv, "days": days}
+
+
 @st.cache_data(ttl=300, show_spinner=False)
 def get_short_balance_naver(ticker: str) -> dict:
     """네이버 공매도 현황에서 최근 5거래일 공매도 잔고 수집 (표시 전용, 42대 점수 무영향).
@@ -1239,6 +1284,34 @@ def get_naver_news(ticker: str) -> list:
         return []
 
 
+def get_naver_news_full(ticker: str) -> list:
+    """뉴스 최대 30건 수집 — {title, url, date} 딕셔너리 반환 (표시 전용, 42대 점수 무영향)."""
+    try:
+        r = requests.get(
+            f"https://finance.naver.com/item/news_news.naver?code={ticker}&page=1",
+            headers=NAVER_HDR, timeout=6)
+        r.encoding = "euc-kr"
+        soup = BeautifulSoup(r.text, "html.parser")
+        out = []
+        for row in soup.select("table.type5 tr"):
+            t_el = row.select_one("td.title a")
+            d_el = row.select_one("td.date")
+            if t_el and d_el:
+                title = t_el.get_text(strip=True)
+                href  = t_el.get("href", "")
+                if title:
+                    url = (f"https://finance.naver.com{href}"
+                           if href.startswith("/") else href)
+                    out.append({
+                        "title": title,
+                        "url":   url,
+                        "date":  d_el.get_text(strip=True),
+                    })
+        return out[:30]
+    except Exception:
+        return []
+
+
 def filter_news_by_name(headlines: list, stock_name: str) -> list:
     """종목명이 제목에 포함된 뉴스만 반환. 종목명이 없으면 전체 반환."""
     if not stock_name:
@@ -1375,23 +1448,54 @@ def fetch_naver_stock_realtime(ticker: str) -> dict:
 
 # ── 뉴스 분류 키워드 ──────────────────────────────────────────────────────────
 _GOOD_KW = [
-    "수주","계약체결","계약","임상성공","기술수출","어닝서프라이즈","흑자전환","흑자",
-    "신사업","투자유치","특허","수혜","정책수혜","매출증가","수출","배당증가",
-    "자사주매입","자사주","깜짝실적","실적개선","신고가","급등","호실적","수주잔고",
-    "영업이익","순이익 증가","매출 증가","증익","회복","반등","상향","목표가 상향",
+    # 수주·계약
+    "수주","계약체결","계약","수주잔고","수주 공시","대형 계약","신규 수주",
+    "MOU","업무협약","협약 체결","LOI","의향서",
+    # 실적·이익
+    "어닝서프라이즈","흑자전환","흑자","깜짝실적","실적개선","호실적",
+    "영업이익 증가","영업이익 흑자","순이익 증가","매출 증가","매출증가","증익",
+    "사상 최대","최대 실적","역대 최대","분기 최대",
+    # 기술·특허
+    "기술수출","기술이전","임상성공","임상 성공","FDA 승인","품목허가","허가 획득",
+    "특허 등록","특허권","특허 취득","신기술","독자 기술",
+    # 주주환원
+    "자사주매입","자사주 매입","배당증가","배당 확대","특별배당","주주환원",
+    # 투자·성장
+    "신사업","투자유치","지분투자","증설","공장 착공","생산 확대",
+    "수출","수출 확대","해외 진출","글로벌 시장",
+    # 주가
+    "신고가","급등","상향","목표가 상향","목표주가 상향","투자의견 상향",
+    "회복","반등","강세","돌파",
+    # 업종 특화
+    "HBM","엔비디아 납품","AI 반도체","LNG선","VLCC","암모니아","그린수소",
+    "방산 수주","K방산","수출 계약","선수금","친환경","ESG",
 ]
 _BAD_KW = [
-    "적자","손실","소송","제재","횡령","배임","부도","파산","리콜","감소",
-    "취소","지연","하락","전환사채","유상증자","오버행","조사착수","피소",
-    "징계","과태료","하향","경고","불공정","압수수색","혐의","기소",
-    "실적 부진","영업손실","매출 감소","구조조정","대량해고","파업",
+    # 경영 리스크
+    "적자","영업손실","순손실","흑자전환 실패","실적 부진","실적 악화",
+    "횡령","배임","분식","압수수색","기소","혐의","조사착수","검찰",
+    "소송","피소","패소","법적 분쟁","불공정거래",
+    # 재무 희석
+    "유상증자","전환사채","신주인수권","오버행","블록딜","대량 매도",
+    # 사업 이슈
+    "부도","파산","워크아웃","법정관리","거래정지","상장폐지",
+    "리콜","결함","리스크","취소","해지","계약 해지","지연","납기 지연",
+    "파업","노사갈등","생산 중단","공장 화재",
+    # 규제·제재
+    "제재","징계","과태료","경고","행정처분","영업정지",
+    "감소","하락","하향","목표가 하향","투자의견 하향",
+    "구조조정","대량해고","인력 감축","매출 감소",
+    # HBM 등 업종 특화
+    "HBM 탈락","납품 취소","수주 취소","계약 파기",
 ]
 # 미반영 호재 판단 키워드: 호재 키워드와 동시에 존재 시 → 미반영 호재
 _UNREF_KW = [
-    "깜짝","서프라이즈","어닝서프라이즈","예상 외","예상밖","예상보다","처음",
-    "신규","전격","돌발","긴급","당일","首","첫","사상 최초","사상최초",
-    "목표가 상향","전망 상향","상향 조정","기대감","미반영","잠재","가능성",
-    "향후","내년","중장기","모멘텀","촉매","호재 예상","상승 여력",
+    "깜짝","서프라이즈","어닝서프라이즈","예상 외","예상밖","예상보다",
+    "신규","전격","돌발","긴급","사상 최초","사상최초","처음으로","첫",
+    "목표가 상향","전망 상향","상향 조정","상향","목표주가",
+    "기대감","미반영","잠재","가능성","향후","내년","중장기",
+    "모멘텀","촉매","호재 예상","상승 여력","추가 수주","연속 수주",
+    "긍정적","낙관","주목","선취매","기관 매집","외국인 매집",
 ]
 
 def classify_news_item(headline: str) -> tuple:
@@ -2228,9 +2332,11 @@ if "sniper_code" in st.session_state:
     _sfx  = SUFFIX[_smkt]
 
     with st.spinner(f"🎯 {_sn}({_sc}) 정밀 해부 중 — 4대 필살기 가동…"):
-        _sp    = sniper_price(_sc, _sfx, date_str)
-        _sinv  = get_investor_data_naver(_sc)
-        _snews = get_naver_news(_sc)
+        _sp        = sniper_price(_sc, _sfx, date_str)
+        _sinv      = get_investor_data_naver(_sc)
+        _snews     = get_naver_news(_sc)
+        _snews_full = get_naver_news_full(_sc)   # URL 포함 전체 뉴스 (표시 전용)
+        _flow      = _analyze_investor_flow(_sinv)  # 5거래일 수급 결론 (표시 전용)
 
     if not _sp:
         st.warning(f"⚠️ {_sn}({_sc}) 가격 데이터를 수집하지 못했습니다. 기준일을 변경해 보세요.")
@@ -2287,14 +2393,31 @@ if "sniper_code" in st.session_state:
         _news_src       = _snews_filtered if _snews_filtered else _snews
         _filtered_note  = (f"({len(_snews_filtered)}/{len(_snews)}건 종목 관련)"
                            if _snews_filtered else f"({len(_snews)}건 전체 — 종목명 매칭 없음)")
+
+        # full 뉴스(URL 포함) 필터링 — 종목명 매칭
+        _name_variants = [_sn] + ([_sn[:3]] if len(_sn) > 3 else [])
+        _snews_full_filtered = (
+            [_nf for _nf in _snews_full
+             if any(v in _nf["title"] for v in _name_variants)]
+            or _snews_full
+        )
+
         _unref_items = []; _good_items = []; _bad_items = []
+        # URL 매핑 (title 기반 빠른 조회)
+        _url_map = {_nf["title"]: _nf["url"] for _nf in _snews_full}
+        _date_map = {_nf["title"]: _nf["date"] for _nf in _snews_full}
+
         for _nh in _news_src:
+            # _nh 형식: "[날짜] 제목" → 제목 추출
+            _nh_title = _nh[12:].strip() if _nh.startswith("[") and "]" in _nh[:13] else _nh
             _nc, _nk = classify_news_item(_nh)
             _nkt = (f'<span style="font-size:10px;color:#6b7280;margin-left:4px;">'
                     f'[{", ".join(_nk)}]</span>' if _nk else "")
-            if   _nc == "미반영 호재": _unref_items.append((_nh, _nkt))
-            elif _nc == "호재":        _good_items.append((_nh, _nkt))
-            elif _nc == "악재":        _bad_items.append((_nh, _nkt))
+            _nurl = _url_map.get(_nh_title, "")
+            _item = (_nh, _nkt, _nurl)
+            if   _nc == "미반영 호재": _unref_items.append(_item)
+            elif _nc == "호재":        _good_items.append(_item)
+            elif _nc == "악재":        _bad_items.append(_item)
         _total_sig = len(_unref_items) + len(_good_items) + len(_bad_items)
         _all_pos_items = _unref_items + _good_items  # 미반영 호재 + 호재 통합
         if _unref_items:
@@ -2635,10 +2758,16 @@ if "sniper_code" in st.session_state:
                         f"(미반영 호재 {len(_unref_items)}건 + 호재 {len(_good_items)}건)"
                         f" — 현재가에 반영되지 않은 이벤트 드리븐 기회입니다."
                     )
-                    for _uidx, (_unh, _unkt) in enumerate(_all_pos_items, 1):
+                    for _uidx, (_unh, _unkt, _uurl) in enumerate(_all_pos_items, 1):
                         _is_unref = _uidx <= len(_unref_items)
                         _tag_color = "#2563eb" if _is_unref else "#059669"
                         _tag_txt   = "미반영" if _is_unref else "호재"
+                        _link_html = (
+                            f' <a href="{_uurl}" target="_blank" '
+                            f'style="font-size:10px;color:{_tag_color};font-weight:700;'
+                            f'text-decoration:none;border-bottom:1px solid {_tag_color}40;">'
+                            f'🔗 원문</a>' if _uurl else ""
+                        )
                         st.html(
                             f'<div style="background:#f0fdf4;border-radius:10px;padding:9px 14px;'
                             f'border-left:4px solid {_tag_color};margin-bottom:6px;font-size:13px;'
@@ -2646,13 +2775,25 @@ if "sniper_code" in st.session_state:
                             f'<span style="background:{_tag_color};color:#fff;border-radius:4px;'
                             f'padding:1px 7px;margin-right:8px;font-size:11px;font-weight:900;">'
                             f'{_uidx} {_tag_txt}</span>'
-                            f'{_unh}{_unkt}</div>'
+                            f'{_unh}{_link_html}{_unkt}</div>'
                         )
                 else:
-                    st.caption(
-                        f"뉴스 점수 {_news_s:.0f}점이 감지되었으나 개별 뉴스 분류가 어렵습니다. "
-                        f"아래 전체 뉴스 분류 탭에서 확인하세요."
-                    )
+                    # 점수는 있지만 키워드 미매칭 → 전체 뉴스 목록 출력
+                    if _snews_full_filtered:
+                        st.caption(f"키워드 분류 결과 없음 — 수집된 뉴스 {len(_snews_full_filtered)}건 전체 표시")
+                        _fb_html = ""
+                        for _nf in _snews_full_filtered[:10]:
+                            _fb_html += (
+                                f'<div style="margin-bottom:5px;padding:7px 10px;border-radius:7px;'
+                                f'background:#f8fafc;border-left:3px solid #cbd5e1;font-size:12px;color:#374151;">'
+                                f'<span style="color:#9ca3af;margin-right:6px;">{_nf["date"]}</span>'
+                                f'<a href="{_nf["url"]}" target="_blank" '
+                                f'style="color:#1f2937;font-weight:600;text-decoration:none;">'
+                                f'{_nf["title"]}</a></div>'
+                            )
+                        st.html(_fb_html)
+                    else:
+                        st.caption(f"뉴스 점수 {_news_s:.0f}점 감지 — 수집된 뉴스가 없거나 분류가 어렵습니다.")
 
         # ── 스나이퍼 카드 Part 2: 기술 지표 + AI 분석 + 점수 산출 ──────────
         st.html(f"""
@@ -2802,6 +2943,50 @@ if "sniper_code" in st.session_state:
         )
         st.html(_investor_html_table(_sinv, _sc))
 
+        # ── 5거래일 수급 결론 카드 ────────────────────────────────────────────
+        if _sinv:
+            _fi  = _flow["inst"];  _ff = _flow["frgn"]; _fid = _flow["indiv"]
+            _fv  = _flow["verdict"]; _fc = _flow["color"]; _fdays = _flow["days"]
+            def _fmt_flow(v):
+                if v == 0: return "0"
+                sign = "▲" if v > 0 else "▼"
+                return f"{sign}{abs(v):,}"
+            def _flow_color(v):
+                return "#ef4444" if v > 0 else "#1d6ce8" if v < 0 else "#9ca3af"
+            _fi_c  = _flow_color(_fi)
+            _ff_c  = _flow_color(_ff)
+            _fid_c = _flow_color(_fid)
+            _fi_str  = _fmt_flow(_fi)
+            _ff_str  = _fmt_flow(_ff)
+            _fid_str = _fmt_flow(_fid)
+            st.html(f"""
+<div style="background:{_fc}12;border-radius:12px;padding:12px 16px;margin:8px 0 10px;
+            border:1.5px solid {_fc}40;font-family:'Pretendard','Noto Sans KR',sans-serif;">
+  <div style="font-size:13px;font-weight:900;color:{_fc};margin-bottom:8px;">
+    📊 최근 {_fdays}거래일 누적 수급 결론
+  </div>
+  <div style="font-size:14px;font-weight:800;color:#1f2937;margin-bottom:10px;line-height:1.6;">
+    {_fv}
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;">
+    <div style="background:#fff;border-radius:8px;padding:7px 10px;border:1px solid #e2e8f0;text-align:center;">
+      <div style="font-size:10px;color:#6b7280;font-weight:700;margin-bottom:3px;">🏦 기관 누적</div>
+      <div style="font-size:15px;font-weight:900;color:{_fi_c};">{_fi_str}</div>
+    </div>
+    <div style="background:#fff;border-radius:8px;padding:7px 10px;border:1px solid #e2e8f0;text-align:center;">
+      <div style="font-size:10px;color:#6b7280;font-weight:700;margin-bottom:3px;">🌍 외국인 누적</div>
+      <div style="font-size:15px;font-weight:900;color:{_ff_c};">{_ff_str}</div>
+    </div>
+    <div style="background:#fff;border-radius:8px;padding:7px 10px;border:1px solid #e2e8f0;text-align:center;">
+      <div style="font-size:10px;color:#6b7280;font-weight:700;margin-bottom:3px;">👤 개인 누적</div>
+      <div style="font-size:15px;font-weight:900;color:{_fid_c};">{_fid_str}</div>
+    </div>
+  </div>
+  <div style="font-size:10px;color:#9ca3af;margin-top:8px;">
+    ※ 단위: 주식 수 기준 · 표시 전용 · 42대 점수 무영향
+  </div>
+</div>""")
+
         # ── 뉴스 분류 ────────────────────────────────────────────────────────
         # 분류는 카드 렌더링 전 사전 계산됨 (위 pre-compute 섹션 참조)
         if _news_src:
@@ -2830,12 +3015,18 @@ if "sniper_code" in st.session_state:
                 for _tab_ui, (_label, _items, _color, _cls) in zip(_tabs, _tab_defs):
                     with _tab_ui:
                         _html_block = ""
-                        for _h, _kw_tag in _items:
+                        for _h, _kw_tag, _hurl in _items:
                             _icon = "🔥" if "미반영" in _label else ("🟢" if "호재" in _label else "🔴")
+                            _link = (
+                                f' <a href="{_hurl}" target="_blank" '
+                                f'style="font-size:10px;color:{_color};text-decoration:none;'
+                                f'border-bottom:1px solid {_color}40;font-weight:700;">🔗 원문</a>'
+                                if _hurl else ""
+                            )
                             _html_block += (
                                 f'<div class="{_cls}" style="margin-bottom:6px;padding:8px 10px;'
                                 f'border-radius:7px;border-left:3px solid {_color};">'
-                                f'{_icon} {_h}{_kw_tag}</div>'
+                                f'{_icon} {_h}{_link}{_kw_tag}</div>'
                             )
                         st.html(_html_block)
             else:

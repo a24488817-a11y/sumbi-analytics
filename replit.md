@@ -15,7 +15,7 @@ Primary product: **숨비 애널리틱스 (SOOMBI Analytics)** — Korean KRX st
 - **Database**: PostgreSQL + Drizzle ORM
 - **Validation**: Zod (`zod/v4`), `drizzle-zod`
 - **Build**: esbuild (CJS bundle)
-- **Stock Dashboard**: Python 3 + Streamlit, `artifacts/stock-dashboard/main.py` (~3100 lines)
+- **Stock Dashboard**: Python 3.11 + Streamlit, `artifacts/stock-dashboard/main.py` (~3530 lines)
 
 ## Key Commands
 
@@ -38,6 +38,8 @@ Primary product: **숨비 애널리틱스 (SOOMBI Analytics)** — Korean KRX st
 - `_get_krx_ref_date(ttl=60s)` — frgn.naver em.date KRX 기준일 파싱 (표시 전용)
 - `_get_sise_today_price(ttl=60s)` — sise_day.naver 당일 가격 (잠정 행 전용)
 - `_investor_html_table()` — 잠정/확정 이원화 HTML 테이블 렌더러
+- `_analyze_investor_flow(inv_data)` — 5거래일 누적 수급 분석 → 결론 도출 (표시 전용)
+- `get_naver_news_full(ticker)` — URL 포함 뉴스 수집 `{title, url, date}` (표시 전용)
 
 ## Architecture Decisions
 
@@ -52,7 +54,8 @@ Primary product: **숨비 애널리틱스 (SOOMBI Analytics)** — Korean KRX st
 - KOSPI / KOSDAQ 동시 분석 (거래대금 상위 15종목 자동 선별)
 - 42대 필살기: 기관/연기금(30점) + 공매도상환(20점) + 눌림목(30점) + 뉴스호재(20점)
 - 단일 종목 정밀 스나이퍼: 기관·외국인 수급 잠정/확정 이원화 표시
-- 종목별 뉴스 호재·악재·중립 자동 분류
+- 종목별 뉴스 호재·악재·중립 자동 분류 (🔗 원문 링크 포함)
+- **5거래일 수급 결론 카드**: 기관·외국인·개인 누적 → "세력 쌍끌이 매집" / "개인 물량 떠넘기기" 등 직관적 판정
 - KRX 시장 상태 실시간 표시 (장 중 / 장 마감 / 공휴일)
 - **심층 팩트체크**: 블록딜·오버행·수주·유상증자 등 10+7종 키워드 자동 감지 → 핵심 분석 카드
 - **기업 펀더멘털**: yfinance PER/PBR/ROE + 12개 섹터 해자 분석 3줄 (expander)
@@ -64,6 +67,7 @@ Primary product: **숨비 애널리틱스 (SOOMBI Analytics)** — Korean KRX st
 - `get_fundamentals(ticker, market, ttl=3600s)` — yfinance PER/PBR/ROE (표시 전용)
 - `_get_moat_analysis(sector)` — 12개 섹터 해자 DB 3줄 분석 (표시 전용)
 - `_build_factcheck_alerts(news_list, stock_name)` — 블록딜·수주 등 키워드 감지 (표시 전용)
+- `_analyze_investor_flow(inv_data)` — 누적 수급 결론 도출 (표시 전용)
 
 ## Gotchas
 
@@ -71,3 +75,6 @@ Primary product: **숨비 애널리틱스 (SOOMBI Analytics)** — Korean KRX st
 - `st.html()` 내부에 CSS 클래스 사용 시 반드시 해당 `st.html()` 블록 안에 `<style>` 포함
 - frgn.naver는 당일 저녁(~18:00 KST)에 확정치 반영. TTL=60s가 자동 감지.
 - sise_day.naver의 전일비 컬럼 형식: "상승33,500" / "하락1,000" — 숫자 파싱 시 한글 제거 필요
+- Python 3.11: f-string 내 중첩 따옴표 불가 — 색상값은 반드시 변수로 미리 추출 후 참조
+- 뉴스 아이템은 3-튜플 `(headline_str, kw_tag_html, url_str)` — 기존 2-튜플과 혼용 금지
+- `_GOOD_KW`/`_BAD_KW`/`_UNREF_KW` 에 업종 특화 키워드 포함 (HBM, LNG선, K방산 등)
