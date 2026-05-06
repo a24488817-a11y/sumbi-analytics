@@ -830,17 +830,91 @@ def get_investor_batch(tickers: tuple) -> dict:
     return {t: get_investor_data_naver(t) for t in tickers}
 
 
+@st.cache_data(ttl=60, show_spinner=False)
+def _get_investor_detail_naver(ticker: str) -> list:
+    """기관·외국인·개인·기타법인 4주체 순매수 상세 데이터 (표시 전용, 42대 점수 무영향).
+
+    frgn.naver 테이블 cells[7]에서 개인 순매수를 직접 파싱하고
+    기타법인 = -(개인 + 기관 + 외국인) 으로 역산한다.
+    기타법인 대규모 순매도 = 블록딜 물량 출회 핵심 신호.
+    """
+    try:
+        r = requests.get("https://finance.naver.com/item/frgn.naver",
+                         headers=NAVER_HDR, params={"code": ticker}, timeout=8)
+        r.encoding = "euc-kr"
+        soup = BeautifulSoup(r.text, "html.parser")
+        tables = soup.find_all("table")
+        if len(tables) < 4:
+            return []
+
+        def _int_or_none(s: str):
+            s = s.replace(",","").replace("+","")
+            for w in ("상승","하락","보합"): s = s.replace(w,"")
+            try:    return int(s)
+            except: return None
+
+        def _float(s: str) -> float:
+            try:    return float(s.replace("%","").strip())
+            except: return 0.0
+
+        result = []
+        for row in tables[3].find_all("tr"):
+            cells = [td.get_text(strip=True) for td in row.find_all("td")]
+            if len(cells) >= 7 and len(cells[0]) == 10 and cells[0][4] == ".":
+                inst = _int_or_none(cells[5]) or 0
+                frgn = _int_or_none(cells[6]) or 0
+
+                # cells[7] 직접 파싱 시도 → 개인 순매수
+                indiv_parsed = _int_or_none(cells[7]) if len(cells) > 7 else None
+
+                if indiv_parsed is not None:
+                    # 기타법인 역산: 개인+기관+외국인+기타법인 ≈ 0 (시장 전체 합)
+                    other = -(inst + frgn + indiv_parsed)
+                    # 비현실적으로 크면 파싱 실패로 간주 (5000만주 초과)
+                    if abs(other) < 50_000_000:
+                        indiv = indiv_parsed
+                    else:
+                        indiv = -(inst + frgn)
+                        other = 0
+                else:
+                    indiv = -(inst + frgn)
+                    other = 0
+
+                hold_r = _float(cells[8]) if len(cells) > 8 else 0.0
+                result.append({
+                    "날짜": cells[0],
+                    "기관": inst,
+                    "외국인": frgn,
+                    "개인": indiv,
+                    "기타법인": other,
+                    "보유율": hold_r,
+                })
+                if len(result) >= 5:
+                    break
+        return result
+    except Exception:
+        return []
+
+
 def _analyze_investor_flow(inv_data: list) -> dict:
-    """5거래일 기관·외국인·개인 누적 수급 분석 → 42대 관점 직관적 결론 도출 (표시 전용, 점수 무영향)."""
+    """5거래일 기관·외국인·개인·기타법인 누적 수급 분석 → 42대 관점 직관적 결론 도출 (표시 전용, 점수 무영향)."""
     if not inv_data:
         return {"verdict": "수급 데이터 없음", "color": "#94a3b8",
-                "inst": 0, "frgn": 0, "indiv": 0, "days": 0}
-    inst  = sum(d.get("기관",   0) for d in inv_data)
-    frgn  = sum(d.get("외국인", 0) for d in inv_data)
-    indiv = sum(d.get("개인",   0) for d in inv_data)
+                "inst": 0, "frgn": 0, "indiv": 0, "other": 0, "days": 0}
+    inst  = sum(d.get("기관",    0) for d in inv_data)
+    frgn  = sum(d.get("외국인",  0) for d in inv_data)
+    indiv = sum(d.get("개인",    0) for d in inv_data)
+    other = sum(d.get("기타법인", 0) for d in inv_data)
     days  = len(inv_data)
 
-    if inst > 0 and frgn > 0 and (inst + frgn) > 200_000:
+    # ── 기타법인 대량 매도 + 개인 전량 수취 → 최악의 블록딜 오버행 패턴 ──────
+    if other < -200_000 and indiv > 200_000 and inst < 0 and frgn < 0:
+        verdict = "🚨 최악 수급 구조 — 기타법인(블록딜) 대량 매도 물량을 개인이 전량 수취. 스마트머니 전원 이탈."
+        color   = "#7f1d1d"
+    elif other < -100_000 and indiv > 0 and inst <= 0:
+        verdict = "⚠️ 기타법인 블록딜 의심 — 기타법인 대량 매도, 개인 수취 구조. 기관 재진입 전 관망."
+        color   = "#b45309"
+    elif inst > 0 and frgn > 0 and (inst + frgn) > 200_000:
         verdict = "🔥 세력 쌍끌이 초강세 매집 — 기관·외국인 동반 대규모 순매수. 42대 최강 시그널."
         color   = "#dc2626"
     elif inst > 0 and frgn > 0:
@@ -872,7 +946,7 @@ def _analyze_investor_flow(inv_data: list) -> dict:
         color   = "#94a3b8"
 
     return {"verdict": verdict, "color": color,
-            "inst": inst, "frgn": frgn, "indiv": indiv, "days": days}
+            "inst": inst, "frgn": frgn, "indiv": indiv, "other": other, "days": days}
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -1339,6 +1413,9 @@ def _investor_html_table(inv_data: list, ticker: str) -> str:
             f'</tr>'
         )
 
+    # 기타법인 열 존재 여부 확인 (데이터에 기타법인 키가 있고 0이 아닌 경우)
+    has_other = any(d.get("기타법인", 0) != 0 for d in inv_data)
+
     # ── 확정 행 ───────────────────────────────────────────────────────────────
     for d in inv_data:
         is_latest  = (d["날짜"] == confirmed_date)
@@ -1348,14 +1425,20 @@ def _investor_html_table(inv_data: list, ticker: str) -> str:
         frgn_html = _sign_html(d["외국인"])
         indiv_v   = d.get("개인", -(d["기관"] + d["외국인"]))
         indiv_html = _sign_html(indiv_v)
+        other_v   = d.get("기타법인", 0)
         hold_str  = f'{d["보유율"]:.2f}%'
         status    = "✅ KRX확정 (최신)" if is_latest else "✅ KRX확정"
+        other_cell = (
+            f'<td style="padding:7px 10px;text-align:right;">{_sign_html(other_v)}</td>'
+            if has_other else ""
+        )
         rows_html += (
             f'<tr style="background:{row_bg};border-bottom:1px solid #f1f5f9;">'
             f'<td style="padding:7px 10px;color:#000000;">{date_val}</td>'
             f'<td style="padding:7px 10px;text-align:right;">{inst_html}</td>'
             f'<td style="padding:7px 10px;text-align:right;">{frgn_html}</td>'
             f'<td style="padding:7px 10px;text-align:right;">{indiv_html}</td>'
+            f'{other_cell}'
             f'<td style="padding:7px 10px;text-align:right;color:#374151;">{hold_str}</td>'
             f'<td style="padding:7px 10px;text-align:right;color:#16a34a;font-size:11px;">{status}</td>'
             f'</tr>'
@@ -1370,25 +1453,28 @@ def _investor_html_table(inv_data: list, ticker: str) -> str:
     )
     note = (
         f'<div style="font-size:11px;color:#9ca3af;margin-top:4px;padding:0 4px;line-height:1.6;">'
-        f'※ 소스: 네이버금융 frgn.naver | 기관합계=연기금 포함 | 개인=-(기관+외국인) 산출'
+        f'※ 소스: 네이버금융 frgn.naver | 기관합계=연기금 포함'
+        f'{note_other}'
         f' | KRX 확정 최신일: <strong>{confirmed_date}</strong>'
         f'{note_suffix}'
         f'</div>'
     )
 
-    th = '<th style="padding:6px 10px;text-align:{a};background:#f8fafc;font-size:12px;">{t}</th>'
+    th = '<th style="padding:6px 10px;text-align:{a};background:#f8fafc;font-size:12px;color:#000000;font-weight:800;">{t}</th>'
     def _th(t, a="right"): return th.format(a=a, t=t)
 
+    _other_th = _th("기타법인(주)") if has_other else ""
     if need_provisional:
         col_headers = (
             _th("날짜", "left") + _th("기관 순매수(주)") + _th("외국인 순매수(주)") +
-            _th("개인 순매수(주)") + _th("오늘 종가/등락") + _th("거래량")
+            _th("개인 순매수(주)") + _other_th + _th("오늘 종가/등락") + _th("거래량")
         )
     else:
         col_headers = (
             _th("날짜", "left") + _th("기관 순매수(주)") + _th("외국인 순매수(주)") +
-            _th("개인 순매수(주)") + _th("외국인 보유율") + _th("상태")
+            _th("개인 순매수(주)") + _other_th + _th("외국인 보유율") + _th("상태")
         )
+    note_other = " | 기타법인=블록딜 추적용 역산값 (개인+기관+외국인+기타법인≈0)" if has_other else ""
 
     return (
         f'<div style="overflow-x:auto;border-radius:8px;border:1px solid #e2e8f0;">'
@@ -2469,11 +2555,12 @@ if "sniper_code" in st.session_state:
     _sfx  = SUFFIX[_smkt]
 
     with st.spinner(f"🎯 {_sn}({_sc}) 정밀 해부 중 — 4대 필살기 가동…"):
-        _sp        = sniper_price(_sc, _sfx, date_str)
-        _sinv      = get_investor_data_naver(_sc)
-        _snews     = get_naver_news(_sc)
-        _snews_full = get_naver_news_full(_sc)   # URL 포함 전체 뉴스 (표시 전용)
-        _flow      = _analyze_investor_flow(_sinv)  # 5거래일 수급 결론 (표시 전용)
+        _sp          = sniper_price(_sc, _sfx, date_str)
+        _sinv        = get_investor_data_naver(_sc)           # GOLDEN RULE: 42대 점수 계산용
+        _sinv_detail = _get_investor_detail_naver(_sc)        # 4주체(기타법인 포함) 표시 전용
+        _snews       = get_naver_news(_sc)
+        _snews_full  = get_naver_news_full(_sc)               # URL 포함 전체 뉴스 (표시 전용)
+        _flow        = _analyze_investor_flow(_sinv_detail or _sinv)  # 5거래일 수급 결론 (표시 전용)
 
     if not _sp:
         st.warning(f"⚠️ {_sn}({_sc}) 가격 데이터를 수집하지 못했습니다. 기준일을 변경해 보세요.")
@@ -2648,19 +2735,35 @@ if "sniper_code" in st.session_state:
         # ── 종목 특수 오버라이드 (한화오션 블록딜/오버행) ──────────────────────
         _special_alert_html = ""
         if _sn == "한화오션":
+            # 기타법인·개인 최신 데이터 (표시 전용)
+            _hw_other = (_sinv_detail[0].get("기타법인", 0) if _sinv_detail else 0)
+            _hw_indiv = (_sinv_detail[0].get("개인", 0) if _sinv_detail else 0)
+            _hw_inst  = (_sinv_detail[0].get("기관", 0) if _sinv_detail else 0)
+            _hw_frgn  = (_sinv_detail[0].get("외국인", 0) if _sinv_detail else 0)
+            _hw_date  = (_sinv_detail[0].get("날짜", "최신") if _sinv_detail else "최신")
+            _hw_other_str = (f"{abs(_hw_other):,}주 순매도" if _hw_other < 0
+                             else f"{_hw_other:,}주 순매수" if _hw_other > 0 else "집계 중")
+            _hw_indiv_str = (f"+{_hw_indiv:,}주" if _hw_indiv > 0 else f"{_hw_indiv:,}주")
+            _hw_inst_str  = (f"+{_hw_inst:,}주" if _hw_inst > 0 else f"{_hw_inst:,}주")
+            _hw_frgn_str  = (f"+{_hw_frgn:,}주" if _hw_frgn > 0 else f"{_hw_frgn:,}주")
             _special_alert_html = (
-                '<div style="background:#fef2f2;border-radius:8px;padding:10px 14px;'
-                'margin-bottom:12px;border-left:4px solid #dc2626;">'
-                '<div style="font-size:12px;font-weight:900;color:#991b1b;margin-bottom:4px;">'
-                '⚠️ 팩트체크 경보 · 한화오션</div>'
-                '<div style="font-size:12px;color:#1f2937;font-weight:700;line-height:1.7;">'
-                '한화시스템 블록딜 물량 수령에 따른 오버행(잠재적 매도 물량) 이슈가 해소되지 않아 '
-                '주가가 강력한 횡보 구간에 갇혀 있음. 기관 수급 유입 전까지 보수적 관망 권고.'
+                '<div style="background:#fef2f2;border-radius:10px;padding:14px 18px;'
+                'margin-bottom:14px;border-left:5px solid #dc2626;">'
+                '<div style="font-size:13px;font-weight:900;color:#991b1b;margin-bottom:8px;">'
+                f'🚨 팩트체크 경보 · 한화오션 블록딜 오버행 수급 구조 ({_hw_date})</div>'
+                '<div style="font-size:12px;color:#000000;font-weight:700;line-height:2.0;">'
+                f'📊 <strong>기타법인(블록딜 주체)</strong> {_hw_other_str} '
+                f'/ <strong>개인</strong> {_hw_indiv_str} 전량 수취<br>'
+                f'🏦 기관 {_hw_inst_str} · 🌍 외국인 {_hw_frgn_str} (스마트머니 이탈 중)<br><br>'
+                '⛔ <strong>결론: 기타법인(블록딜 오버행)의 대량 매도 물량을 개인이 전량 수취하는 '
+                '최악의 수급 구조로 인해 주가가 횡보 구간에 갇혀 있습니다.</strong><br>'
+                '스마트머니(기관+외국인)가 동반 이탈하는 가운데 기타법인이 블록딜로 대량 출회 중.'
+                ' 오버행 해소 전까지 강한 반등이 구조적으로 차단됩니다.'
                 '</div></div>'
             )
-            _sum1 = "① ⚠️ 블록딜 오버행 미해소 — 잠재 매도 물량이 상단을 압박, 추가 상승 제한적."
-            _sum2 = f"② 기관 수급 전환 신호 미확인(RSI {_rsi:.0f}) — 횡보 구간 이탈 + 기관 매집 동반 시 분할 진입."
-            _sum3 = "③ 오버행 해소 후 LNG선 수주 뉴스 + 외국인 매집 동반 시 즉시 진입 공식 적용 — 현재는 관망 우선."
+            _sum1 = "① 🚨 기타법인 블록딜 오버행 미해소 — 잠재 매도 물량이 지속 출회, 상단 강력 압박."
+            _sum2 = f"② 개인이 블록딜 물량 전량 수취 중(RSI {_rsi:.0f}) — 스마트머니 재진입 확인 전 추격매수 금지."
+            _sum3 = "③ 기관 순매수 전환 + LNG선 수주 공시 + 오버행 해소 3가지 동시 충족 시 분할 진입 공식 적용."
 
         # ── 미반영 호재 필터박스 HTML (숫자만 — 상세는 아래 expander로) ────────
         _unref_box_html = f'<div class="filter-score" style="color:#2563eb;">{_sscore["뉴스호재"]:.0f}</div>'
@@ -2668,7 +2771,7 @@ if "sniper_code" in st.session_state:
             _unref_box_html += (f'<div style="font-size:9px;color:#2563eb;font-weight:800;margin-top:3px;">'
                                 f'▾ {len(_all_pos_items)}건 클릭 확인</div>')
         elif _news_s > 0:
-            _unref_box_html += '<div style="font-size:9px;color:#2563eb;font-weight:700;margin-top:3px;">▾ 상세 보기</div>'
+            _unref_box_html += '<div style="font-size:9px;color:#374151;font-weight:600;margin-top:3px;">(아래 뉴스탭 확인)</div>'
 
         # ── 공매도상환 박스 서브 노트 ─────────────────────────────────────────
         if _sshort:
@@ -2678,7 +2781,7 @@ if "sniper_code" in st.session_state:
                 f'<span style="color:#9ca3af;font-weight:400;"> {_sshort["날짜"]}</span></div>'
             )
         elif _short_s == 0:
-            _short_note = '<div style="font-size:9px;color:#6b7280;margin-top:3px;">잔고 없음 또는 T+2 집계 중</div>'
+            _short_note = '<div style="font-size:9px;color:#6b7280;margin-top:3px;">T+2 집계 대기 중 (확정 데이터 미반영)</div>'
         else:
             _short_note = ""
 
@@ -3080,15 +3183,18 @@ if "sniper_code" in st.session_state:
         # 잠정/확정 이원화 파이프라인: _investor_html_table() 이 오늘 거래일이면
         # sise_day.naver 가격 행을 '장중잠정/마감후집계중' 배지로 자동 삽입한다.
         # 42대 점수 계산엔 _sinv (frgn.naver 확정치) 만 사용 — 골든룰 준수.
+        # 표시 테이블엔 _sinv_detail (기타법인 포함) 우선 사용.
+        _inv_display = _sinv_detail if _sinv_detail else _sinv
         st.html(
             '<div style="font-size:14px;font-weight:800;color:#13131a;'
-            'margin:8px 0 4px;">🏦 기관·외국인 수급 흐름</div>'
+            'margin:8px 0 4px;">🏦 기관·외국인·개인·기타법인 수급 흐름</div>'
         )
-        st.html(_investor_html_table(_sinv, _sc))
+        st.html(_investor_html_table(_inv_display, _sc))
 
         # ── 5거래일 수급 결론 카드 ────────────────────────────────────────────
         if _sinv:
             _fi  = _flow["inst"];  _ff = _flow["frgn"]; _fid = _flow["indiv"]
+            _fo  = _flow.get("other", 0)
             _fv  = _flow["verdict"]; _fc = _flow["color"]; _fdays = _flow["days"]
             def _fmt_flow(v):
                 if v == 0: return "0"
@@ -3099,31 +3205,45 @@ if "sniper_code" in st.session_state:
             _fi_c  = _flow_color(_fi)
             _ff_c  = _flow_color(_ff)
             _fid_c = _flow_color(_fid)
+            _fo_c  = _flow_color(_fo)
             _fi_str  = _fmt_flow(_fi)
             _ff_str  = _fmt_flow(_ff)
             _fid_str = _fmt_flow(_fid)
+            _fo_str  = _fmt_flow(_fo)
+            # 기타법인 박스: 0이면 표시 생략
+            _other_box = (
+                f'<div style="background:#fff;border-radius:8px;padding:7px 10px;'
+                f'border:2px solid #fca5a5;text-align:center;">'
+                f'<div style="font-size:10px;color:#991b1b;font-weight:800;margin-bottom:3px;">'
+                f'🔶 기타법인 누적</div>'
+                f'<div style="font-size:15px;font-weight:900;color:{_fo_c};">{_fo_str}</div>'
+                f'<div style="font-size:9px;color:#9ca3af;margin-top:2px;">블록딜 추적</div>'
+                f'</div>'
+            ) if _fo != 0 else ""
+            _grid_cols = "repeat(4,1fr)" if _fo != 0 else "repeat(3,1fr)"
             st.html(f"""
 <div style="background:{_fc}12;border-radius:12px;padding:12px 16px;margin:8px 0 10px;
             border:1.5px solid {_fc}40;font-family:'Pretendard','Noto Sans KR',sans-serif;">
   <div style="font-size:13px;font-weight:900;color:{_fc};margin-bottom:8px;">
     📊 최근 {_fdays}거래일 누적 수급 결론
   </div>
-  <div style="font-size:14px;font-weight:800;color:#1f2937;margin-bottom:10px;line-height:1.6;">
+  <div style="font-size:14px;font-weight:800;color:#000000;margin-bottom:10px;line-height:1.6;">
     {_fv}
   </div>
-  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;">
+  <div style="display:grid;grid-template-columns:{_grid_cols};gap:8px;">
     <div style="background:#fff;border-radius:8px;padding:7px 10px;border:1px solid #e2e8f0;text-align:center;">
-      <div style="font-size:10px;color:#6b7280;font-weight:700;margin-bottom:3px;">🏦 기관 누적</div>
+      <div style="font-size:10px;color:#000000;font-weight:700;margin-bottom:3px;">🏦 기관 누적</div>
       <div style="font-size:15px;font-weight:900;color:{_fi_c};">{_fi_str}</div>
     </div>
     <div style="background:#fff;border-radius:8px;padding:7px 10px;border:1px solid #e2e8f0;text-align:center;">
-      <div style="font-size:10px;color:#6b7280;font-weight:700;margin-bottom:3px;">🌍 외국인 누적</div>
+      <div style="font-size:10px;color:#000000;font-weight:700;margin-bottom:3px;">🌍 외국인 누적</div>
       <div style="font-size:15px;font-weight:900;color:{_ff_c};">{_ff_str}</div>
     </div>
     <div style="background:#fff;border-radius:8px;padding:7px 10px;border:1px solid #e2e8f0;text-align:center;">
-      <div style="font-size:10px;color:#6b7280;font-weight:700;margin-bottom:3px;">👤 개인 누적</div>
+      <div style="font-size:10px;color:#000000;font-weight:700;margin-bottom:3px;">👤 개인 누적</div>
       <div style="font-size:15px;font-weight:900;color:{_fid_c};">{_fid_str}</div>
     </div>
+    {_other_box}
   </div>
   <div style="font-size:10px;color:#9ca3af;margin-top:8px;">
     ※ 단위: 주식 수 기준 · 표시 전용 · 42대 점수 무영향
