@@ -158,12 +158,19 @@ thead tr th { background:#f8fafc !important; font-weight:700 !important;
 .ma-val   { font-weight:800; color:#13131a; }
 
 /* 뉴스 분류 카드 */
-.nc-good { background:#f0fdf4; border-radius:10px; padding:9px 14px;
-    border-left:3px solid #16a34a; margin-bottom:6px; font-size:13px; color:#14532d; }
-.nc-bad  { background:#fef2f2; border-radius:10px; padding:9px 14px;
-    border-left:3px solid #dc2626; margin-bottom:6px; font-size:13px; color:#7f1d1d; }
-.nc-neut { background:#f8fafc; border-radius:10px; padding:9px 14px;
-    border-left:3px solid #94a3b8; margin-bottom:6px; font-size:13px; color:#475569; }
+.nc-good  { background:#f0fdf4; border-radius:10px; padding:9px 14px;
+    border-left:3px solid #16a34a; margin-bottom:6px; font-size:13px; color:#14532d; font-weight:600; }
+.nc-bad   { background:#fef2f2; border-radius:10px; padding:9px 14px;
+    border-left:3px solid #dc2626; margin-bottom:6px; font-size:13px; color:#7f1d1d; font-weight:600; }
+.nc-neut  { background:#f8fafc; border-radius:10px; padding:9px 14px;
+    border-left:3px solid #94a3b8; margin-bottom:6px; font-size:13px; color:#374151; font-weight:600; }
+.nc-unref { background:#eff6ff; border-radius:10px; padding:9px 14px;
+    border-left:3px solid #2563eb; margin-bottom:6px; font-size:13px; color:#1e3a8a; font-weight:700; }
+/* 가시성 강화 */
+.filter-name { color:#31333F !important; font-weight:800 !important; }
+.filter-max  { color:#6b7280 !important; }
+.ma-label    { color:#31333F !important; font-weight:800 !important; }
+.ma-val      { color:#000000 !important; font-weight:900 !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -845,6 +852,103 @@ def get_short_balance_naver(ticker: str) -> dict:
         return {}
     except Exception:
         return {}
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_fundamentals(ticker: str, market: str = "KOSPI") -> dict:
+    """yfinance로 PER·PBR·ROE 등 펀더멘털 수집 (표시 전용, 42대 점수 무영향)."""
+    suffix = ".KS" if market == "KOSPI" else ".KQ"
+    for sym in [ticker + suffix, ticker + (".KQ" if suffix == ".KS" else ".KS")]:
+        try:
+            info = yf.Ticker(sym).info
+            per = info.get("trailingPE") or info.get("forwardPE")
+            pbr = info.get("priceToBook")
+            roe = info.get("returnOnEquity")
+            div = info.get("dividendYield")
+            if any([per, pbr, roe]):
+                return {
+                    "PER": round(float(per), 1) if per else None,
+                    "PBR": round(float(pbr), 2) if pbr else None,
+                    "ROE": round(float(roe) * 100, 1) if roe else None,
+                    "배당수익률": round(float(div) * 100, 2) if div else None,
+                }
+        except Exception:
+            pass
+    return {}
+
+
+def _get_moat_analysis(sector: str) -> list:
+    """섹터 기반 경제적 해자 3줄 분석 (표시 전용, 42대 점수 무영향)."""
+    _moat_db = {
+        "반도체/IT": [
+            "① 독점적 기술 해자: DRAM·NAND·HBM 글로벌 점유율 1~2위 — 수십조 Fab 투자로 구축된 진입 장벽이 경쟁사 추격을 방어합니다.",
+            "② 핵심 사업: AI 서버·스마트폰 전방 수요 확대 + 고부가 HBM 비중 상승 → 평균 판매 단가(ASP) 상승 사이클 진입 중.",
+            "③ 42대 관점: 기관·연기금 장기 선호 핵심주 — 조정 시 매집, AI 사이클 수혜 극대화 구간에서 쌍끌이 패턴 반복.",
+        ],
+        "인터넷/플랫폼": [
+            "① 독점적 기술 해자: 국내 검색·광고 시장 점유율 1위 플랫폼 — 네트워크 효과로 경쟁자 진입 난이도 극상.",
+            "② 핵심 사업: 광고→커머스·클라우드·AI 검색으로 수익 다각화 — 단순 광고에서 구독·B2B 전환 가속 중.",
+            "③ 42대 관점: AI 전환 수혜 + 외국인 저평가 매력 공존 — 실적 서프라이즈 시 갭업 확률 높음.",
+        ],
+        "자동차": [
+            "① 독점적 기술 해자: 전기차 전환기 글로벌 10위권 완성차 + 독자 EV 플랫폼·소프트웨어 내재화 진행.",
+            "② 핵심 사업: 프리미엄 브랜드 확장 + 미국 현지 생산으로 관세 리스크 방어, 친환경차 믹스 비중 상승.",
+            "③ 42대 관점: 저PBR + 기관 장기 매집 구간 — 실적 개선 시 밸류에이션 리레이팅, 눌림목 시 최적 진입.",
+        ],
+        "화학/배터리": [
+            "① 독점적 기술 해자: 배터리 핵심 소재(양극재·전해질) 글로벌 공급망 핵심 — 전기차 확산 직접 수혜 구조.",
+            "② 핵심 사업: 배터리 소재 + 석유화학 이원 구조 → 친환경 전환 속도에 따라 밸류 재평가 가능.",
+            "③ 42대 관점: 전기차 판매 데이터 연동 모니터링 필수 — 수요 확대 사이클 진입 시 기관 집중 매집.",
+        ],
+        "바이오/헬스케어": [
+            "① 독점적 기술 해자: 의약품 특허·CDO 역량 — 글로벌 빅파마 위탁생산(CMO) 계약이 수년간 진입 장벽 역할.",
+            "② 핵심 사업: 바이오시밀러·신약 파이프라인 + 고마진 CMO 사업 병행 — 임상 단계별 이벤트 드리븐 급등.",
+            "③ 42대 관점: 임상·허가 이벤트 드리븐 핵심 — 미반영 호재 뉴스 집중 모니터링 + 기관 선취매 포착 최우선.",
+        ],
+        "금융": [
+            "① 독점적 기술 해자: 대규모 고객 기반 + 금융 라이선스 — 진입 장벽 최상, 이자 마진·수수료 구조 안정적.",
+            "② 핵심 사업: 금리 상승기 NIM 확대 + 디지털 전환 비용 효율화 → 자본 적정성 강화, 배당 확대 기반.",
+            "③ 42대 관점: 고배당 + 저PBR — 기관·연기금 장기 배당주 선호, 금리 변동 시 수급 방향성 즉시 전환.",
+        ],
+        "건설/산업재": [
+            "① 독점적 기술 해자: 대형 프로젝트 레퍼런스와 브랜드 — 수주잔고가 향후 3~5년 실적을 사전 가시화.",
+            "② 핵심 사업: 국내 주거 + 해외 플랜트·인프라 수주 다각화 — 원자재 가격 안정 시 마진 개선 속도 빠름.",
+            "③ 42대 관점: 수주 발표=미반영 호재 패턴 — 이벤트 직전 선취매, 기관 동반 매집 확인 시 즉시 진입.",
+        ],
+        "통신": [
+            "① 독점적 기술 해자: 전국 5G 통신망 인프라 — 막대한 초기 구축 비용으로 신규 진입자 사실상 불가.",
+            "② 핵심 사업: ARPU 상승 + AI·클라우드 B2B 사업 확대 → 통신+IT 복합 기업 밸류에이션 리레이팅 중.",
+            "③ 42대 관점: 고배당 방어주 + 금리 인하 수혜 — 기관 수급 안정, 시장 조정 시 낙폭 방어 효과.",
+        ],
+        "에너지/유틸리티": [
+            "① 독점적 기술 해자: 전력 공급 독점 인프라 — 규제 산업으로 경쟁 구조 없음, 정책 방향이 핵심 변수.",
+            "② 핵심 사업: 전기 요금 인상 + 신재생에너지 전환 투자 병행 — 실적 정상화 경로 진입 중.",
+            "③ 42대 관점: 정책 수혜 이벤트 드리븐 — 요금 인상 발표 시 갭업 패턴, 정책 발표 전 선취매 유효.",
+        ],
+        "조선/기계": [
+            "① 독점적 기술 해자: LNG·암모니아 추진 친환경 선박 설계·건조 기술 — 글로벌 3위권 수주 경쟁력 확보.",
+            "② 핵심 사업: 높은 수주잔고 + 고부가 LNG선 비중 확대 → 2~3년 실적 가시성 최고 수준.",
+            "③ 42대 관점: 수주 발표=미반영 호재 패턴 — 수주 뉴스 + 기관 매집 동반 시 즉시 진입 유효.",
+        ],
+        "운송/물류": [
+            "① 독점적 기술 해자: 글로벌 해운 네트워크 + 컨테이너 운임 시장 가격 결정력 보유.",
+            "② 핵심 사업: 운임 사이클 연동 — BDI·SCFI 운임지수 상승 시 실적 급반등 구조.",
+            "③ 42대 관점: 운임 상승 사이클 진입 시 외국인 집중 매집 패턴 — 수급 전환 포착이 핵심.",
+        ],
+        "지주/복합": [
+            "① 독점적 기술 해자: 핵심 계열사 지분 보유 + 안정적 배당·브랜드 수수료 수익.",
+            "② 핵심 사업: 계열사 실적 개선 시 NAV 대비 할인율 축소 → 지주사 밸류에이션 연쇄 상승.",
+            "③ 42대 관점: 저PBR·고배당 가치주 — 기관 장기 매집 구간, 계열사 호재 연동 미반영 이벤트 주목.",
+        ],
+    }
+    for key, lines in _moat_db.items():
+        if any(k in sector for k in key.split("/")):
+            return lines[:]
+    return [
+        "① 해당 섹터 해자 분석 데이터를 준비 중입니다.",
+        "② 42대 필살기: 기관·외국인 수급 + 눌림목 타점 + 미반영 호재 조합이 투자 판단의 핵심입니다.",
+        "③ 수급 신호와 기술적 타점이 동시에 점등될 때 분할 진입이 원칙입니다.",
+    ]
 
 
 @st.cache_data(ttl=60, show_spinner=False)
@@ -2153,12 +2257,12 @@ if "sniper_code" in st.session_state:
             bar_w = int(pts / max_pts * 100) if max_pts > 0 else 0
             bar_c = "#ef4444" if pts >= max_pts * 0.8 else "#f59e0b" if pts >= max_pts * 0.4 else "#94a3b8"
             return (
-                f'<div style="display:flex;align-items:center;gap:8px;margin-bottom:7px;">'
-                f'<div style="width:80px;font-size:11px;font-weight:700;color:#374151;white-space:nowrap;">{icon} {label}</div>'
-                f'<div style="flex:1;background:#f1f5f9;border-radius:4px;height:5px;">'
-                f'<div style="width:{bar_w}%;height:5px;background:{bar_c};border-radius:4px;"></div></div>'
+                f'<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">'
+                f'<div style="width:82px;font-size:11px;font-weight:800;color:#1f2937;white-space:nowrap;">{icon} {label}</div>'
+                f'<div style="flex:1;background:#e2e8f0;border-radius:4px;height:6px;">'
+                f'<div style="width:{bar_w}%;height:6px;background:{bar_c};border-radius:4px;"></div></div>'
                 f'<div style="width:44px;text-align:right;font-size:12px;font-weight:900;color:{bar_c};">+{pts:.0f}점</div>'
-                f'<div style="font-size:10px;color:#6b7280;flex:1;padding-left:8px;">{detail}</div>'
+                f'<div style="font-size:11px;color:#374151;font-weight:600;flex:1;padding-left:8px;">{detail}</div>'
                 f'</div>'
             )
 
@@ -2200,25 +2304,10 @@ if "sniper_code" in st.session_state:
         else:
             _sum3 = "③ 공매도 잔고 T+2 집계 대기 — 실제 잔고 확인 후 숏스퀴즈 가능성 재평가 필요."
 
-        # ── 미반영 호재 드롭다운 HTML ─────────────────────────────────────────
+        # ── 미반영 호재 필터박스 HTML (숫자만 — 상세는 아래 expander로) ────────
+        _unref_box_html = f'<div class="filter-score" style="color:#2563eb;">{_sscore["뉴스호재"]:.0f}</div>'
         if _unref_items:
-            _unref_li = "".join(
-                f'<div style="padding:4px 0;border-bottom:1px solid #dbeafe;font-size:10px;'
-                f'color:#1e40af;line-height:1.5;">🔥 {_nh[:45]}{"…" if len(_nh)>45 else ""}'
-                f'{_nkt}</div>'
-                for _nh, _nkt in _unref_items
-            )
-            _unref_box_html = (
-                f'<details style="cursor:pointer;outline:none;">'
-                f'<summary style="font-size:26px;font-weight:900;color:#2563eb;'
-                f'list-style:none;cursor:pointer;">{_sscore["뉴스호재"]:.0f}'
-                f'<sup style="font-size:11px;color:#2563eb;margin-left:2px;">▾</sup></summary>'
-                f'<div style="background:#eff6ff;border-radius:8px;padding:8px;margin-top:4px;'
-                f'border:1px solid #bfdbfe;max-height:180px;overflow-y:auto;text-align:left;">'
-                f'{_unref_li}</div></details>'
-            )
-        else:
-            _unref_box_html = f'<div class="filter-score" style="color:#2563eb;">{_sscore["뉴스호재"]:.0f}</div>'
+            _unref_box_html += '<div style="font-size:9px;color:#2563eb;font-weight:700;margin-top:3px;">▾ 상세 보기</div>'
 
         # ── 공매도상환 박스 서브 노트 ─────────────────────────────────────────
         if _sshort:
@@ -2369,13 +2458,67 @@ if "sniper_code" in st.session_state:
 </div>""")
 
         st.html(f"""
-<div style="background:linear-gradient(135deg,#1e1b4b08,#312e8112);border:1px solid #c7d2fe;
-            border-radius:12px;padding:14px 18px;margin:8px 0 4px;">
-  <div style="font-size:13px;font-weight:900;color:#3730a3;margin-bottom:10px;">
+<div style="background:#1e1b4b;border-radius:12px;padding:16px 20px;margin:8px 0 4px;">
+  <div style="font-size:14px;font-weight:900;color:#ffffff;margin-bottom:10px;letter-spacing:-0.3px;">
     🎯 핵심 요약 (42대 필살기 근거)
   </div>
-  <div style="font-size:13px;color:#374151;line-height:2.0;">
+  <div style="font-size:13px;color:#e2e8f0;line-height:2.1;font-weight:600;">
     {_sum1}<br>{_sum2}<br>{_sum3}
+  </div>
+</div>""")
+
+        # ── 미반영 호재 상세 expander ────────────────────────────────────────
+        if _unref_items:
+            with st.expander(f"🔥 미반영 호재 {len(_unref_items)}건 상세 — 클릭하여 뉴스 헤드라인 확인"):
+                for _uidx, (_unh, _unkt) in enumerate(_unref_items, 1):
+                    st.html(
+                        f'<div class="nc-unref">'
+                        f'<strong style="color:#1e3a8a;margin-right:6px;">{_uidx}.</strong>'
+                        f'{_unh}{_unkt}</div>'
+                    )
+
+        # ── 펀더멘털 & 해자 분석 expander ───────────────────────────────────
+        with st.expander("📊 기업 펀더멘털 & 경제적 해자 분석 — 클릭하여 보기"):
+            _fund = get_fundamentals(_sc, _smkt)
+            _fund_rows = [
+                ("PER (주가수익비율)",   f"{_fund['PER']:.1f}배"        if _fund.get("PER")   else "—", "낮을수록 실적 대비 저평가"),
+                ("PBR (주가순자산비율)", f"{_fund['PBR']:.2f}배"        if _fund.get("PBR")   else "—", "1배 미만: 자산 대비 저평가 매수 기회"),
+                ("ROE (자기자본이익률)", f"{_fund['ROE']:.1f}%"         if _fund.get("ROE")   else "—", "15% 이상: 우량 기업 기준"),
+                ("배당수익률",          f"{_fund['배당수익률']:.2f}%"   if _fund.get("배당수익률") else "—", "배당 지속성·성장성 지표"),
+            ]
+            if _fund:
+                _fund_html = (
+                    '<table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:12px;">'
+                    '<thead><tr style="background:#f8fafc;">'
+                    '<th style="padding:9px 12px;text-align:left;color:#1f2937;font-weight:800;border-bottom:2px solid #e2e8f0;">지표</th>'
+                    '<th style="padding:9px 12px;text-align:right;color:#1f2937;font-weight:800;border-bottom:2px solid #e2e8f0;">수치</th>'
+                    '<th style="padding:9px 12px;text-align:left;color:#1f2937;font-weight:800;border-bottom:2px solid #e2e8f0;">42대 필살기 해석</th>'
+                    '</tr></thead><tbody>'
+                )
+                for _fn, _fv, _ft in _fund_rows:
+                    _fund_html += (
+                        f'<tr style="border-bottom:1px solid #f1f5f9;">'
+                        f'<td style="padding:9px 12px;font-weight:700;color:#31333F;">{_fn}</td>'
+                        f'<td style="padding:9px 12px;text-align:right;font-weight:900;color:#1f2937;font-size:16px;">{_fv}</td>'
+                        f'<td style="padding:9px 12px;color:#374151;font-size:12px;font-weight:600;">{_ft}</td>'
+                        f'</tr>'
+                    )
+                _fund_html += '</tbody></table>'
+                st.html(_fund_html)
+            else:
+                st.caption("yfinance 펀더멘털 데이터 수집 중… 잠시 후 다시 시도해 주세요.")
+
+            _moat_lines = _get_moat_analysis(_ss)
+            st.html(f"""
+<div style="background:#f8fafc;border-radius:10px;padding:14px 18px;border:1px solid #c7d2fe;">
+  <div style="font-size:12px;font-weight:900;color:#1e1b4b;margin-bottom:10px;">
+    🏰 경제적 해자 분석 (42대 필살기 관점 · {_ss} 섹터)
+  </div>
+  <div style="font-size:13px;color:#1f2937;line-height:2.1;font-weight:600;">
+    {"<br>".join(_moat_lines)}
+  </div>
+  <div style="font-size:10px;color:#9ca3af;margin-top:10px;">
+    ※ 섹터 기반 정성 분석 · 투자 판단은 개인 책임
   </div>
 </div>""")
 
