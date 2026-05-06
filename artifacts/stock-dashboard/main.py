@@ -320,18 +320,96 @@ _KRX_HOLIDAYS: dict[int, frozenset[_date]] = {
 
 _warned_missing_years: set[int] = set()
 
-def _is_krx_holiday(d: _date) -> bool:
-    """Return True if *d* is a KRX-observed public holiday."""
-    if d.year not in _KRX_HOLIDAYS and d.year not in _warned_missing_years:
-        import warnings as _warnings
-        _warnings.warn(
-            f"KRX holiday calendar has no entry for {d.year}. "
-            "Update _KRX_HOLIDAYS in main.py so the market-status badge stays accurate.",
+
+@st.cache_data(ttl=86_400, show_spinner=False)
+def _fetch_krx_holidays_api(year: int) -> frozenset | None:
+    """Fetch KRX non-trading days for *year* from the KRX open-data portal.
+
+    Uses the two-step OTP flow:
+      1. GET  GenerateOTP.jspx  → one-time code
+      2. POST OPN99000001.jspx  → JSON with block1[] rows, each having a calnd_dd field (YYYYMMDD)
+
+    Returns a frozenset of date objects on success, or None on any network/parse error
+    so callers can fall back to the hardcoded table.
+    """
+    try:
+        sess = requests.Session()
+        sess.headers.update({
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            ),
+            "Referer": "http://open.krx.co.kr/",
+        })
+
+        otp_resp = sess.get(
+            "https://open.krx.co.kr/contents/COM/GenerateOTP.jspx",
+            params={"bld": "MKD/01/0110/01100305/mkd01100305", "name": "form"},
+            timeout=10,
+        )
+        otp_resp.raise_for_status()
+        otp = otp_resp.text.strip()
+        if not otp:
+            return None
+
+        data_resp = sess.post(
+            "https://open.krx.co.kr/contents/OPN/99/OPN99000001.jspx",
+            data={"search_bas_yy": str(year), "code": otp},
+            timeout=10,
+        )
+        data_resp.raise_for_status()
+        payload = data_resp.json()
+
+        holidays: set[_date] = set()
+        for row in payload.get("block1", []):
+            raw = row.get("calnd_dd", "")
+            if len(raw) == 8:
+                try:
+                    holidays.add(_date(int(raw[:4]), int(raw[4:6]), int(raw[6:])))
+                except ValueError:
+                    pass
+
+        return frozenset(holidays) if holidays else None
+    except Exception as _exc:
+        import warnings as _w
+        _w.warn(
+            f"KRX holiday API fetch failed for {year}: {type(_exc).__name__}: {_exc}. "
+            "Falling back to hardcoded holiday table.",
             stacklevel=2,
         )
-        _warned_missing_years.add(d.year)
-    year_holidays = _KRX_HOLIDAYS.get(d.year, frozenset())
-    return d in year_holidays
+        return None
+
+
+def _get_krx_holidays(year: int) -> frozenset[_date]:
+    """Return the holiday set for *year*, preferring the live KRX API.
+
+    Fall-back chain:
+      1. Live KRX open-data API (cached 24 h via st.cache_data)
+      2. Hardcoded _KRX_HOLIDAYS table
+      3. Empty set (with a one-time warning)
+    """
+    live = _fetch_krx_holidays_api(year)
+    if live is not None:
+        return live
+
+    fallback = _KRX_HOLIDAYS.get(year)
+    if fallback is not None:
+        return fallback
+
+    if year not in _warned_missing_years:
+        import warnings as _warnings
+        _warnings.warn(
+            f"KRX holiday calendar: live API unavailable and no hardcoded fallback for {year}. "
+            "Market-status badge may treat public holidays as trading days.",
+            stacklevel=2,
+        )
+        _warned_missing_years.add(year)
+    return frozenset()
+
+
+def _is_krx_holiday(d: _date) -> bool:
+    """Return True if *d* is a KRX-observed public holiday."""
+    return d in _get_krx_holidays(d.year)
 
 
 def _next_trading_open_minutes(now_kst: datetime) -> int:
