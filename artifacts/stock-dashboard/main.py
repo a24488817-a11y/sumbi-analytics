@@ -25,6 +25,11 @@ st.set_page_config(
     layout="wide",
 )
 
+# ── 세션 최초 진입 시 캐시 강제 초기화 (항상 최신 데이터 보장) ─────────────
+if "_session_cache_cleared" not in st.session_state:
+    st.cache_data.clear()
+    st.session_state["_session_cache_cleared"] = True
+
 # ───────────────────────────────────────────────────────────────────────────────
 # CSS — 토스증권 스타일 + 체급 뱃지
 # ───────────────────────────────────────────────────────────────────────────────
@@ -830,9 +835,8 @@ def get_investor_batch(tickers: tuple) -> dict:
     return {t: get_investor_data_naver(t) for t in tickers}
 
 
-# ── KRX HTS 확정치 수동 보정 DB (frgn.naver 파싱 실패 시 fallback) ──────────
-# 형식: {("종목코드", "YYYY.MM.DD"): {"기관":int, "외국인":int, "개인":int, "기타법인":int}}
-# 공매도 정보는 별도 _SHORT_OVERRIDE 사용
+# ── HTS 확정 수급 수동 보정 DB ─────────────────────────────────────────────
+# {("종목코드", "YYYY.MM.DD"): {4주체 확정 순매수(주)}} — 해당 날짜 항상 강제 적용
 _INVESTOR_OVERRIDE: dict = {
     ("042660", "2026.05.06"): {
         "기관": -230_484, "외국인": -157_924,
@@ -841,6 +845,11 @@ _INVESTOR_OVERRIDE: dict = {
 }
 _SHORT_OVERRIDE: dict = {
     ("042660", "2026.05.06"): {"비중": 6.4, "평균가": 130_725},
+}
+# ── 펀더멘털 확정 수동 보정 DB (Naver 파싱 실패 시 hardcode fallback) ────────
+# 형식: {("종목코드",): {"PER": float|None, "PBR": float, "ROE": float|None, "배당수익률": float}}
+_FUNDAMENTALS_OVERRIDE: dict = {
+    ("042660",): {"PER": None, "PBR": 1.83, "ROE": None, "배당수익률": 1.2},
 }
 
 
@@ -897,9 +906,9 @@ def _get_investor_detail_naver(ticker: str) -> list:
                     indiv = -(inst + frgn)
                     other = 0
 
-                # ── HTS 확정치 수동 보정 적용 (기타법인 파싱 실패 시) ──────────
+                # ── HTS 확정치 수동 보정 적용 (해당 날짜 override 존재 시 무조건 적용) ──
                 override = _INVESTOR_OVERRIDE.get((ticker, date_str))
-                if override and other == 0:
+                if override:
                     inst  = override["기관"]
                     frgn  = override["외국인"]
                     indiv = override["개인"]
@@ -916,6 +925,22 @@ def _get_investor_detail_naver(ticker: str) -> list:
                 })
                 if len(result) >= 5:
                     break
+
+        # ── override 행이 결과에 없으면 최상단에 강제 삽입 ────────────────
+        existing_dates = {r["날짜"] for r in result}
+        for (ov_ticker, ov_date), ov_data in _INVESTOR_OVERRIDE.items():
+            if ov_ticker == ticker and ov_date not in existing_dates:
+                result.insert(0, {
+                    "날짜": ov_date,
+                    "기관": ov_data["기관"],
+                    "외국인": ov_data["외국인"],
+                    "개인": ov_data["개인"],
+                    "기타법인": ov_data["기타법인"],
+                    "보유율": 0.0,
+                })
+        # 최대 5행 유지
+        result = result[:5]
+
         return result
     except Exception:
         return []
@@ -1012,6 +1037,7 @@ def get_fundamentals(ticker: str, market: str = "KOSPI") -> dict:
     """네이버금융 기업분석에서 PER·PBR·ROE·배당수익률 실시간 크롤링 (표시 전용, 42대 점수 무영향).
 
     소스 우선순위:
+    0차 — _FUNDAMENTALS_OVERRIDE: HTS 확정 하드코드 (최우선 적용)
     1차 — 네이버 모바일 JSON API: PER, PBR (가장 정확한 실시간치)
     2차 — 네이버 기업분석 HTML (coinfo.naver): ROE, 배당수익률 직접 파싱
     3차 — yfinance fallback: 누락 지표 보완
@@ -1023,7 +1049,9 @@ def get_fundamentals(ticker: str, market: str = "KOSPI") -> dict:
         except Exception:
             return None
 
-    result: dict = {}
+    # ── 0차: 하드코드 확정치 우선 적용 ───────────────────────────────────────
+    _fo = _FUNDAMENTALS_OVERRIDE.get((ticker,), {})
+    result: dict = {k: v for k, v in _fo.items() if v is not None}
 
     # ── 1차: 네이버 모바일 JSON API (PER·PBR) ─────────────────────────────
     try:
@@ -2819,30 +2847,34 @@ if "sniper_code" in st.session_state:
         # ── 종목 특수 오버라이드 (한화오션 블록딜/오버행) ──────────────────────
         _special_alert_html = ""
         if _sn == "한화오션":
-            # 기타법인·개인 최신 데이터 (표시 전용)
-            _hw_other = (_sinv_detail[0].get("기타법인", 0) if _sinv_detail else 0)
-            _hw_indiv = (_sinv_detail[0].get("개인", 0) if _sinv_detail else 0)
-            _hw_inst  = (_sinv_detail[0].get("기관", 0) if _sinv_detail else 0)
-            _hw_frgn  = (_sinv_detail[0].get("외국인", 0) if _sinv_detail else 0)
-            _hw_date  = (_sinv_detail[0].get("날짜", "최신") if _sinv_detail else "최신")
-            _hw_other_str = (f"{abs(_hw_other):,}주 순매도" if _hw_other < 0
-                             else f"{_hw_other:,}주 순매수" if _hw_other > 0 else "집계 중")
-            _hw_indiv_str = (f"+{_hw_indiv:,}주" if _hw_indiv > 0 else f"{_hw_indiv:,}주")
-            _hw_inst_str  = (f"+{_hw_inst:,}주" if _hw_inst > 0 else f"{_hw_inst:,}주")
-            _hw_frgn_str  = (f"+{_hw_frgn:,}주" if _hw_frgn > 0 else f"{_hw_frgn:,}주")
+            # 확정 수급: _INVESTOR_OVERRIDE 우선 → _sinv_detail 순서
+            _ov506 = _INVESTOR_OVERRIDE.get((_sc, "2026.05.06"), {})
+            _hw_inst  = _ov506.get("기관",    (_sinv_detail[0].get("기관",    0) if _sinv_detail else 0))
+            _hw_frgn  = _ov506.get("외국인",  (_sinv_detail[0].get("외국인",  0) if _sinv_detail else 0))
+            _hw_indiv = _ov506.get("개인",    (_sinv_detail[0].get("개인",    0) if _sinv_detail else 0))
+            _hw_other = _ov506.get("기타법인",(_sinv_detail[0].get("기타법인",0) if _sinv_detail else 0))
+            _hw_date  = "2026.05.06 (HTS 최종 확정)"
+            _hw_other_str = f"{abs(_hw_other):,}주 순매도" if _hw_other < 0 else f"{_hw_other:,}주 순매수"
+            _hw_indiv_str = f"+{_hw_indiv:,}주" if _hw_indiv > 0 else f"{_hw_indiv:,}주"
+            _hw_inst_str  = f"+{_hw_inst:,}주"  if _hw_inst  > 0 else f"{_hw_inst:,}주"
+            _hw_frgn_str  = f"+{_hw_frgn:,}주"  if _hw_frgn  > 0 else f"{_hw_frgn:,}주"
+            # 42대 관점 핵심 팩트체크 문장 (대표 지시 원문 고정)
+            _hw_factcheck = (
+                "기타법인 -39만 주 매도는 블록딜 오버행 팩트이며, "
+                "개인이 78만 주를 고점에서 받아낸 최악의 수급 설거지 구간임. "
+                "42대 필살기 관점 점수 16점, 진입 절대 불가."
+            )
             _special_alert_html = (
                 '<div style="background:#fef2f2;border-radius:10px;padding:14px 18px;'
                 'margin-bottom:14px;border-left:5px solid #dc2626;">'
                 '<div style="font-size:13px;font-weight:900;color:#991b1b;margin-bottom:8px;">'
                 f'🚨 팩트체크 경보 · 한화오션 블록딜 오버행 수급 구조 ({_hw_date})</div>'
-                '<div style="font-size:12px;color:#000000;font-weight:700;line-height:2.0;">'
-                f'📊 <strong>기타법인(블록딜 주체)</strong> {_hw_other_str} '
-                f'/ <strong>개인</strong> {_hw_indiv_str} 전량 수취<br>'
-                f'🏦 기관 {_hw_inst_str} · 🌍 외국인 {_hw_frgn_str} (스마트머니 이탈 중)<br><br>'
-                '⛔ <strong>결론: 기타법인(블록딜 오버행)의 대량 매도 물량을 개인이 전량 수취하는 '
-                '최악의 수급 구조로 인해 주가가 횡보 구간에 갇혀 있습니다.</strong><br>'
-                '스마트머니(기관+외국인)가 동반 이탈하는 가운데 기타법인이 블록딜로 대량 출회 중.'
-                ' 오버행 해소 전까지 강한 반등이 구조적으로 차단됩니다.'
+                '<div style="font-size:12px;color:#000000;font-weight:800;line-height:2.2;">'
+                f'📊 <strong>기타법인(블록딜 주체)</strong> {_hw_other_str}'
+                f' / <strong>개인</strong> {_hw_indiv_str} 전량 수취<br>'
+                f'🏦 기관 {_hw_inst_str} &nbsp;·&nbsp; 🌍 외국인 {_hw_frgn_str}'
+                f' &nbsp;·&nbsp; 💥 공매도 비중 6.4%<br><br>'
+                f'⛔ <strong style="font-size:13px;color:#000000;">{_hw_factcheck}</strong>'
                 '</div></div>'
             )
             _sum1 = "① 🚨 기타법인 블록딜 오버행 미해소 — 잠재 매도 물량이 지속 출회, 상단 강력 압박."
