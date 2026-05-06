@@ -2004,6 +2004,18 @@ with tab_supply:
                         "거래량비율(%)\n[평균 대비]":"{:.1f}%",
                         "RSI\n[30↓과매도]":"{:.1f}",
                     }), width="stretch", height=520)
+
+                _export_df = top15.reset_index()
+                _export_df.rename(columns={"index": "종목코드"}, inplace=True)
+                _csv_date  = st.session_state.get(f"{'kospi' if mname=='KOSPI' else 'kosdaq'}_date", datetime.now(KST).strftime("%Y-%m-%d"))
+                _csv_bytes = _export_df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+                st.download_button(
+                    label="⬇️ CSV 다운로드",
+                    data=_csv_bytes,
+                    file_name=f"숨비애널리틱스_{mname}_{_csv_date}.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                )
             else:
                 st.info(f"{mname} 분석 후 데이터가 표시됩니다.")
 
