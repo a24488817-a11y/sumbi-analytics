@@ -1027,6 +1027,7 @@ def _investor_html_table(inv_data: list, ticker: str) -> str:
 
 @st.cache_data(ttl=600)
 def get_naver_news(ticker: str) -> list:
+    """뉴스 최대 30건 수집 (종목명 필터링은 호출 측에서 수행)."""
     try:
         r = requests.get(
             f"https://finance.naver.com/item/news_news.naver?code={ticker}&page=1",
@@ -1039,11 +1040,23 @@ def get_naver_news(ticker: str) -> list:
             d_el = row.select_one("td.date")
             if t_el and d_el:
                 title = t_el.get_text(strip=True)
-                if title: out.append(f"[{d_el.get_text(strip=True)}] {title}")
-            if len(out) >= 5: break
-        return out
+                if title:
+                    out.append(f"[{d_el.get_text(strip=True)}] {title}")
+        return out[:30]
     except Exception:
         return []
+
+
+def filter_news_by_name(headlines: list, stock_name: str) -> list:
+    """종목명이 제목에 포함된 뉴스만 반환. 종목명이 없으면 전체 반환."""
+    if not stock_name:
+        return headlines
+    # 2글자 이상 종목명 단어 단위로 분리해 부분 매칭 (예: '삼성전자' or '삼성')
+    name_variants = [stock_name]
+    if len(stock_name) > 3:
+        name_variants.append(stock_name[:3])  # 앞 3글자 약칭도 허용
+    return [h for h in headlines
+            if any(v in h for v in name_variants)]
 
 
 @st.cache_data(ttl=600)
@@ -1173,21 +1186,40 @@ _GOOD_KW = [
     "수주","계약체결","계약","임상성공","기술수출","어닝서프라이즈","흑자전환","흑자",
     "신사업","투자유치","특허","수혜","정책수혜","매출증가","수출","배당증가",
     "자사주매입","자사주","깜짝실적","실적개선","신고가","급등","호실적","수주잔고",
+    "영업이익","순이익 증가","매출 증가","증익","회복","반등","상향","목표가 상향",
 ]
 _BAD_KW = [
     "적자","손실","소송","제재","횡령","배임","부도","파산","리콜","감소",
     "취소","지연","하락","전환사채","유상증자","오버행","조사착수","피소",
     "징계","과태료","하향","경고","불공정","압수수색","혐의","기소",
+    "실적 부진","영업손실","매출 감소","구조조정","대량해고","파업",
+]
+# 미반영 호재 판단 키워드: 호재 키워드와 동시에 존재 시 → 미반영 호재
+_UNREF_KW = [
+    "깜짝","서프라이즈","어닝서프라이즈","예상 외","예상밖","예상보다","처음",
+    "신규","전격","돌발","긴급","당일","首","첫","사상 최초","사상최초",
+    "목표가 상향","전망 상향","상향 조정","기대감","미반영","잠재","가능성",
+    "향후","내년","중장기","모멘텀","촉매","호재 예상","상승 여력",
 ]
 
 def classify_news_item(headline: str) -> tuple:
-    """Returns ('호재'|'악재'|'중립', matched_keywords)"""
-    g = [kw for kw in _GOOD_KW if kw in headline]
-    b = [kw for kw in _BAD_KW  if kw in headline]
-    if len(g) > len(b): return "호재", g[:3]
-    if len(b) > len(g): return "악재", b[:3]
-    if g: return "호재", g[:3]
-    if b: return "악재", b[:3]
+    """Returns ('미반영 호재'|'호재'|'악재'|'중립', matched_keywords)"""
+    g = [kw for kw in _GOOD_KW  if kw in headline]
+    b = [kw for kw in _BAD_KW   if kw in headline]
+    u = [kw for kw in _UNREF_KW if kw in headline]
+
+    # 악재가 호재보다 많으면 악재로 확정
+    if b and len(b) >= len(g):
+        return "악재", b[:3]
+    # 호재 + 미반영 키워드 동시 → 미반영 호재
+    if g and u:
+        return "미반영 호재", (g[:2] + u[:1])
+    # 호재만
+    if g:
+        return "호재", g[:3]
+    # 악재만 (호재가 없는 경우)
+    if b:
+        return "악재", b[:3]
     return "중립", []
 
 
@@ -2199,34 +2231,80 @@ if "sniper_code" in st.session_state:
         st.html(_investor_html_table(_sinv, _sc))
 
         # ── 뉴스 분류 ────────────────────────────────────────────────────────
-        if _snews:
-            st.html('<div style="font-size:14px;font-weight:800;color:#13131a;margin:12px 0 4px;">📰 뉴스 자동 분류 — 호재 · 악재 · 중립</div>')
-            _good_html = _bad_html = _neut_html = ""
-            _good_cnt = _bad_cnt = 0
-            for _h in _snews:
-                _cat, _kws = classify_news_item(_h)
-                _kw_tag = (f' <span style="font-size:10px;color:#6b7280;">[{", ".join(_kws)}]</span>'
-                           if _kws else "")
-                if _cat == "호재":
-                    _good_html += f'<div class="nc-good">🟢 {_h}{_kw_tag}</div>'
-                    _good_cnt  += 1
-                elif _cat == "악재":
-                    _bad_html  += f'<div class="nc-bad">🔴 {_h}{_kw_tag}</div>'
-                    _bad_cnt   += 1
-                else:
-                    _neut_html += f'<div class="nc-neut">⚪ {_h}</div>'
+        # 1) 종목명 필터링: 해당 종목명이 제목에 포함된 기사만
+        _snews_filtered = filter_news_by_name(_snews, _sname)
+        _news_src = _snews_filtered if _snews_filtered else _snews  # fallback: 전체
+        _filtered_note = (f"({len(_snews_filtered)}/{len(_snews)}건 종목 관련)"
+                          if _snews_filtered else f"({len(_snews)}건 전체 — 종목명 매칭 없음)")
 
-            _sum_color = ("#16a34a" if _good_cnt > _bad_cnt
-                          else "#dc2626" if _bad_cnt > _good_cnt else "#94a3b8")
-            _sum_text  = (f"호재 {_good_cnt}건 우세 — 긍정 편향" if _good_cnt > _bad_cnt
-                          else f"악재 {_bad_cnt}건 우세 — 부정 편향" if _bad_cnt > _good_cnt
-                          else "호재·악재 균형")
-            st.html(f"""
-<div style="background:{_sum_color}18;border-radius:10px;padding:9px 14px;margin-bottom:8px;
-            border:1px solid {_sum_color}40;font-size:13px;font-weight:700;color:{_sum_color};">
-    📊 뉴스 종합 ({len(_snews)}건): {_sum_text}
-</div>
-{_good_html}{_bad_html}{_neut_html}""")
+        if _news_src:
+            st.html(
+                f'<div style="font-size:14px;font-weight:800;color:#13131a;margin:12px 0 4px;">'
+                f'📰 뉴스 자동 분류 <span style="font-size:11px;font-weight:400;'
+                f'color:#6b7280;">{_filtered_note}</span></div>'
+            )
+
+            # 2) 3-카테고리 분류 (중립 제외)
+            _unref_items = []   # 미반영 호재
+            _good_items  = []   # 호재
+            _bad_items   = []   # 악재
+
+            for _h in _news_src:
+                _cat, _kws = classify_news_item(_h)
+                _kw_tag = (f'<span style="font-size:10px;color:#6b7280;margin-left:4px;">'
+                           f'[{", ".join(_kws)}]</span>') if _kws else ""
+                if _cat == "미반영 호재":
+                    _unref_items.append((_h, _kw_tag))
+                elif _cat == "호재":
+                    _good_items.append((_h, _kw_tag))
+                elif _cat == "악재":
+                    _bad_items.append((_h, _kw_tag))
+                # 중립은 표시 안 함
+
+            # 3) 종합 요약 배너
+            _total_sig = len(_unref_items) + len(_good_items) + len(_bad_items)
+            if _unref_items:
+                _sum_color = "#2563eb"
+                _sum_text  = f"🔥 미반영 호재 {len(_unref_items)}건 감지 — 선취매 검토"
+            elif len(_good_items) > len(_bad_items):
+                _sum_color = "#16a34a"
+                _sum_text  = f"호재 {len(_good_items)}건 우세 — 긍정 편향"
+            elif len(_bad_items) > len(_good_items):
+                _sum_color = "#dc2626"
+                _sum_text  = f"악재 {len(_bad_items)}건 우세 — 부정 편향"
+            else:
+                _sum_color = "#94a3b8"
+                _sum_text  = "중립 — 유의미 시그널 없음"
+
+            st.html(
+                f'<div style="background:{_sum_color}18;border-radius:10px;padding:9px 14px;'
+                f'margin-bottom:8px;border:1px solid {_sum_color}40;font-size:13px;'
+                f'font-weight:700;color:{_sum_color};">'
+                f'📊 {_sname} 뉴스 종합 (유의미 {_total_sig}건): {_sum_text}</div>'
+            )
+
+            # 4) 탭: 미반영 호재 / 호재 / 악재 (비어있는 탭 제외)
+            _tab_defs = []
+            if _unref_items: _tab_defs.append(("🔥 미반영 호재", _unref_items, "#2563eb", "nc-unref"))
+            if _good_items:  _tab_defs.append(("🟢 호재",        _good_items,  "#16a34a", "nc-good"))
+            if _bad_items:   _tab_defs.append(("🔴 악재",        _bad_items,   "#dc2626", "nc-bad"))
+
+            if _tab_defs:
+                _tab_labels = [f"{td[0]} ({len(td[1])})" for td in _tab_defs]
+                _tabs = st.tabs(_tab_labels)
+                for _tab_ui, (_label, _items, _color, _cls) in zip(_tabs, _tab_defs):
+                    with _tab_ui:
+                        _html_block = ""
+                        for _h, _kw_tag in _items:
+                            _icon = "🔥" if "미반영" in _label else ("🟢" if "호재" in _label else "🔴")
+                            _html_block += (
+                                f'<div class="{_cls}" style="margin-bottom:6px;padding:8px 10px;'
+                                f'border-radius:7px;border-left:3px solid {_color};">'
+                                f'{_icon} {_h}{_kw_tag}</div>'
+                            )
+                        st.html(_html_block)
+            else:
+                st.info("종목 관련 유의미 뉴스(호재·악재)가 감지되지 않았습니다.")
 
     # ── 결과 닫기 ──────────────────────────────────────────────────────────────
     if st.button("✕ 스나이퍼 결과 닫기", key="sniper_clear"):
@@ -2630,6 +2708,7 @@ with tab_sector:
 # ── 미반영 뉴스 ───────────────────────────────────────────────────────────────
 with tab_news:
     st.html('<div class="section-header">📰 주가에 아직 반영 안 된 뉴스</div>')
+    st.html('<div class="section-sub">종목명이 포함된 기사만 수집 → 호재·악재·미반영 호재 3단 분류. 중립 기사는 표시하지 않습니다.</div>')
     sub_kn, sub_qn = st.tabs(["🏆 KOSPI", "🔷 KOSDAQ"])
     for sub_tab, rkey, mname in [(sub_kn,"kospi_result","KOSPI"),(sub_qn,"kosdaq_result","KOSDAQ")]:
         with sub_tab:
@@ -2638,19 +2717,44 @@ with tab_news:
                 top15n = result.sort_values(["거래대금(억)","거래량비율(%)"], ascending=False).head(15)
                 nm     = get_news_batch(tuple(top15n.index.tolist()))
                 for ticker in top15n.index:
-                    name      = top15n.loc[ticker,"종목명"]
-                    headlines = nm.get(ticker, [])
-                    hits      = [kw for kw in NEWS_KEYWORDS if any(kw in h for h in headlines)]
-                    has_hot   = bool(hits)
-                    badge     = f"  🔥 호재 키워드: {', '.join(hits)}" if has_hot else ""
-                    with st.expander(f"{'🔥' if has_hot else '📌'} {name} ({ticker}){badge}",
-                                     expanded=has_hot):
-                        if headlines:
-                            for h in headlines: st.markdown(f"- {h}")
-                            if hits:
-                                st.success(f"✅ 호재 키워드 감지: **{', '.join(hits)}** — 현재 주가에 미반영 가능성 체크!")
-                        else:
+                    name      = top15n.loc[ticker, "종목명"]
+                    raw_hl    = nm.get(ticker, [])
+                    # 1) 종목명 필터링
+                    headlines = filter_news_by_name(raw_hl, name)
+                    if not headlines:
+                        headlines = raw_hl  # fallback: 전체
+
+                    # 2) 분류
+                    unref_hl, good_hl, bad_hl = [], [], []
+                    for h in headlines:
+                        cat, kws = classify_news_item(h)
+                        kw_str = f" [{', '.join(kws)}]" if kws else ""
+                        if   cat == "미반영 호재": unref_hl.append(f"🔥 {h}{kw_str}")
+                        elif cat == "호재":        good_hl.append(f"🟢 {h}{kw_str}")
+                        elif cat == "악재":        bad_hl.append(f"🔴 {h}{kw_str}")
+
+                    has_unref = bool(unref_hl)
+                    has_sig   = bool(unref_hl or good_hl or bad_hl)
+                    if has_unref:
+                        icon, badge = "🔥", f"  미반영 호재 {len(unref_hl)}건"
+                    elif good_hl:
+                        icon, badge = "🟢", f"  호재 {len(good_hl)}건"
+                    elif bad_hl:
+                        icon, badge = "🔴", f"  악재 {len(bad_hl)}건"
+                    else:
+                        icon, badge = "📌", ""
+
+                    with st.expander(f"{icon} {name} ({ticker}){badge}", expanded=has_unref):
+                        if not headlines:
                             st.write("뉴스를 불러오지 못했습니다.")
+                        elif not has_sig:
+                            st.caption("유의미 시그널(호재·악재·미반영 호재)이 없습니다.")
+                        else:
+                            for line in unref_hl: st.markdown(line)
+                            for line in good_hl:  st.markdown(line)
+                            for line in bad_hl:   st.markdown(line)
+                            if has_unref:
+                                st.success(f"✅ 미반영 호재 감지 — 주가 선반영 전 선취매 검토")
             else:
                 st.info(f"{mname} 분석 후 데이터가 표시됩니다.")
 
