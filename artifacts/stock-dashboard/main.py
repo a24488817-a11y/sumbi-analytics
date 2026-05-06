@@ -920,18 +920,25 @@ def _investor_html_table(inv_data: list, ticker: str) -> str:
 
     # ── 확정 행 ───────────────────────────────────────────────────────────────
     for d in inv_data:
-        is_latest = (d["날짜"] == confirmed_date)
-        row_bg = "#fafafa" if is_latest else "#ffffff"
-        rows_html += f"""
-<tr style="background:{row_bg};border-bottom:1px solid #f1f5f9;">
-  <td style="padding:7px 10px;{"font-weight:700;" if is_latest else ""}">
-    {d["날짜"]}{"&nbsp;<span style='font-size:10px;color:#16a34a;'>◀ 확정최신</span>" if is_latest else ""}
-  </td>
-  <td style="padding:7px 10px;text-align:right;">{_sign_html(d["기관"])}</td>
-  <td style="padding:7px 10px;text-align:right;">{_sign_html(d["외국인"])}</td>
-  <td style="padding:7px 10px;text-align:right;color:#374151;">{d["보유율"]:.2f}%</td>
-  <td style="padding:7px 10px;text-align:right;color:#16a34a;font-size:11px;">✅ KRX확정</td>
-</tr>"""
+        is_latest  = (d["날짜"] == confirmed_date)
+        row_bg     = "#fafafa" if is_latest else "#ffffff"
+        fw         = "font-weight:700;" if is_latest else ""
+        date_val   = d["날짜"]
+        badge      = ("&nbsp;<span style='font-size:10px;background:#dcfce7;"
+                      "color:#16a34a;padding:1px 5px;border-radius:8px;"
+                      "vertical-align:middle;'>확정최신</span>") if is_latest else ""
+        inst_html  = _sign_html(d["기관"])
+        frgn_html  = _sign_html(d["외국인"])
+        hold_str   = f'{d["보유율"]:.2f}%'
+        rows_html += (
+            f'<tr style="background:{row_bg};border-bottom:1px solid #f1f5f9;">'
+            f'<td style="padding:7px 10px;{fw}">{date_val}{badge}</td>'
+            f'<td style="padding:7px 10px;text-align:right;">{inst_html}</td>'
+            f'<td style="padding:7px 10px;text-align:right;">{frgn_html}</td>'
+            f'<td style="padding:7px 10px;text-align:right;color:#374151;">{hold_str}</td>'
+            f'<td style="padding:7px 10px;text-align:right;color:#16a34a;font-size:11px;">✅ KRX확정</td>'
+            f'</tr>'
+        )
 
     # ── 하단 주석 ─────────────────────────────────────────────────────────────
     krx_ref_display = f"KRX 기준: <strong>{krx_ref_date}</strong>" if krx_ref_date else ""
