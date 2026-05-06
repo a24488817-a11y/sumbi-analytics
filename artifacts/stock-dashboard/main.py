@@ -8,7 +8,7 @@
 
 import re
 import streamlit as st
-import yfinance as yf
+import FinanceDataReader as fdr   # KRX 전종목 티커 조회 엔진 (pykrx 대체)
 import pandas as pd
 import numpy as np
 import requests
@@ -18,6 +18,7 @@ from concurrent.futures import ThreadPoolExecutor
 from streamlit_autorefresh import st_autorefresh
 import warnings
 warnings.filterwarnings("ignore")
+# yfinance 완전 폐기 — 사용 금지 (KRX 공식 파이프라인으로 교체 완료)
 
 st.set_page_config(
     page_title="숨비 애널리틱스 · SOOMBI Analytics",
@@ -853,9 +854,15 @@ def get_investor_batch(tickers: tuple) -> dict:
 # ── HTS 확정 수급 수동 보정 DB ─────────────────────────────────────────────
 # {("종목코드", "YYYY.MM.DD"): {4주체 확정 순매수(주)}} — 해당 날짜 항상 강제 적용
 _INVESTOR_OVERRIDE: dict = {
+    # 한화오션 2026-05-06 KRX 확정 수급
     ("042660", "2026.05.06"): {
         "기관": -230_484, "외국인": -157_924,
         "개인": +780_980, "기타법인": -394_325,
+    },
+    # 대한조선 2026-05-06 KRX 확정 수급
+    ("439260", "2026.05.06"): {
+        "기관": -10_118, "외국인": -23_321,
+        "개인": +33_262, "기타법인": 0,
     },
 }
 _SHORT_OVERRIDE: dict = {
@@ -2686,9 +2693,53 @@ _ALL_STKS  = {**KOSPI_STOCKS, **KOSDAQ_STOCKS}
 _CODE_MKT  = {**{c: "KOSPI" for c in KOSPI_STOCKS}, **{c: "KOSDAQ" for c in KOSDAQ_STOCKS}}
 _NAME_CODE = {v[0]: k for k, v in _ALL_STKS.items()}
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _krx_listing() -> pd.DataFrame:
+    """FinanceDataReader 기반 KRX 전종목 리스트 (KOSPI+KOSDAQ, 매시간 갱신).
+    columns: Code, Name, Market — 대한조선(439260) 포함 2880+ 종목."""
+    try:
+        df = fdr.StockListing("KRX")
+        df = df[["Code", "Name", "Market"]].dropna(subset=["Code", "Name"])
+        df["Code"] = df["Code"].astype(str).str.zfill(6)
+        return df
+    except Exception:
+        return pd.DataFrame(columns=["Code", "Name", "Market"])
+
+
+def _fdr_lookup(q: str):
+    """FDR 전종목 DB에서 코드/이름/부분명 검색 → (code, market, name) or (None,None,None)."""
+    df = _krx_listing()
+    if df.empty:
+        return None, None, None
+    # 코드 직접 매칭
+    if re.match(r"^\d{6}$", q):
+        row = df[df["Code"] == q]
+        if not row.empty:
+            r = row.iloc[0]
+            return r["Code"], r["Market"], r["Name"]
+    # 이름 완전 매칭
+    row = df[df["Name"] == q]
+    if not row.empty:
+        r = row.iloc[0]
+        return r["Code"], r["Market"], r["Name"]
+    # 부분 이름 매칭 (첫 번째 히트)
+    row = df[df["Name"].str.contains(q, na=False, regex=False)]
+    if not row.empty:
+        r = row.iloc[0]
+        return r["Code"], r["Market"], r["Name"]
+    return None, None, None
+
+
 def _resolve_sniper(q: str):
-    """코드/이름/부분명 검색 → (code, market, name, sector) or None
-    정적 DB 92종목 → 동적 price_df (전종목 확장 후 신규 종목) 순서로 탐색"""
+    """코드/이름/부분명 검색 → (code, market, name, sector) or (None,None,None,None).
+    탐색 순서:
+      1. 정적 DB 코드 직접 조회
+      2. 정적 DB 이름 조회
+      3. 정적 DB 부분 이름 매칭
+      4. FDR KRX 전종목 DB (2880+ 종목, 대한조선 포함) — 코드/이름/부분명
+      5. 동적 price_df (분석 결과 세션) 코드 조회
+      6. 동적 price_df 부분 이름 조회
+    """
     q = q.strip()
     # 1. 정적 DB 코드 직접 조회
     if q in _CODE_MKT:
@@ -2704,15 +2755,19 @@ def _resolve_sniper(q: str):
     for code, (name, sector) in _ALL_STKS.items():
         if q in name:
             return code, _CODE_MKT[code], name, sector
-    # 4. 동적 price_df 에서 검색 (전종목 확장 이후 신규 종목 지원)
+    # 4. FDR KRX 전종목 DB — 미등록 신규 종목 전체 커버 (대한조선 439260 등)
+    fdr_code, fdr_mkt, fdr_name = _fdr_lookup(q)
+    if fdr_code:
+        fdr_mkt_norm = "KOSPI" if "KOSPI" in str(fdr_mkt).upper() else "KOSDAQ"
+        return fdr_code, fdr_mkt_norm, fdr_name, "기타"
+    # 5. 동적 price_df 에서 코드 검색 (분석 실행 이후)
     if re.match(r"^\d{6}$", q):
         for mkt in ("KOSPI", "KOSDAQ"):
             df_s = st.session_state.get(f"{mkt.lower()}_result")
             if df_s is not None and q in df_s.index:
                 return q, mkt, str(df_s.loc[q, "종목명"]), str(df_s.loc[q, "섹터"])
-        # 코드는 맞지만 미분석 — KOSPI로 우선 시도 (sniper_price 가 suffix 처리)
         return q, "KOSPI", q, "기타"
-    # 5. 동적 price_df 부분 이름 매칭
+    # 6. 동적 price_df 부분 이름 매칭
     for mkt in ("KOSPI", "KOSDAQ"):
         df_s = st.session_state.get(f"{mkt.lower()}_result")
         if df_s is not None and "종목명" in df_s.columns:
@@ -2743,6 +2798,9 @@ with _sb_col:
     _sniper_clicked = st.button("🎯 해부 시작", use_container_width=True, key="sniper_btn")
 
 if _sniper_clicked and _sniper_q:
+    # 새 검색 시 이전 결과 완전 삭제 (잔상 제거)
+    for _k in ("sniper_code", "sniper_mkt", "sniper_name", "sniper_sector"):
+        st.session_state.pop(_k, None)
     _code, _mkt, _name, _sector = _resolve_sniper(_sniper_q)
     if _code:
         st.session_state["sniper_code"]   = _code
@@ -2750,7 +2808,7 @@ if _sniper_clicked and _sniper_q:
         st.session_state["sniper_name"]   = _name
         st.session_state["sniper_sector"] = _sector
     else:
-        st.error(f"'{_sniper_q}' 종목을 찾을 수 없습니다. 등록된 종목명 또는 6자리 코드를 입력해 주세요.")
+        st.error(f"❌ '{_sniper_q}' 종목을 찾을 수 없습니다. KRX 상장 종목명 또는 6자리 코드를 입력해 주세요.")
 
 # ── 스나이퍼 결과 ──────────────────────────────────────────────────────────────
 if "sniper_code" in st.session_state:
