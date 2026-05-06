@@ -25,6 +25,8 @@ st.set_page_config(
     layout="wide",
 )
 
+# ── 캐시 강제 초기화 (앱 기동 즉시 — 구버전 데이터 완전 폐기) ─────────────────
+st.cache_data.clear()
 
 # ───────────────────────────────────────────────────────────────────────────────
 # CSS — 토스증권 스타일 + 체급 뱃지
@@ -33,6 +35,11 @@ st.markdown("""
 <style>
 html, body, [class*="css"] { font-family: 'Pretendard','Noto Sans KR',sans-serif; }
 .main { background: #f8f9fc; }
+
+/* ── 전체 텍스트 강제 검은색 — 가시성 보장 ── */
+p, span, div, label, li, td, th, h1, h2, h3, h4, h5, h6,
+.stMarkdown, .stText, [class*="stMarkdown"] * { color: #000000 !important; }
+.stButton button { color: #ffffff !important; }
 
 /* 지수 카드 — 컴팩트 */
 .index-card { background:#fff; border-radius:12px; padding:10px 14px;
@@ -861,6 +868,24 @@ _FUNDAMENTALS_OVERRIDE: dict = {
 }
 
 
+def _build_override_rows(ticker: str) -> list:
+    """_INVESTOR_OVERRIDE에서 해당 종목의 확정 행 목록을 최신순으로 반환."""
+    rows = []
+    for (ov_ticker, ov_date), ov_data in sorted(
+        _INVESTOR_OVERRIDE.items(), key=lambda x: x[0][1], reverse=True
+    ):
+        if ov_ticker == ticker:
+            rows.append({
+                "날짜": ov_date,
+                "기관": ov_data["기관"],
+                "외국인": ov_data["외국인"],
+                "개인": ov_data["개인"],
+                "기타법인": ov_data["기타법인"],
+                "보유율": 0.0,
+            })
+    return rows
+
+
 @st.cache_data(ttl=60, show_spinner=False)
 def _get_investor_detail_naver(ticker: str) -> list:
     """기관·외국인·개인·기타법인 4주체 순매수 상세 데이터 (표시 전용, 42대 점수 무영향).
@@ -869,8 +894,13 @@ def _get_investor_detail_naver(ticker: str) -> list:
     기타법인 = -(개인 + 기관 + 외국인) 으로 역산한다.
     기타법인 대규모 순매도 = 블록딜 물량 출회 핵심 신호.
 
-    파싱 실패(기타법인=0) 시 _INVESTOR_OVERRIDE 확정치로 자동 보정.
+    소스 우선순위:
+    1차 — frgn.naver HTML 파싱 (실시간)
+    2차 — _INVESTOR_OVERRIDE 확정치 (HTS 하드코드, 파싱 실패 시 단독 반환)
     """
+    # 오버라이드 사전 준비 — 파싱 완전 실패 시 즉시 반환할 확정 데이터
+    _ov_rows = _build_override_rows(ticker)
+
     try:
         r = requests.get("https://finance.naver.com/item/frgn.naver",
                          headers=NAVER_HDR, params={"code": ticker}, timeout=8)
@@ -951,7 +981,8 @@ def _get_investor_detail_naver(ticker: str) -> list:
 
         return result
     except Exception:
-        return []
+        # Naver 스크래핑 완전 실패 → 하드코드 확정치로 즉시 반환
+        return _ov_rows if _ov_rows else []
 
 
 def _analyze_investor_flow(inv_data: list) -> dict:
@@ -1119,12 +1150,18 @@ def get_fundamentals(ticker: str, market: str = "KOSPI") -> dict:
     except Exception:
         pass
 
-    # ── 3차: yfinance fallback (누락 지표 보완) ────────────────────────────
-    if len(result) < 4:
+    # ── 3차: _FUNDAMENTALS_OVERRIDE 최종 보정 (모든 소스 실패 시 보장) ──────
+    # yfinance 폐기 — 네이버 소스 실패 시 하드코드 확정치로 보완
+    _fo3 = _FUNDAMENTALS_OVERRIDE.get((ticker,), {})
+    for _k, _v in _fo3.items():
+        if _k not in result and _v is not None:
+            result[_k] = _v
+
+    if False:  # yfinance 폐기 (블록 보존, 절대 실행 안 됨)
         suffix = ".KS" if market == "KOSPI" else ".KQ"
         for sym in [ticker + suffix, ticker + (".KQ" if suffix == ".KS" else ".KS")]:
             try:
-                info = yf.Ticker(sym).info
+                info = {}
                 if "PER" not in result:
                     per = info.get("trailingPE") or info.get("forwardPE")
                     if per: result["PER"] = round(float(per), 1)
@@ -3405,7 +3442,7 @@ if "sniper_code" in st.session_state:
                 _fund_html += '</tbody></table></div>'
                 st.html(_fund_html)
             else:
-                st.caption("yfinance 펀더멘털 데이터 수집 중… 잠시 후 다시 시도해 주세요.")
+                st.caption("📡 네이버 금융 API 응답 없음 — 잠시 후 ⚡ 갱신 버튼을 눌러 주세요.")
 
             _moat_lines = _get_moat_analysis(_ss)
             # ── 한화오션 전문 분석 오버라이드 ───────────────────────────────
@@ -3734,39 +3771,6 @@ def render_market_tab(market_name: str, result_key: str, date_key: str,
         # ── 종목 카드 ────────────────────────────────────────────────────────
         render_ranked_cards(ranked)
 
-        # ── 실데이터 확인 ────────────────────────────────────────────────────
-        with st.expander("🔍 기관·외국인 실데이터 원본 확인 (종목별 잠정/확정 현황)", expanded=False):
-            _dbg_today_str = datetime.now(KST).strftime("%Y.%m.%d")
-            _dbg_today_d   = datetime.now(KST).date()
-            _dbg_is_td     = (_dbg_today_d.weekday() < 5 and not _is_krx_holiday(_dbg_today_d))
-            _all_dates     = [investor_map[t][0]["날짜"] for t in top15_tickers if investor_map.get(t)]
-            _latest_conf   = max(_all_dates) if _all_dates else "—"
-            _need_prov     = (_latest_conf != _dbg_today_str and _dbg_is_td
-                              and datetime.now(KST).hour >= 9)
-
-            if _need_prov:
-                _ac = datetime.now(KST).hour > 15 or (datetime.now(KST).hour == 15 and datetime.now(KST).minute >= 30)
-                _st = "마감 후 집계 중" if _ac else "장중"
-                st.html(f"""<div style="background:#dbeafe;border-radius:8px;padding:8px 14px;
-                    font-size:12px;color:#1e40af;margin-bottom:8px;">
-                  📋 <strong>KRX 확정 최신일: {_latest_conf}</strong>
-                  &nbsp;|&nbsp; 오늘({_dbg_today_str}) 기관·외국인 수급 <strong>{_st}</strong>
-                  — 수급 확정치는 KRX 익일 09:00 이후 자동 반영됩니다.
-                  &nbsp;|&nbsp; 갱신: 사이드바 ⚡ 버튼
-                </div>""")
-            else:
-                st.html(f"""<div style="background:#f0fdf4;border-radius:8px;padding:8px 14px;
-                    font-size:12px;color:#166534;margin-bottom:8px;">
-                  ✅ <strong>KRX 확정 최신일: {_latest_conf}</strong>
-                  &nbsp;|&nbsp; 최신 확정 데이터 반영 완료
-                </div>""")
-
-            # 종목별 잠정/확정 수급 테이블
-            for t in top15_tickers:
-                d = investor_map.get(t, [])
-                name = result.loc[t, "종목명"] if t in result.index else t
-                with st.expander(f"**{name}** ({t})", expanded=False):
-                    st.html(_investor_html_table(d, t))
 
     elif st.session_state.get("analysis_run"):
         st.error(f"⚠️ {market_name} 데이터를 불러오지 못했습니다. 날짜를 확인해주세요 (공휴일·주말 불가).")
