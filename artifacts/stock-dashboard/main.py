@@ -951,6 +951,63 @@ def _get_moat_analysis(sector: str) -> list:
     ]
 
 
+def _build_factcheck_alerts(news_list: list, stock_name: str) -> list:
+    """수집된 뉴스 헤드라인에서 블록딜·오버행·수주 등 중대 이벤트 추출 (표시 전용, 42대 점수 무영향)."""
+    _RISK = [
+        ("블록딜",     "🚨 블록딜 물량 출회 감지",        "#dc2626",
+         "오버행 부담 — 대량 매물이 시장에 풀릴 가능성. 단기 주가 억제 요인. 기관 수급 변화 즉각 모니터링 필요."),
+        ("오버행",     "🚨 오버행 이슈 감지",              "#dc2626",
+         "잠재 매물 부담 — 상승 시 차익 실현 매물 압박. 물량 소화 여부 확인 후 재진입 검토."),
+        ("유상증자",   "⚠️ 유상증자 공시 감지",            "#b45309",
+         "주식 희석 우려 — 발행가·규모 확인. 실권주 발생 시 추가 하락 가능. 완납 시점까지 변동성 주의."),
+        ("전환사채",   "⚠️ CB(전환사채) 이슈 감지",        "#b45309",
+         "전환 시 주식 희석 — 전환가·만기 확인. 주가가 전환가 접근 시 매물 출회 패턴 주의."),
+        ("신주인수권", "⚠️ BW(신주인수권부사채) 감지",     "#b45309",
+         "신주 발행 잠재 — 행사가·물량 확인 후 희석 리스크 반영."),
+        ("거래정지",   "🛑 거래정지 이슈 감지",             "#7f1d1d",
+         "매매 즉각 불가 — 재개 시 방향성 불확실. 공시 내용 확인 필수."),
+        ("횡령",       "🛑 횡령·배임 경영 리스크 감지",    "#7f1d1d",
+         "경영진 신뢰도 훼손 — 기관 수급 이탈 가능. 포지션 즉각 재검토 권고."),
+        ("분식",       "🛑 분식회계 의혹 감지",             "#7f1d1d",
+         "실적 신뢰도 훼손 — 수급 붕괴 위험. 42대 점수 무효화 가능성."),
+        ("파업",       "⚠️ 파업·노사갈등 감지",             "#b45309",
+         "생산 차질 가능 — 실적 하향 조정 리스크. 단기 변동성 확대."),
+        ("상장폐지",   "🛑 상장폐지 위험 감지",             "#7f1d1d",
+         "투자 위험 최고 수준 — 즉시 포지션 정리 검토."),
+    ]
+    _OPP = [
+        ("수주",       "🔥 수주·계약 공시 감지",            "#1d4ed8",
+         "미반영 실적 기여 — 공시 규모·기간 확인. 기관 선취매 패턴. 뉴스 직후 타점 포착이 핵심."),
+        ("계약 체결",  "🔥 대형 계약 체결 감지",            "#1d4ed8",
+         "신규 매출 확정 — 실적 상향 조정 트리거. 기관·외국인 동반 매집 패턴 확인."),
+        ("임상 성공",  "🔥 임상 성공·승인 소식 감지",       "#059669",
+         "바이오 최대 호재 — 기관·외국인 선취매 패턴. 갭업 후 거래량 확인 필수."),
+        ("특허",       "✅ 특허·기술이전 감지",              "#059669",
+         "기술 해자 강화 — 중장기 주주 가치 상승. 실적 기여까지 시간차 존재."),
+        ("자사주 매입", "✅ 자사주 매입 공시 감지",          "#059669",
+         "주주 환원 신호 — 주가 하방 지지. 기관 매집 유인으로 수급 안정."),
+        ("배당 확대",  "✅ 배당 확대 감지",                  "#059669",
+         "주주 환원 강화 — 기관·연기금 장기 보유 유인. 배당락 전 매집 패턴."),
+        ("MOU",        "🔥 MOU·업무협약 체결 감지",          "#2563eb",
+         "사업 확장 신호 — 본 계약 공시 시 추가 상승. 기관 관심 급증 패턴."),
+    ]
+    alerts = []
+    for headline in news_list:
+        matched = False
+        for kw, title, color, desc in _RISK:
+            if kw in headline:
+                alerts.append({"type": "risk", "headline": headline,
+                                "title": title, "color": color, "desc": desc})
+                matched = True; break
+        if not matched:
+            for kw, title, color, desc in _OPP:
+                if kw in headline:
+                    alerts.append({"type": "opp", "headline": headline,
+                                   "title": title, "color": color, "desc": desc})
+                    break
+    return alerts
+
+
 @st.cache_data(ttl=60, show_spinner=False)
 def _get_krx_ref_date(ticker: str) -> str:
     """frgn.naver <em class='date'> 에서 KRX 기준일(장마감 기준) 파싱.
@@ -2321,6 +2378,28 @@ if "sniper_code" in st.session_state:
         else:
             _short_note = ""
 
+        # ── 공매도 점수 박스 HTML (0→집계중 보정) ────────────────────────────
+        if _short_s > 0:
+            _short_score_html = (
+                f'<div style="font-size:26px;font-weight:900;line-height:1.1;color:#ea580c;">'
+                f'{_short_s:.0f}</div>'
+            )
+        elif _sshort:
+            _short_score_html = (
+                f'<div style="font-size:14px;font-weight:900;color:#ea580c;line-height:1.5;">'
+                f'{_sshort["잔고율"]:.2f}%<br>'
+                f'<span style="font-size:9px;color:#6b7280;font-weight:600;">잔고율 확인 · 전환 미감지</span></div>'
+            )
+        else:
+            _short_score_html = (
+                '<div style="font-size:15px;font-weight:900;color:#f59e0b;line-height:1.4;">'
+                '집계 중<br>'
+                '<span style="font-size:9px;font-weight:600;color:#6b7280;">(T+2 지연)</span></div>'
+            )
+
+        # ── 심층 팩트체크 이벤트 추출 ─────────────────────────────────────────
+        _factcheck_alerts = _build_factcheck_alerts(_news_src, _sn)
+
         # 특수 배지
         _s_badges = ""
         if _sscore.get("폭발후보"):
@@ -2336,6 +2415,45 @@ if "sniper_code" in st.session_state:
         _src_bg       = "#f0fdf4" if _naver_ok else "#fffbeb"
         _src_border   = "#bbf7d0" if _naver_ok else "#fde68a"
 
+        # ── 심층 팩트체크 핵심 분석 카드 ─────────────────────────────────────
+        if _factcheck_alerts:
+            _risk_alerts = [a for a in _factcheck_alerts if a["type"] == "risk"]
+            _opp_alerts  = [a for a in _factcheck_alerts if a["type"] == "opp"]
+            if _risk_alerts and _opp_alerts:
+                _fa_title_str = f"리스크 {len(_risk_alerts)}건 + 기회 {len(_opp_alerts)}건 감지"
+                _fa_bg_top = "#fff3f3"; _fa_border_top = "#fca5a5"; _fa_text_top = "#7f1d1d"
+            elif _risk_alerts:
+                _fa_title_str = f"리스크 이벤트 {len(_risk_alerts)}건 감지"
+                _fa_bg_top = "#fff3f3"; _fa_border_top = "#fca5a5"; _fa_text_top = "#7f1d1d"
+            else:
+                _fa_title_str = f"기회 이벤트 {len(_opp_alerts)}건 감지"
+                _fa_bg_top = "#eff6ff"; _fa_border_top = "#93c5fd"; _fa_text_top = "#1e3a8a"
+            _fa_rows = ""
+            for _fa in _factcheck_alerts[:5]:
+                _fa_row_bg = "#fef2f2" if _fa["type"] == "risk" else "#f0f9ff"
+                _fa_rows += (
+                    f'<div style="background:{_fa_row_bg};border-left:4px solid {_fa["color"]};'
+                    f'border-radius:6px;padding:10px 14px;margin-bottom:8px;">'
+                    f'<div style="font-size:12px;font-weight:900;color:{_fa["color"]};margin-bottom:4px;">'
+                    f'{_fa["title"]}</div>'
+                    f'<div style="font-size:12px;font-weight:700;color:#1f2937;">'
+                    f'📰 {_fa["headline"][:70]}{"…" if len(_fa["headline"])>70 else ""}</div>'
+                    f'<div style="font-size:11px;color:#4b5563;margin-top:4px;font-weight:600;">'
+                    f'⚑ {_fa["desc"]}</div>'
+                    f'</div>'
+                )
+            st.html(f"""
+<div style="background:{_fa_bg_top};border:2px solid {_fa_border_top};border-radius:12px;
+            padding:14px 18px;margin-bottom:8px;font-family:'Pretendard','Noto Sans KR',sans-serif;">
+  <div style="font-size:13px;font-weight:900;color:{_fa_text_top};margin-bottom:10px;">
+    🔍 핵심 분석 — 팩트체크 이벤트 ({_fa_title_str})
+  </div>
+  {_fa_rows}
+  <div style="font-size:10px;color:#9ca3af;margin-top:4px;">
+    ※ 수집된 뉴스 헤드라인 기반 · 공시 원문 직접 확인 권고
+  </div>
+</div>""")
+
         _time_span = (
             f'<span style="color:#9ca3af;margin-left:8px;">수집 시각: '
             f'<strong style="color:{_src_color};">{_collected_at}</strong></span>'
@@ -2350,6 +2468,24 @@ if "sniper_code" in st.session_state:
 </div>""")
 
         st.html(f"""
+<style>
+.sniper-card{{background:#fff;border-radius:20px;padding:22px 26px;box-shadow:0 6px 24px rgba(0,0,0,.10);margin:6px 0 14px;border:1px solid #f0f0f5;color:#1f2937;font-family:'Pretendard','Noto Sans KR',sans-serif;}}
+.filter-box{{background:#f8fafc;border-radius:12px;padding:12px 14px;text-align:center;border:1px solid #e2e8f0;}}
+.filter-name{{font-size:11px;font-weight:800;color:#31333F;margin-bottom:5px;display:block;}}
+.filter-score{{font-size:26px;font-weight:900;line-height:1.1;display:block;}}
+.filter-max{{font-size:10px;color:#6b7280;margin-top:2px;display:block;}}
+.ma-row{{display:flex;align-items:center;gap:10px;margin-bottom:5px;font-size:13px;color:#1f2937;}}
+.ma-label{{font-weight:800;min-width:44px;color:#31333F;}}
+.ma-val{{font-weight:900;color:#000000;}}
+.grade-badge{{font-size:15px;font-weight:800;border-radius:12px;padding:6px 14px;display:inline-flex;align-items:center;gap:5px;}}
+.grade-bluechip{{background:#7c3aed;color:#fff;}}.grade-midcap{{background:#059669;color:#fff;}}.grade-small{{background:#d97706;color:#fff;}}
+.badge{{display:inline-block;border-radius:8px;padding:3px 10px;font-size:12px;font-weight:700;margin:2px 3px 2px 0;}}
+.badge-inst{{background:#fef2f2;color:#dc2626;}}.badge-safe{{background:#dbeafe;color:#1d4ed8;}}.badge-explode{{background:#7c3aed;color:#fff;}}
+.signal-buy{{background:#ef4444;color:#fff;border-radius:10px;padding:4px 14px;font-size:13px;font-weight:800;display:inline-block;}}
+.signal-ready{{background:#f59e0b;color:#fff;border-radius:10px;padding:4px 14px;font-size:13px;font-weight:800;display:inline-block;}}
+.signal-wait{{background:#94a3b8;color:#fff;border-radius:10px;padding:4px 14px;font-size:13px;display:inline-block;}}
+.signal-stop{{background:#e2e8f0;color:#64748b;border-radius:10px;padding:4px 14px;font-size:13px;display:inline-block;}}
+</style>
 <div class="sniper-card">
   <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:16px;margin-bottom:16px;">
     <div>
@@ -2387,7 +2523,7 @@ if "sniper_code" in st.session_state:
     </div>
     <div class="filter-box">
       <div class="filter-name">💥 공매도상환</div>
-      <div class="filter-score" style="color:#ea580c;">{_sscore["숏스퀴즈"]:.0f}</div>
+      {_short_score_html}
       <div class="filter-max">/ 20점</div>
       <div style="font-size:9px;color:#9ca3af;margin-top:2px;">수급 기반 추정·T+2</div>
       {_short_note}
@@ -2472,7 +2608,9 @@ if "sniper_code" in st.session_state:
             with st.expander(f"🔥 미반영 호재 {len(_unref_items)}건 상세 — 클릭하여 뉴스 헤드라인 확인"):
                 for _uidx, (_unh, _unkt) in enumerate(_unref_items, 1):
                     st.html(
-                        f'<div class="nc-unref">'
+                        f'<div style="background:#eff6ff;border-radius:10px;padding:9px 14px;'
+                        f'border-left:3px solid #2563eb;margin-bottom:6px;font-size:13px;'
+                        f'color:#1e3a8a;font-weight:700;font-family:\'Pretendard\',\'Noto Sans KR\',sans-serif;">'
                         f'<strong style="color:#1e3a8a;margin-right:6px;">{_uidx}.</strong>'
                         f'{_unh}{_unkt}</div>'
                     )
