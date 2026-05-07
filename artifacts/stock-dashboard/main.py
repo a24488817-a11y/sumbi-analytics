@@ -15,6 +15,7 @@ from io import StringIO
 import pytz
 import re
 import math
+import plotly.graph_objects as go
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. 페이지 설정
@@ -942,7 +943,7 @@ def ui_market_header(indices: dict):
         up   = chg >= 0
         val_str = f"{val:,.2f}" if val else "—"
         chg_str = f"{'▲' if up else '▼'} {abs(chg):.2f}%"
-        chg_col = "#27ae60" if up else "#e74c3c"
+        chg_col = "#c0392b" if up else "#2471a3"
         spark   = get_index_sparkline(_INDEX_YF.get(label, ""))
         svg     = _sparkline_svg(spark, up=up)
         cards_html += f"""
@@ -987,7 +988,7 @@ def ui_top15_tabs(scored: list[dict]):
                 "현재가":         f"{s['price']:,}원" if s["price"] else "—",
                 "등락률":         f"{s['change']:+.2f}%" if s["price"] else "—",
                 "시가총액":       f"{s['cap']:,.0f}억" if s.get("cap") else "—",
-                "Impact Score":   s["total"],
+                "숨비 점수":      s["total"],
                 "수급 점수":      s["inv_score"],
                 "차트 점수":      s["pb_score"],
                 "RSI":            s.get("rsi", "—"),
@@ -996,7 +997,7 @@ def ui_top15_tabs(scored: list[dict]):
         return pd.DataFrame(rows)
 
     _prog_col = st.column_config.ProgressColumn(
-        "Impact Score", min_value=0, max_value=100, format="%d점"
+        "숨비 점수", min_value=0, max_value=100, format="%d점"
     )
 
     def _show(df: pd.DataFrame, empty_msg: str = "데이터 동기화 중 — 잠시 후 재시도하세요."):
@@ -1005,7 +1006,7 @@ def ui_top15_tabs(scored: list[dict]):
         else:
             st.dataframe(
                 df, use_container_width=True, hide_index=True,
-                column_config={"Impact Score": _prog_col},
+                column_config={"숨비 점수": _prog_col},
             )
 
     large  = [s for s in scored if s.get("cap", 0) >= 10_000]
@@ -1136,40 +1137,41 @@ def ui_fundamentals_card(r: dict):
     upside_col = "#27ae60" if (upside or 0) >= 0 else "#e74c3c"
 
     items = [
-        ("시가총액", cap_str, ""),
-        ("PER", per_str, "Price/Earnings"),
-        ("PBR", pbr_str, "Price/Book"),
-        ("ROE", roe_str, "Return on Equity"),
-        ("목표주가", tp_str, upside_str),
+        ("시가총액",                    cap_str, "",         ""),
+        ("수익 대비 주가 (PER)",        per_str, "낮을수록 매수 기회", "#27ae60"),
+        ("자산 대비 주가 (PBR)",        pbr_str, "1 미만시 안전마진",  "#27ae60"),
+        ("자본 활용 능력 (ROE)",        roe_str, "높을수록 우량기업",  "#D4AF37"),
+        ("목표주가",                    tp_str,  upside_str,  upside_col),
     ]
     cells = ""
-    for k, v, sub in items:
-        sub_html = f'<div class="fi-sub" style="color:{upside_col}">{sub}</div>' if sub else ""
+    for k, v, hint, hcol in items:
+        hint_html = f'<div class="fi-hint" style="color:{hcol}">{hint}</div>' if hint else ""
         cells += f"""
 <div class="fi-cell">
   <div class="fi-key">{k}</div>
   <div class="fi-val">{v}</div>
-  {sub_html}
+  {hint_html}
 </div>"""
 
     _html_block(f"""
 <style>
   .fi-wrap  {{ background:#12192b; border:1px solid #2a3550; border-radius:14px;
-               padding:20px 24px; margin:4px 0; }}
+               padding:22px 26px; margin:4px 0; }}
   .fi-title {{ font-size:.72rem; font-weight:800; letter-spacing:.14em; color:#D4AF37;
-               text-transform:uppercase; margin-bottom:14px; }}
-  .fi-grid  {{ display:grid; grid-template-columns:repeat(5,1fr); gap:12px; }}
-  .fi-cell  {{ display:flex; flex-direction:column; }}
-  .fi-key   {{ font-size:.7rem; color:#6b7c93; letter-spacing:.07em;
-               text-transform:uppercase; margin-bottom:4px; }}
-  .fi-val   {{ font-size:1.1rem; font-weight:800; color:#E8E8E8; }}
-  .fi-sub   {{ font-size:.82rem; font-weight:700; margin-top:2px; }}
-  .fi-note  {{ font-size:.72rem; color:#4a5568; margin-top:10px; }}
+               text-transform:uppercase; margin-bottom:16px; }}
+  .fi-grid  {{ display:grid; grid-template-columns:repeat(5,1fr); gap:16px; }}
+  .fi-cell  {{ display:flex; flex-direction:column;
+               background:#0d1526; border:1px solid #1e2a3a;
+               border-radius:10px; padding:14px 16px; }}
+  .fi-key   {{ font-size:.72rem; color:#8fa3b8; line-height:1.3; margin-bottom:6px; }}
+  .fi-val   {{ font-size:1.25rem; font-weight:900; color:#E8E8E8; }}
+  .fi-hint  {{ font-size:.75rem; font-weight:700; margin-top:4px; }}
+  .fi-note  {{ font-size:.72rem; color:#4a5568; margin-top:12px; }}
 </style>
 <div class="fi-wrap">
-  <div class="fi-title">⚡ SOOMBI ANALYST Insight — 가치 평가 지표</div>
+  <div class="fi-title">⚡ 숨비 가치 평가 분석</div>
   <div class="fi-grid">{cells}</div>
-  <div class="fi-note">※ 네이버 파이낸스 기준 · PER/PBR 현재 기준, ROE 최근 결산 기준 · 투자 권유 아님</div>
+  <div class="fi-note">※ 네이버 파이낸스 기준 · 수익/자산 대비 주가는 현재 기준, 자본 활용 능력은 최근 결산 기준 · 투자 권유 아님</div>
 </div>
 """)
 
@@ -1263,100 +1265,140 @@ def ui_block_alert(msg: str):
 
 
 def ui_score_card(r: dict):
-    """SOOMBI ANALYST Impact Score — 속도계 게이지 + 정밀 분석 카드."""
-    total = r["total"]
-    pb    = r["pb"]
-    iv    = r["inv_score"]
-    ns    = r["news_score"]
-    ss    = r["short_score"]
-
+    """숨비 종합 진단 점수 — Plotly 속도계 게이지 + 4분할 카드."""
+    total   = r["total"]
+    pb      = r["pb"]
+    iv      = r["inv_score"]
+    ns      = r["news_score"]
+    ss      = r["short_score"]
     verdict = r["verdict"]
+
     if total >= 75:
         vd_col = "#27ae60"; vd_bg = "#0d2a1a"; vd_border = "#27ae60"
-        badge  = "STRONG BUY"
+        badge  = "강력 매수"; sc = "#27ae60"
     elif total >= 55:
         vd_col = "#D4AF37"; vd_bg = "#2a2200"; vd_border = "#D4AF37"
-        badge  = "관심 매집"
+        badge  = "관심 매집"; sc = "#D4AF37"
     elif total >= 35:
-        vd_col = "#f39c12"; vd_bg = "#2a1a00"; vd_border = "#f39c12"
-        badge  = "관망"
+        vd_col = "#f39c12"; vd_bg = "#221600"; vd_border = "#f39c12"
+        badge  = "관망";     sc = "#f39c12"
     else:
         vd_col = "#e74c3c"; vd_bg = "#2a0d0d"; vd_border = "#e74c3c"
-        badge  = "진입 불가"
+        badge  = "진입 불가"; sc = "#e74c3c"
 
-    gauge_svg = _gauge_svg(total)
-
-    def _row(icon: str, label: str, score: int, mx: int, detail: str = "") -> str:
-        pct = int(score / mx * 100)
-        col = "#27ae60" if pct >= 75 else ("#D4AF37" if pct >= 50 else ("#f39c12" if pct >= 25 else "#e74c3c"))
-        return f"""
-<div class="sc-row">
-  <div class="sc-top">
-    <span class="sc-lbl">{icon} {label}</span>
-    <span class="sc-pts" style="color:{col}">{score}<span style="font-size:.75rem;opacity:.6">/{mx}점</span></span>
-  </div>
-  <div class="sc-track"><div class="sc-fill" style="width:{pct}%;background:{col}"></div></div>
-  <div class="sc-det">{detail}</div>
-</div>"""
-
-    rows_html = (
-        _row("◈", "세력 수급 역추적 (기관·외국인)", iv["score"], 30, iv["detail"]) +
-        _row("◈", "공매도 잔고 분석",                ss, 20, "외국인잔고율 변화 기반 산출") +
-        _row("◈", "정밀 눌림목 매커니즘 (차트)",
-             pb["score"], 30,
-             f"{pb['signal']} · RSI {pb['rsi']} · MA5 {pb['ma5']:,} / MA20 {pb['ma20']:,}") +
-        _row("◈", "미반영 호재 뉴스",               ns["score"], 20,
-             f"호재 {len(ns['good'])}건 / 악재 {len(ns['bad'])}건")
+    # ── Plotly 속도계 게이지 ───────────────────────────────────────────────
+    fig = go.Figure(go.Indicator(
+        mode="gauge+number",
+        value=total,
+        number={
+            "font": {"size": 64, "color": sc, "family": "Arial Black"},
+            "suffix": "점",
+        },
+        gauge={
+            "axis": {
+                "range": [0, 100],
+                "tickwidth": 1,
+                "tickcolor": "#4a5568",
+                "tickvals": [0, 35, 55, 75, 100],
+                "ticktext": ["0", "35", "55", "75", "100"],
+                "tickfont": {"color": "#8fa3b8", "size": 11},
+            },
+            "bar":  {"color": sc, "thickness": 0.30},
+            "bgcolor": "#12192b",
+            "borderwidth": 0,
+            "steps": [
+                {"range": [0,   35],  "color": "#200d0d"},
+                {"range": [35,  55],  "color": "#201700"},
+                {"range": [55,  75],  "color": "#1c1a00"},
+                {"range": [75, 100],  "color": "#0c1f10"},
+            ],
+            "threshold": {
+                "line": {"color": "#D4AF37", "width": 3},
+                "thickness": 0.78,
+                "value": 75,
+            },
+        },
+        title={
+            "text": (
+                "숨비 종합 진단 점수<br>"
+                f"<span style='font-size:14px;color:{vd_col}'>"
+                f"● {badge} 판정</span>"
+            ),
+            "font": {"size": 17, "color": "#D4AF37", "family": "Arial"},
+        },
+    ))
+    fig.update_layout(
+        height=310,
+        paper_bgcolor="#0E1117",
+        font={"color": "#E8E8E8", "family": "Arial"},
+        margin={"t": 90, "b": 10, "l": 50, "r": 50},
     )
 
-    _html_block(f"""
+    col_gauge, col_verdict = st.columns([1, 1])
+    with col_gauge:
+        st.plotly_chart(fig, use_container_width=True)
+    with col_verdict:
+        _html_block(f"""
 <style>
-  .sc-wrap {{
-    background: linear-gradient(135deg,#0d1526 0%,#12192b 100%);
-    border:1px solid #2a3550; border-radius:16px;
-    padding:28px 32px; margin:8px 0;
-    box-shadow:0 4px 24px rgba(0,0,0,.6);
-  }}
-  .sc-header {{ display:grid; grid-template-columns:auto 1fr; gap:24px; align-items:center; margin-bottom:24px; }}
-  .sc-gauge  {{ display:flex; flex-direction:column; align-items:center; }}
-  .sc-score-big {{ font-size:2.6rem; font-weight:900; color:#F0F0F0;
-                   text-align:center; margin-top:-8px; font-variant-numeric:tabular-nums; }}
-  .sc-score-sub {{ font-size:.78rem; color:#6b7c93; text-align:center; letter-spacing:.05em; }}
-  .sc-verdict {{
+  .vd {{
     background:{vd_bg}; border:1px solid {vd_border};
-    border-radius:10px; padding:16px 20px;
+    border-left:4px solid {vd_col};
+    border-radius:14px; padding:22px 24px; margin-top:8px;
+    box-shadow: 0 2px 12px rgba(0,0,0,.4);
   }}
-  .sc-badge {{ font-size:.7rem; font-weight:800; letter-spacing:.15em;
-               color:{vd_col}; text-transform:uppercase; margin-bottom:6px; }}
-  .sc-vtext {{ font-size:1.05rem; font-weight:700; color:#E8E8E8; line-height:1.5; }}
-  .sc-divider {{ border:none; border-top:1px solid #2a3550; margin:16px 0; }}
-  .sc-section {{ font-size:.7rem; font-weight:800; letter-spacing:.14em;
-                  color:#D4AF37; text-transform:uppercase; margin-bottom:12px; }}
-  .sc-row {{ margin:14px 0; }}
-  .sc-top  {{ display:flex; justify-content:space-between; margin-bottom:5px; }}
-  .sc-lbl  {{ font-size:.9rem; font-weight:700; color:#c8c8c8; }}
-  .sc-pts  {{ font-size:1rem; font-weight:900; }}
-  .sc-track {{ background:#1a2236; border-radius:6px; height:8px; overflow:hidden; }}
-  .sc-fill  {{ height:8px; border-radius:6px; transition:width .4s; }}
-  .sc-det  {{ font-size:.78rem; color:#5a6a7e; margin-top:3px; }}
+  .vd-badge {{
+    font-size:.72rem; font-weight:900; letter-spacing:.18em;
+    color:{vd_col}; text-transform:uppercase; margin-bottom:10px;
+  }}
+  .vd-text {{ font-size:1.02rem; font-weight:700; color:#E8E8E8; line-height:1.65; }}
 </style>
-<div class="sc-wrap">
-  <div class="sc-header">
-    <div class="sc-gauge">
-      {gauge_svg}
-      <div class="sc-score-big">{total}<span style="font-size:1.1rem;color:#6b7c93;font-weight:400"> / 100</span></div>
-      <div class="sc-score-sub">SOOMBI ANALYST Impact Score</div>
-    </div>
-    <div class="sc-verdict">
-      <div class="sc-badge">판정 — {badge}</div>
-      <div class="sc-vtext">{verdict}</div>
-    </div>
-  </div>
-  <hr class="sc-divider">
-  <div class="sc-section">정밀 메커니즘 분석 — 4대 지표</div>
-  {rows_html}
+<div class="vd">
+  <div class="vd-badge">숨비 종합 판정 ― {badge}</div>
+  <div class="vd-text">{verdict}</div>
 </div>
 """)
+
+    # ── 4분할 세부 분석 카드 ──────────────────────────────────────────────
+    st.markdown("#### 📊 4대 핵심 지표 세부 분석")
+    c1, c2, c3, c4 = st.columns(4)
+
+    def _mini_card(col, title: str, score: int, max_score: int, detail: str):
+        pct   = int(score / max_score * 100)
+        col_c = ("#27ae60" if pct >= 75 else
+                 "#D4AF37" if pct >= 50 else
+                 "#f39c12" if pct >= 25 else "#e74c3c")
+        with col:
+            _html_block(f"""
+<style>
+  .mc {{
+    background:#12192b; border:1px solid #2a3550;
+    border-top:3px solid {col_c};
+    border-radius:12px; padding:18px 16px;
+  }}
+  .mc-title {{ font-size:.7rem; font-weight:800; letter-spacing:.1em;
+               color:#D4AF37; text-transform:uppercase; margin-bottom:10px; }}
+  .mc-score {{ font-size:2.1rem; font-weight:900; color:{col_c}; line-height:1; }}
+  .mc-max   {{ font-size:.82rem; color:#6b7c93; font-weight:400; }}
+  .mc-bar   {{ background:#1a2236; border-radius:4px; height:6px; margin:10px 0 8px; }}
+  .mc-fill  {{ background:{col_c}; height:6px; border-radius:4px; width:{pct}%; }}
+  .mc-det   {{ font-size:.76rem; color:#8fa3b8; line-height:1.45; }}
+</style>
+<div class="mc">
+  <div class="mc-title">{title}</div>
+  <div class="mc-score">{score}<span class="mc-max"> / {max_score}점</span></div>
+  <div class="mc-bar"><div class="mc-fill"></div></div>
+  <div class="mc-det">{detail}</div>
+</div>
+""")
+
+    _mini_card(c1, "수급 분석",    iv["score"], 30,
+               f"기관·외국인 세력 역추적<br>{iv['detail']}")
+    _mini_card(c2, "공매도 분석",  ss, 20,
+               "공매도 잔고 역추적<br>외국인잔고율 변화 기반")
+    _mini_card(c3, "차트 패턴",    pb["score"], 30,
+               f"눌림목 패턴 분석<br>RSI {pb['rsi']} · MA5 {pb['ma5']:,}")
+    _mini_card(c4, "미반영 호재",  ns["score"], 20,
+               f"호재 {len(ns['good'])}건 감지<br>악재 {len(ns['bad'])}건 경보")
 
 
 def ui_investor_table(inv_data: list[dict]):
@@ -1494,23 +1536,23 @@ def main():
             st.cache_data.clear()
             st.rerun()
         st.divider()
-        st.markdown("#### SOOMBI ANALYST Impact Score")
+        st.markdown("#### 숨비 종합 진단 점수")
         st.markdown("""
 | 분석 지표 | 배점 |
 |---|---|
 | 세력 수급 역추적 | 30점 |
 | 공매도 잔고 분석 | 20점 |
-| 정밀 눌림목 매커니즘 | 30점 |
+| 정밀 눌림목 패턴 | 30점 |
 | 미반영 호재 뉴스 | 20점 |
 | **총점** | **100점** |
 """)
-        st.markdown("**75점 이상 → STRONG BUY 판정**")
+        st.markdown("**75점 이상 → 강력 매수 판정**")
         st.divider()
         st.caption("ENGINE: FDR + Naver Finance\nDATA: 실시간 역추적 파이프라인")
 
     # ── 헤더 ──────────────────────────────────────────────────────────────────
     st.markdown("# SOOMBI ANALYTICS v4.0")
-    st.markdown("### 0.1% 세력 역추적 &amp; 매수 적합도 즉시 판단 — SOOMBI ANALYST Impact Score")
+    st.markdown("### 0.1% 세력 역추적 &amp; 매수 적합도 즉시 판단 — 숨비 종합 진단 점수")
     st.divider()
 
     # ── 글로벌/국내 증시 전광판 ─────────────────────────────────────────────
@@ -1590,8 +1632,8 @@ def main():
             if result["block_alert"]:
                 ui_block_alert(result["block_alert"])
 
-            # ⑤ SOOMBI ANALYST Impact Score 게이지
-            st.markdown("### SOOMBI ANALYST Impact Score — 종합 진단")
+            # ⑤ 숨비 종합 진단 점수 게이지
+            st.markdown("### 숨비 종합 진단 점수")
             ui_score_card(result)
 
             # ⑥ 이동평균 스트립
