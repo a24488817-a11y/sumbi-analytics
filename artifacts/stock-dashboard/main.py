@@ -1037,6 +1037,18 @@ def ui_top15_tabs(scored: list[dict]):
         if df.empty:
             st.info("데이터 동기화 중 — 잠시 후 재시도하세요.")
             return
+
+        # ── 즉시 매수 최우선 강제 정렬 (사용자 지정 로직) ──────────────────
+        df = df.copy()
+        df["Sort_Score"] = df["차트 신호"].apply(
+            lambda x: 3 if "HIGH" in str(x) else (2 if "MID" in str(x) else 1)
+        )
+        df = df.sort_values(by=["Sort_Score", "숨비 점수"], ascending=[False, False])
+        df = df.drop(columns=["Sort_Score"])
+        df["순위"] = range(1, len(df) + 1)
+        df = df.reset_index(drop=True)
+        # ────────────────────────────────────────────────────────────────────
+
         event = st.dataframe(
             df, use_container_width=True, hide_index=True,
             on_select="rerun", selection_mode="single-row",
