@@ -1884,6 +1884,7 @@ def main():
     opacity: 1 !important;
     visibility: visible !important;
     color: #FFFFFF !important;
+    -webkit-text-fill-color: initial !important;
 }
 /* ① 앱 요소 투명도 재확인 */
 html, body, [class*="css"], [class*="st-"],
@@ -1905,7 +1906,7 @@ p,
 [data-testid="stCaptionContainer"] p,
 table th, table td {
     color: #F8F9FA !important;
-    font-size: 19px !important;
+    font-size: 20px !important;
     line-height: 1.6 !important;
     font-weight: 600 !important;
 }
@@ -1934,7 +1935,7 @@ summary p { color: #D4AF37 !important; font-weight: 700 !important; }
 [data-testid="stMarkdown"] p,
 .st-emotion-cache-1wivap2 {
     color: #FFD700 !important;
-    font-size: 19px !important;
+    font-size: 20px !important;
     font-weight: 800 !important;
     opacity: 1 !important;
     visibility: visible !important;
@@ -1950,6 +1951,7 @@ summary p { color: #D4AF37 !important; font-weight: 700 !important; }
 .up         { color: #FF5050 !important; font-weight: 700 !important; }
 .down       { color: #3399FF !important; font-weight: 700 !important; }
 .label      { color: #FFD700 !important; font-weight: 700 !important; }
+.gold       { color: #FFD700 !important; font-weight: 700 !important; }
 .white      { color: #FFFFFF !important; }
 .steady-stock { color: #FFFFFF !important; }
 .news-box   { color: #00FF00 !important; font-weight: 700 !important;
