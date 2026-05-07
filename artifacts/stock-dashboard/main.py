@@ -136,19 +136,6 @@ _BAD_KW = [
     "유상증자", "주가 하락", "블록딜", "오버행", "공매도 증가", "실적 악화",
 ]
 
-# 수급 5월6일 확정 오버라이드 (한화오션·대한조선)
-_INVESTOR_OVERRIDE: dict[tuple, list] = {
-    "042660": [
-        {"날짜": "2026.05.06", "기관": -230484,  "외국인": -157924, "개인": +780980,  "기타법인": -394325},
-        {"날짜": "2026.05.04", "기관": 5608,    "외국인": 262622,  "개인": -260000,  "기타법인": -8230},
-        {"날짜": "2026.04.30", "기관": 30245,   "외국인": 232377,  "개인": -270000,  "기타법인": 7378},
-        {"날짜": "2026.04.29", "기관": -124550,  "외국인": 149064,  "개인": -30000,   "기타법인": 5486},
-        {"날짜": "2026.04.28", "기관": -10996,   "외국인": 292299,  "개인": -290000,  "기타법인": 8697},
-    ],
-    "439260": [
-        {"날짜": "2026.05.06", "기관": -10118,  "외국인": -23321,  "개인": +33262,   "기타법인": 0},
-    ],
-}
 
 # KRX 휴장일 내장 폴백 테이블 (open.krx.co.kr API 불가 시 사용)
 _KRX_HOLIDAYS_FALLBACK: dict[int, list[str]] = {
@@ -179,13 +166,9 @@ _KRX_HOLIDAYS_FALLBACK: dict[int, list[str]] = {
     ],
 }
 
-# 블록딜·오버행 경보 종목 (팩트 기반 고정)
-_BLOCK_ALERT: dict[str, str] = {
-    "042660": (
-        "한화오션(042660) — 기타법인 블록딜(-394,325주) + 개인 전량 수취(+780,980주) 구조 확인. "
-        "외국인·기관 동반 이탈. 오버행 물량 소화 완료 전까지 개인 설거지 위험 최고 수준."
-    ),
-}
+# 블록딜·오버행 경보 — 실시간 수급 기반 자동 감지
+# (특정 종목 하드코딩 폐기 → 수급 분석 엔진이 동적 감지)
+_BLOCK_ALERT: dict[str, str] = {}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 3. KRX 공휴일 조회 (open.krx.co.kr OTP API → 폴백 테이블)
@@ -327,16 +310,11 @@ def _parse_int(val) -> int:
 @st.cache_data(ttl=60, show_spinner=False)
 def get_investor_flow(ticker: str) -> list[dict]:
     """
-    Naver frgn.naver table[3] → 기관·외국인 순매매량 (확정).
+    Naver frgn.naver table[3] → 기관·외국인 순매매량 (가장 최근 확정 영업일 자동 수집).
     개인 = 零合 역산: -(기관+외국인)   [기타법인 ≈ 0 근사]
     기타법인은 별도 source 없을 시 역산 불가 → 0 표기.
-    오버라이드 종목: 확정치 직접 반환.
     """
-    # 1. 오버라이드 우선
-    if ticker in _INVESTOR_OVERRIDE:
-        return _INVESTOR_OVERRIDE[ticker]
-
-    # 2. frgn.naver 파싱
+    # frgn.naver 파싱 — 가장 최근 확정 영업일 데이터 자동 수집
     url = f"https://finance.naver.com/item/frgn.naver?code={ticker}"
     try:
         resp   = requests.get(url, headers=NAVER_HDRS, timeout=10)
@@ -1009,20 +987,36 @@ def ui_top15_tabs(scored: list[dict]):
                 column_config={"숨비 점수": _prog_col},
             )
 
-    large  = [s for s in scored if s.get("cap", 0) >= 10_000]
-    qual   = [s for s in scored if s["pb_score"] >= 18 and s["inv_score"] >= 18]
-    penny  = [s for s in scored if 0 < s["price"] < 2_000]
+    # 시총 5,000억+ 대형주 (0 제외)
+    large  = [s for s in scored if s.get("cap", 0) >= 5_000]
+    if not large:
+        large = sorted(
+            [s for s in scored if s.get("cap", 0) > 0],
+            key=lambda x: x.get("cap", 0), reverse=True
+        )[:15]
+
+    # 우량주: 숨비 점수 45+ 또는 수급·차트 둘 다 15+
+    qual   = [s for s in scored
+              if s["total"] >= 45 or (s["pb_score"] >= 15 and s["inv_score"] >= 15)]
+    if not qual:
+        qual = sorted(scored, key=lambda x: x["pb_score"] + x["inv_score"], reverse=True)[:15]
+
+    # 소형주: 5,000원 이하
+    penny  = [s for s in scored if 0 < s["price"] < 5_000]
+    if not penny:
+        penny = sorted([s for s in scored if s["price"] > 0],
+                       key=lambda x: x["price"])[:15]
 
     tab1, tab2, tab3, tab4 = st.tabs([
         "🏆 전체 Top 15",
-        "🏢 대형주 (시총 1조+)",
-        "💎 우량주 (수급·차트 쌍끌이)",
-        "🪙 소형주 (~2,000원)",
+        "🏢 대형주 (시총 5,000억+)",
+        "💎 우량주 (숨비 45점+)",
+        "🪙 소형주 (~5,000원)",
     ])
     with tab1: _show(_to_df(scored))
-    with tab2: _show(_to_df(large),  "대형주(1조+) 조건 해당 종목 없음")
-    with tab3: _show(_to_df(qual),   "수급·차트 동시 고점 종목 없음")
-    with tab4: _show(_to_df(penny),  "소형주 조건 해당 종목 없음")
+    with tab2: _show(_to_df(large),  "대형주 조건 해당 종목이 없습니다.")
+    with tab3: _show(_to_df(qual),   "우량주 조건 해당 종목이 없습니다.")
+    with tab4: _show(_to_df(penny),  "소형주 조건 해당 종목이 없습니다.")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1550,10 +1544,58 @@ def main():
         st.divider()
         st.caption("ENGINE: FDR + Naver Finance\nDATA: 실시간 역추적 파이프라인")
 
-    # ── 헤더 ──────────────────────────────────────────────────────────────────
-    st.markdown("# SOOMBI ANALYTICS v4.0")
-    st.markdown("### 0.1% 세력 역추적 &amp; 매수 적합도 즉시 판단 — 숨비 종합 진단 점수")
-    st.divider()
+    # ── 하이엔드 로고 헤더 ────────────────────────────────────────────────────
+    _html_block("""
+<style>
+  .hdr-wrap {
+    padding: 32px 0 24px;
+    border-bottom: 1px solid #2a3550;
+    margin-bottom: 0;
+  }
+  .hdr-logo {
+    font-size: 2.0rem;
+    font-weight: 900;
+    letter-spacing: .22em;
+    background: linear-gradient(90deg,#B8942A 0%,#D4AF37 30%,#F5E882 55%,#C9A020 80%,#D4AF37 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    font-family: 'Georgia','Times New Roman',serif;
+    line-height: 1.15;
+    display: inline-block;
+  }
+  .hdr-ver {
+    font-size: .68rem;
+    font-weight: 700;
+    letter-spacing: .38em;
+    color: #6b7c93;
+    text-transform: uppercase;
+    margin-top: 6px;
+  }
+  .hdr-rule {
+    width: 56px; height: 2px;
+    background: linear-gradient(90deg,#D4AF37,transparent);
+    margin: 10px 0;
+  }
+  .hdr-sub {
+    font-size: .95rem;
+    font-weight: 500;
+    color: #c0c8d8;
+    letter-spacing: .04em;
+    line-height: 1.5;
+  }
+  .hdr-accent { color: #D4AF37; font-weight: 700; }
+</style>
+<div class="hdr-wrap">
+  <div class="hdr-logo">SOOMBI ANALYTICS</div>
+  <div class="hdr-ver">v4.0 &nbsp;·&nbsp; Private Terminal &nbsp;·&nbsp; KRX Intelligence Engine</div>
+  <div class="hdr-rule"></div>
+  <div class="hdr-sub">
+    <span class="hdr-accent">0.1%</span> 세력 역추적 &amp; 매수 적합도 즉시 판단
+    &nbsp;—&nbsp; <span class="hdr-accent">숨비 종합 진단 점수</span> 실시간 자동 산출
+  </div>
+</div>
+""")
 
     # ── 글로벌/국내 증시 전광판 ─────────────────────────────────────────────
     with st.spinner("시장 데이터 동기화 중…"):
@@ -1620,47 +1662,103 @@ def main():
             # ① 현재가 Gold·Dark 카드
             ui_price_header(result)
 
-            # ② SOOMBI ANALYST Insight — 가치 평가
-            st.divider()
-            ui_fundamentals_card(result)
-
-            # ③ 정밀 사업 분석 아코디언
-            ui_moat_expander(name, ticker)
-
-            # ④ 세력 동향 경보 (해당 시)
-            st.divider()
-            if result["block_alert"]:
-                ui_block_alert(result["block_alert"])
-
-            # ⑤ 숨비 종합 진단 점수 게이지
+            # ② [1순위] 숨비 종합 진단 점수 — Plotly 속도계 게이지
             st.markdown("### 숨비 종합 진단 점수")
             ui_score_card(result)
+            st.divider()
 
-            # ⑥ 이동평균 스트립
+            # ③ [2순위] 4주체 확정 수급표 (기관·외국인·개인·기타법인)
+            st.markdown("#### 세력 수급 역추적 — 최근 5거래일 확정 데이터")
+            ui_investor_table(result["inv_data"])
+            st.divider()
+
+            # ④ [3순위] 펀더멘털 & 가치 평가 (한글 용어)
+            ui_fundamentals_card(result)
+
+            # ⑤ 정밀 사업 분석 아코디언
+            ui_moat_expander(name, ticker)
+
+            # ⑥ 세력 동향 경보 (해당 시)
+            if result["block_alert"]:
+                st.divider()
+                ui_block_alert(result["block_alert"])
+
+            # ⑦ [4순위] 차트 이동평균 지표
+            st.divider()
             st.markdown("#### 기술적 이동평균 지표")
             ui_ma_strip(result["pb"])
 
-            # ⑦ 세력 수급 역추적 표
-            st.divider()
-            ui_investor_table(result["inv_data"])
-
-            # ⑧ 미반영 호재 뉴스
+            # ⑧ 미반영 호재 뉴스 & 팩트체크
             st.markdown("#### 미반영 호재 뉴스 & 팩트 분석")
             ui_news(result["news_score"], result["news"])
 
     else:
         # 시작 화면
-        st.info("종목명 또는 6자리 코드를 입력하고 **해부 시작**을 누르세요.")
-        st.markdown("""
-**검색 예시:**
-- `042660` 또는 `한화오션` → Impact Score 분석 + **블록딜 오버행 및 개인 설거지** 세력 동향 경보
-- `439260` 또는 `대한조선` → 즉시 검색 (KRX 전종목 지원)
-- `005930` 또는 `삼성전자` → 기관·외국인·개인·기타법인 4주체 수급 역추적
-- `000660` 또는 `SK하이닉스` → 정밀 눌림목 매커니즘·RSI·MA 기술 분석
-
-**SOOMBI ANALYST Impact Score란?**
-기관/외국인 세력 수급 역추적 + 공매도 잔고 분석 + 정밀 눌림목 매커니즘 + 미반영 호재 뉴스를
-100점 만점으로 환산하여 즉각적인 매수 적합도를 판단하는 SOOMBI 전용 알고리즘입니다.
+        _html_block("""
+<style>
+  .start-wrap {
+    background:#12192b; border:1px solid #2a3550; border-radius:16px;
+    padding:28px 32px; margin:16px 0;
+  }
+  .start-title {
+    font-size:.72rem; font-weight:800; letter-spacing:.18em;
+    color:#D4AF37; text-transform:uppercase; margin-bottom:16px;
+  }
+  .start-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  .start-card {
+    background:#0d1526; border:1px solid #1e2a3a; border-radius:10px;
+    padding:16px 18px;
+  }
+  .start-card-title {
+    font-size:.7rem; color:#D4AF37; font-weight:800;
+    letter-spacing:.1em; text-transform:uppercase; margin-bottom:8px;
+  }
+  .start-card-body { font-size:.85rem; color:#c0c8d8; line-height:1.6; }
+  .start-code { color:#F5E882; font-weight:700; font-family:monospace; }
+  .start-algo {
+    background:linear-gradient(135deg,#0d1526,#12192b);
+    border:1px solid #D4AF37; border-radius:10px;
+    padding:16px 18px; margin-top:16px;
+  }
+  .start-algo-title {
+    font-size:.7rem; color:#D4AF37; font-weight:800;
+    letter-spacing:.14em; text-transform:uppercase; margin-bottom:8px;
+  }
+  .start-algo-body { font-size:.84rem; color:#c0c8d8; line-height:1.7; }
+  .gold { color:#D4AF37; font-weight:700; }
+</style>
+<div class="start-wrap">
+  <div class="start-title">🔍 단일 종목 정밀 해부 — 검색 가이드</div>
+  <div class="start-grid">
+    <div class="start-card">
+      <div class="start-card-title">KOSPI 대형주 예시</div>
+      <div class="start-card-body">
+        <span class="start-code">005930</span> 또는 <span class="start-code">삼성전자</span><br>
+        <span class="start-code">000660</span> 또는 <span class="start-code">SK하이닉스</span><br>
+        <span class="start-code">042660</span> 또는 <span class="start-code">한화오션</span>
+      </div>
+    </div>
+    <div class="start-card">
+      <div class="start-card-title">KOSDAQ 성장주 예시</div>
+      <div class="start-card-body">
+        <span class="start-code">086520</span> 또는 <span class="start-code">에코프로</span><br>
+        <span class="start-code">247540</span> 또는 <span class="start-code">에코프로비엠</span><br>
+        <span class="start-code">439260</span> 또는 <span class="start-code">대한조선</span>
+      </div>
+    </div>
+  </div>
+  <div class="start-algo">
+    <div class="start-algo-title">⚙️ 숨비 종합 진단 점수 — 자동 산출 알고리즘</div>
+    <div class="start-algo-body">
+      <span class="gold">세력 수급 역추적 (30점)</span> — 기관·외국인 5거래일 순매매 방향성 자동 감지<br>
+      <span class="gold">공매도 잔고 분석 (20점)</span> — 외국인잔고율 변화 기반 쇼트 포지션 역추적<br>
+      <span class="gold">정밀 눌림목 패턴 (30점)</span> — RSI·MA5·MA20·MA60 이동평균 정배열 자동 산출<br>
+      <span class="gold">미반영 호재 뉴스 (20점)</span> — 42개 호재/악재 키워드 NLP 자동 분류<br>
+      <br>
+      종목명 또는 6자리 코드를 입력하고 <span class="gold">해부 시작</span>을 누르세요.
+    </div>
+  </div>
+</div>
 """)
 
 
