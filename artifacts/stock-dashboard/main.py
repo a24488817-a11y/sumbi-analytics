@@ -357,6 +357,32 @@ def get_fundamentals(ticker: str) -> dict:
             if m5 and m5.group(1) not in ("N/A", "0"):
                 out["PBR"] = float(m5.group(1))
 
+        # ROE: main.naver 주요재무정보 table[4] — "ROE(지배주주)" 행, 최근 연간 확정치(col 3)
+        try:
+            main_resp = requests.get(
+                f"https://finance.naver.com/item/main.naver?code={ticker}",
+                headers=NAVER_HDRS, timeout=8,
+            )
+            main_tables = pd.read_html(StringIO(main_resp.text), flavor="lxml")
+            if len(main_tables) > 4:
+                mt = main_tables[4].copy()
+                # MultiIndex → 마지막 레벨만 사용
+                if isinstance(mt.columns, pd.MultiIndex):
+                    mt.columns = [str(c[-1]) if "Unnamed" not in str(c[-1]) else str(c[0]) for c in mt.columns]
+                for _, rrow in mt.iterrows():
+                    if "ROE" in str(rrow.iloc[0]):
+                        # col index 3 = 최근 확정 연간 (2025.12)
+                        for ci in [3, 2, 1]:
+                            raw_roe = rrow.iloc[ci] if ci < len(rrow) else None
+                            if raw_roe is not None and str(raw_roe) not in ("nan", "NaN", "-", ""):
+                                m_roe = re.search(r"(-?[\d.]+)", str(raw_roe))
+                                if m_roe:
+                                    out["ROE"] = float(m_roe.group(1))
+                                    break
+                        break
+        except Exception:
+            pass
+
         return out
     except Exception:
         return {}
@@ -662,6 +688,107 @@ def ui_price_header(r: dict):
 """)
 
 
+def ui_fundamentals_card(r: dict):
+    """펀더멘털 및 가치 평가 — PER·PBR·ROE·목표주가 4열 메트릭."""
+    fund = r["fund"]
+    price_data = r["price"]
+    cur = price_data.get("현재가", 0)
+
+    per  = fund.get("PER")
+    pbr  = fund.get("PBR")
+    roe  = fund.get("ROE")
+    tp   = fund.get("목표주가", 0)
+    cap  = price_data.get("시가총액", 0)
+
+    per_str = f"{per:.1f}배" if per else "—"
+    pbr_str = f"{pbr:.2f}배" if pbr else "—"
+    roe_str = f"{roe:.1f}%" if roe else "—"
+    tp_str  = f"{tp:,}원"   if tp   else "—"
+    cap_str = f"{cap:,.1f}억" if cap else "—"
+
+    # 목표주가 대비 상승여력
+    upside = None
+    if tp and cur:
+        upside = round((tp - cur) / cur * 100, 1)
+
+    st.markdown("### 📊 펀더멘털 및 가치 평가")
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("시가총액", cap_str)
+    c2.metric("PER", per_str)
+    c3.metric("PBR", pbr_str)
+    c4.metric("ROE", roe_str)
+    if upside is not None:
+        delta_label = f"{upside:+.1f}% (현재가 대비)"
+        c5.metric("목표주가", tp_str, delta=delta_label,
+                  delta_color="normal" if upside >= 0 else "inverse")
+    else:
+        c5.metric("목표주가", tp_str)
+    st.caption("※ 네이버 파이낸스 기준 · PER·PBR은 현재 기준, ROE는 최근 결산 기준")
+
+
+def ui_moat_expander(name: str, ticker: str):
+    """핵심 사업 및 초격차 독점 기술 아코디언 (종목별 분기)."""
+    # 종목별 맞춤 텍스트 — 알려진 종목은 상세 내용, 나머지는 범용 안내
+    _MOAT_DB: dict[str, dict] = {
+        "042660": {
+            "title": "한화오션 — 조선·해양·방산 초격차 독점",
+            "overview": "대표적인 국내 대형 조선·해양 플랜트·특수선(방산) 건조 기업. "
+                        "한화그룹 편입 이후 방산·에너지 시너지 확대 중.",
+            "moat": [
+                "**방산(함정) 독점력**: 국내 유일 잠수함 턴키 건조 능력(KSS-III). 북미 함정 MRO 시장 진출 본격화.",
+                "**친환경 스마트 선박**: 암모니아 추진선·LCO₂ 운반선 등 차세대 선박 기술 세계 최고 수준.",
+                "**자율운항 기술**: HS-모빌리티 첨단 자율운항 선박 기술 적용 확대 중.",
+            ],
+        },
+        "439260": {
+            "title": "대한조선 — 중소형 특수선 전문",
+            "overview": "중소형 탱커·벌크선 특화 조선소. 가격 경쟁력과 납기 준수율 강점.",
+            "moat": [
+                "**중소형 선박 특화**: 대형 조선소가 외면하는 중소형 틈새 시장 장악.",
+                "**빠른 납기**: 소형 도크 특성상 회전율 빠름 → 수주잔고 대비 매출 인식 속도 유리.",
+                "**원가 경쟁력**: 경남 고성 저렴한 부지 및 인건비 구조.",
+            ],
+        },
+        "005930": {
+            "title": "삼성전자 — 반도체·스마트폰 글로벌 1위",
+            "overview": "메모리(DRAM·NAND)·파운드리·스마트폰·디스플레이·가전 수직계열화 글로벌 테크 대기업.",
+            "moat": [
+                "**메모리 반도체 점유율 1위**: DRAM 42%, NAND 31% 세계 1위 유지.",
+                "**HBM·온디바이스 AI**: HBM3E 양산·On-device AI 기능 Galaxy 적용 선도.",
+                "**수직계열화**: 소재·장비·팹·완제품 내재화 → 원가 및 공급 유연성 경쟁 우위.",
+            ],
+        },
+        "000660": {
+            "title": "SK하이닉스 — HBM 글로벌 1위",
+            "overview": "DRAM·NAND·HBM 전문 반도체 기업. 엔비디아 HBM 단독 공급으로 AI 반도체 슈퍼사이클 최대 수혜.",
+            "moat": [
+                "**HBM 세계 1위**: HBM3E 12단 엔비디아 독점 공급 — AI 데이터센터 핵심 부품.",
+                "**DRAM 기술 선도**: 1c nm 공정 전환 완료, 원가 절감 + 성능 우위 동시 확보.",
+                "**엔비디아 파트너십**: GB200 NVL72 HBM 우선 공급권 확보.",
+            ],
+        },
+    }
+
+    info = _MOAT_DB.get(ticker)
+    if info is None:
+        # 범용 — 종목명 기반 안내
+        info = {
+            "title": f"{name} — 핵심 사업 개요",
+            "overview": f"{name}의 사업 개요입니다. 공식 사업보고서 및 IR 자료를 통해 최신 내용을 확인하세요.",
+            "moat": [
+                "해당 종목의 상세 독점 기술 분석은 현재 준비 중입니다.",
+                "DART 전자공시(dart.fss.or.kr)에서 최신 사업보고서를 확인하세요.",
+            ],
+        }
+
+    with st.expander(f"💡 핵심 사업 및 초격차 독점 기술 — {info['title']}", expanded=False):
+        st.markdown(f"**기업 개요**: {info['overview']}")
+        st.markdown("**독점 기술 (경제적 해자)**:")
+        for point in info["moat"]:
+            st.markdown(f"- {point}")
+        st.caption("※ 공개 IR·뉴스 기반 분석. 투자 권유 아님.")
+
+
 def ui_block_alert(msg: str):
     """블록딜·오버행·설거지 경보 카드."""
     _html_block(f"""
@@ -928,22 +1055,36 @@ def main():
             # ① 현재가 대형 헤더
             ui_price_header(result)
 
-            # ② 블록딜 경보 (해당 시)
+            # ② 펀더멘털 및 가치 평가 (PER·PBR·ROE·목표주가)
+            st.divider()
+            ui_fundamentals_card(result)
+
+            # ③ 핵심 사업 및 초격차 독점 기술 아코디언
+            ui_moat_expander(name, ticker)
+
+            # ④ 블록딜 경보 (해당 시)
+            st.divider()
             if result["block_alert"]:
                 ui_block_alert(result["block_alert"])
 
-            # ③ 42대 점수 카드
+            # ⑤ 42대 필살기 종합 진단
+            st.markdown("### 🤖 SOOMBI AI 42대 필살기 종합 진단")
+            bar_c = "#27ae60" if result["total"] >= 70 else ("#f39c12" if result["total"] >= 50 else "#c0392b")
+            verdict_label = result["verdict"]
+            st.progress(result["total"] / 100,
+                        text=f"**{result['total']} / 100점** — {verdict_label}")
             ui_score_card(result)
 
-            # ④ 이동평균 스트립
+            # ⑥ 이동평균 스트립
             st.markdown("#### 📊 이동평균")
             ui_ma_strip(result["pb"])
 
-            # ⑤ 수급표
+            # ⑦ 수급표
             st.markdown("#### 💰 투자자별 5거래일 수급 (단위: 주)")
+            st.caption(f"기준일: {datetime.now(KST).strftime('%Y.%m.%d')} — 기관·외국인·개인·기타법인 4주체 확정 수급")
             ui_investor_table(result["inv_data"])
 
-            # ⑥ 뉴스
+            # ⑧ 뉴스
             st.markdown("#### 📰 미반영 호재 뉴스")
             ui_news(result["news_score"], result["news"])
 
