@@ -1693,64 +1693,76 @@ def ui_score_card(r: dict):
 
 
 def ui_investor_table(inv_data: list[dict]):
-    """하단: 투자자별 5거래일 수급표 (기관·외국인·개인·기타법인)."""
+    """하단: 투자자별 5거래일 수급표 — Pandas Styler HTML 직결 방식 (색상 100% 보장)."""
     if not inv_data:
         st.info("수급 데이터를 수집할 수 없습니다.")
         return
 
     has_other = any(r.get("기타법인", 0) != 0 for r in inv_data)
+    num_cols   = ["기관", "외국인", "개인"] + (["기타법인"] if has_other else [])
 
     def _fmt(v: int) -> str:
-        if v == 0: return "—"
-        return f"{v:+,}"
+        return "—" if v == 0 else f"{v:+,}"
 
-    def _color(v: int) -> str:
-        if v > 0:  return "color:#FF5050;font-weight:700"
-        if v < 0:  return "color:#3399FF;font-weight:700"
-        return "color:#AAAAAA"
+    def _apply_color(val: str) -> str:
+        try:
+            n = float(str(val).replace(",", "").replace("+", "").replace("—", "0").strip())
+            if n > 0: return "color:#FF5050;font-weight:700;background-color:transparent;"
+            if n < 0: return "color:#3399FF;font-weight:700;background-color:transparent;"
+        except Exception:
+            pass
+        return "color:#AAAAAA;background-color:transparent;"
 
-    col_heads = ["날짜", "기관", "외국인", "개인"]
-    if has_other:
-        col_heads.append("기타법인")
-
-    header = "".join(f"<th>{c}</th>" for c in col_heads)
-    body   = ""
+    rows = []
     for r in inv_data:
-        cells = f"<td style='font-weight:600'>{r['날짜']}</td>"
-        for key in ["기관", "외국인", "개인"] + (["기타법인"] if has_other else []):
-            v = int(r.get(key, 0))
-            cells += f"<td style='{_color(v)};text-align:right'>{_fmt(v)}</td>"
-        body += f"<tr>{cells}</tr>"
+        row: dict = {"날짜": r["날짜"]}
+        for key in num_cols:
+            row[key] = _fmt(int(r.get(key, 0)))
+        rows.append(row)
 
-    note = "" if has_other else \
-        "<p style='font-size:.82rem;margin-top:6px;opacity:.6'>※ 개인 = 역산(기관+외국인 零合). 기타법인 별도 집계 없음.</p>"
+    import pandas as _pd
+    df = _pd.DataFrame(rows)
 
-    _html_block(f"""
-<style>
-  .inv-wrap {{ overflow-x:auto; }}
-  .inv-title {{ font-size:.72rem; font-weight:800; letter-spacing:.14em; color:#D4AF37;
-                text-transform:uppercase; margin-bottom:12px; }}
-  .inv table {{ width:100%; border-collapse:collapse;
-                background:#12192b; border-radius:12px; overflow:hidden; font-size:.93rem; }}
-  .inv th {{ background:#0d1526; color:#D4AF37; padding:10px 18px;
-              text-align:center; font-size:.75rem; letter-spacing:.1em;
-              text-transform:uppercase; border-bottom:1px solid #2a3550; }}
-  .inv td {{ padding:10px 18px; border-bottom:1px solid #1e2a3a; text-align:center;
-              color:#C8C8C8; }}
-  .inv tr:last-child td {{ border-bottom:none; }}
-  .inv tr:hover td {{ background:#1a2236; }}
-</style>
-<div class="inv-wrap">
-  <div class="inv-title">◈ 세력 수급 역추적 — 4주체 5거래일 확정 수급 (단위: 주)</div>
-  <div class="inv">
-  <table>
-    <thead><tr>{header}</tr></thead>
-    <tbody>{body}</tbody>
-  </table>
-  </div>
-  {note}
-</div>
-""")
+    tbl_styles = [
+        {"selector": "table", "props": [
+            ("width", "100%"), ("border-collapse", "collapse"),
+            ("background", "#12192b"), ("border-radius", "12px"), ("overflow", "hidden"),
+        ]},
+        {"selector": "thead th", "props": [
+            ("background-color", "#0d1526"), ("color", "#D4AF37"),
+            ("font-size", "13px"), ("font-weight", "800"), ("letter-spacing", ".1em"),
+            ("text-transform", "uppercase"), ("text-align", "center"),
+            ("padding", "11px 18px"), ("border-bottom", "1px solid #2a3550"),
+        ]},
+        {"selector": "tbody td", "props": [
+            ("font-size", "15px"), ("text-align", "center"),
+            ("padding", "10px 18px"), ("border-bottom", "1px solid #1e2a3a"),
+            ("color", "#F8F9FA"),
+        ]},
+        {"selector": "tbody tr:last-child td", "props": [("border-bottom", "none")]},
+        {"selector": "tbody tr:hover td",       "props": [("background", "#1a2236")]},
+    ]
+
+    styled_html = (
+        df.style
+        .map(_apply_color, subset=num_cols)
+        .set_table_styles(tbl_styles)
+        .hide(axis="index")
+        .to_html()
+    )
+
+    note_html = "" if has_other else (
+        "<p style='font-size:13px;color:#5a6a7a;margin-top:8px;'>"
+        "※ 개인 = 역산(기관+외국인+기타법인 零合). 기타법인 별도 집계 없음.</p>"
+    )
+
+    st.markdown(
+        "<p style='font-size:.72rem;font-weight:800;letter-spacing:.14em;"
+        "color:#D4AF37;text-transform:uppercase;margin-bottom:8px;'>"
+        "◈ 세력 수급 역추적 — 4주체 5거래일 확정 수급 (단위: 주)</p>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(styled_html + note_html, unsafe_allow_html=True)
 
 
 def ui_news(news_result: dict, all_news: list[dict]):
@@ -1874,8 +1886,14 @@ section[data-testid="stExpander"] span,
 button[data-testid="stBaseButton-header"] p,
 summary p { color: #D4AF37 !important; font-weight: 700 !important; }
 
-/* ⑤ 메트릭 라벨 — 완전 흰색, 16px, 강조 */
-[data-testid="stMetricLabel"] {
+/* ⑤ 메트릭 라벨 — 최상위 + 모든 자식 태그 심층 타겟 */
+[data-testid="stMetricLabel"],
+[data-testid="stMetricLabel"] > div,
+[data-testid="stMetricLabel"] label,
+[data-testid="stMetricLabel"] p,
+[data-testid="stText"] p,
+[data-testid="stMarkdown"] p,
+.st-emotion-cache-1wivap2 {
     color: #FFFFFF !important;
     font-size: 16px !important;
     font-weight: 800 !important;
