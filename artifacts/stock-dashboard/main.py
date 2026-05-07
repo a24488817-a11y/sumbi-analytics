@@ -1949,7 +1949,9 @@ summary p { color: #D4AF37 !important; font-weight: 700 !important; }
 .up-stock   { color: #FF5050 !important; font-weight: 700 !important; }
 .down-stock { color: #3399FF !important; font-weight: 700 !important; }
 .up         { color: #FF5050 !important; font-weight: 700 !important; }
+.up-red     { color: #FF5050 !important; font-weight: 700 !important; font-size: 24px !important; }
 .down       { color: #3399FF !important; font-weight: 700 !important; }
+.down-blue  { color: #3399FF !important; font-weight: 700 !important; font-size: 24px !important; }
 .label      { color: #FFD700 !important; font-weight: 700 !important; }
 .gold       { color: #FFD700 !important; font-weight: 700 !important; }
 .white      { color: #FFFFFF !important; }
