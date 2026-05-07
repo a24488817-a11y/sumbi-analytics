@@ -225,13 +225,34 @@ def _get_krx_holidays(year: int) -> tuple[frozenset, bool]:
 def load_krx_tickers() -> pd.DataFrame:
     """FDR StockListing('KRX') → 2880+ 종목. 앱 시작 시 1회 캐시."""
     try:
-        df = fdr.StockListing("KRX")[["Code", "Name", "Market"]].copy()
-        df = df[df["Code"].str.match(r"^\d{6}$")].reset_index(drop=True)
+        raw = fdr.StockListing("KRX")
+        cols = ["Code", "Name", "Market"] + (["Marcap"] if "Marcap" in raw.columns else [])
+        df = raw[cols].copy()
+        df = df[df["Code"].str.match(r"^\d{6}$", na=False)].reset_index(drop=True)
         df["Code"] = df["Code"].str.zfill(6)
         df["_key"] = df["Name"].str.lower() + " " + df["Code"]
         return df
     except Exception:
         return pd.DataFrame(columns=["Code", "Name", "Market", "_key"])
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _get_marcap_lookup() -> dict[str, float]:
+    """
+    FDR StockListing Marcap(원) → {code: 시총_억원} 딕셔너리.
+    tab 필터링용 — 탭 클릭 시 즉시 사용 (TTL 1시간).
+    """
+    try:
+        raw = fdr.StockListing("KRX")
+        if "Marcap" not in raw.columns:
+            return {}
+        df = raw[["Code", "Marcap"]].copy()
+        df = df[df["Code"].str.match(r"^\d{6}$", na=False)].copy()
+        df["Code"] = df["Code"].str.zfill(6)
+        df["cap_억"] = pd.to_numeric(df["Marcap"], errors="coerce").fillna(0) / 1e8
+        return dict(zip(df["Code"], df["cap_억"]))
+    except Exception:
+        return {}
 
 
 def search_ticker(query: str, tdf: pd.DataFrame) -> list[dict]:
@@ -802,7 +823,7 @@ def quick_score(ticker: str, name: str, market: str) -> dict | None:
 
 
 def scan_top_stocks(candidates: list[dict]) -> list[dict]:
-    """후보 종목 병렬 스코어링 → 점수 내림차순 정렬."""
+    """후보 종목 병렬 스코어링 → FDR Marcap 병합 → 점수 내림차순 정렬."""
     with ThreadPoolExecutor(max_workers=12) as ex:
         futs = {
             ex.submit(quick_score, c["code"], c["name"], c["market"]): c
@@ -816,6 +837,14 @@ def scan_top_stocks(candidates: list[dict]) -> list[dict]:
                     results.append(r)
             except Exception:
                 pass
+
+    # ── FDR Marcap 병합: Naver API cap이 0/소액인 경우 보완 ──────────────────
+    cap_lookup = _get_marcap_lookup()
+    for r in results:
+        code = r["ticker"]
+        if r.get("cap", 0) < 100 and code in cap_lookup:
+            r["cap"] = round(cap_lookup[code], 0)
+
     return sorted(results, key=lambda x: x["total"], reverse=True)
 
 
@@ -987,36 +1016,47 @@ def ui_top15_tabs(scored: list[dict]):
                 column_config={"숨비 점수": _prog_col},
             )
 
-    # 시총 5,000억+ 대형주 (0 제외)
-    large  = [s for s in scored if s.get("cap", 0) >= 5_000]
-    if not large:
+    # ── 대형주: FDR Marcap 기준 시총 5,000억+ ──────────────────────────────
+    large = [s for s in scored if s.get("cap", 0) >= 5_000]
+    if len(large) < 3:
+        # 폴백: cap 내림차순 상위 15개
         large = sorted(
             [s for s in scored if s.get("cap", 0) > 0],
             key=lambda x: x.get("cap", 0), reverse=True
-        )[:15]
+        )
+        if not large:
+            # 최후 폴백: KOSPI 종목 (일반적으로 대형주 비율 높음)
+            large = [s for s in scored if s["market"] == "KOSPI"]
+        if not large:
+            large = list(scored)
 
-    # 우량주: 숨비 점수 45+ 또는 수급·차트 둘 다 15+
-    qual   = [s for s in scored
-              if s["total"] >= 45 or (s["pb_score"] >= 15 and s["inv_score"] >= 15)]
-    if not qual:
-        qual = sorted(scored, key=lambda x: x["pb_score"] + x["inv_score"], reverse=True)[:15]
+    # ── 우량주: 숨비 점수 45+ (수급·차트 동시 고점) ──────────────────────
+    qual = [s for s in scored if s["total"] >= 45]
+    if len(qual) < 3:
+        # 폴백: 수급+차트 합계 내림차순
+        qual = sorted(scored, key=lambda x: x["pb_score"] + x["inv_score"], reverse=True)
+        if not qual:
+            qual = list(scored)
 
-    # 소형주: 5,000원 이하
-    penny  = [s for s in scored if 0 < s["price"] < 5_000]
-    if not penny:
+    # ── 소형주: 현재가 10,000원 이하 ──────────────────────────────────────
+    penny = [s for s in scored if 0 < s["price"] < 10_000]
+    if len(penny) < 3:
+        # 폴백: 저가 순
         penny = sorted([s for s in scored if s["price"] > 0],
-                       key=lambda x: x["price"])[:15]
+                       key=lambda x: x["price"])
+        if not penny:
+            penny = list(scored)
 
     tab1, tab2, tab3, tab4 = st.tabs([
         "🏆 전체 Top 15",
         "🏢 대형주 (시총 5,000억+)",
         "💎 우량주 (숨비 45점+)",
-        "🪙 소형주 (~5,000원)",
+        "🪙 소형주 (~10,000원)",
     ])
     with tab1: _show(_to_df(scored))
-    with tab2: _show(_to_df(large),  "대형주 조건 해당 종목이 없습니다.")
-    with tab3: _show(_to_df(qual),   "우량주 조건 해당 종목이 없습니다.")
-    with tab4: _show(_to_df(penny),  "소형주 조건 해당 종목이 없습니다.")
+    with tab2: _show(_to_df(large))
+    with tab3: _show(_to_df(qual))
+    with tab4: _show(_to_df(penny))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
