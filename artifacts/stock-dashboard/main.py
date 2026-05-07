@@ -855,8 +855,15 @@ def scan_top_stocks(candidates: list[dict]) -> list[dict]:
         if r.get("cap", 0) < 100 and code in cap_lookup:
             r["cap"] = round(cap_lookup[code], 0)
 
-    # 정렬 기준: rank_score (신호 가중치 반영) — 즉시 매수 종목이 상위 독식
-    return sorted(results, key=lambda x: x.get("rank_score", 0), reverse=True)
+    # ── 정렬: 1순위 차트신호(HIGH→MID→LOW→진입불가), 2순위 총점 ─────────────
+    _SIG_PRI = {"즉시 매수": 3, "매수 준비": 2, "관망": 1}
+
+    def _sig_key(r: dict) -> tuple:
+        sig = r.get("signal", "")
+        pri = next((v for k, v in _SIG_PRI.items() if k in sig), 0)
+        return (pri, r.get("total", 0))
+
+    return sorted(results, key=_sig_key, reverse=True)
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -1026,39 +1033,33 @@ def ui_top15_tabs(scored: list[dict]):
     )
 
     def _show(df: pd.DataFrame, tab_key: str):
-        """데이터프레임 + 원클릭 해부 버튼 매트릭스."""
+        """데이터프레임 행 선택(on_select) → 단일 종목 정밀 해부 자동 연동."""
         if df.empty:
             st.info("데이터 동기화 중 — 잠시 후 재시도하세요.")
             return
-        # 표 출력 (체크박스 없음 — 버튼 매트릭스로 클릭 처리)
-        st.dataframe(
+        event = st.dataframe(
             df, use_container_width=True, hide_index=True,
+            on_select="rerun", selection_mode="single-row",
             column_config={"숨비 점수": _prog_col},
+            key=f"df_{tab_key}",
         )
-        # ── 원클릭 종목 해부 버튼 매트릭스 (5열 × 최대 3행) ─────────────
-        st.markdown(
-            '<p style="color:#A0AEC0;font-size:0.8rem;margin:6px 0 8px;">'
-            '⚡ 아래 버튼 클릭 → 해당 종목 정밀 해부 즉시 시작</p>',
-            unsafe_allow_html=True,
-        )
-        n = len(df)
-        for row_start in range(0, n, 5):
-            chunk = df.iloc[row_start: row_start + 5]
-            btn_cols = st.columns(len(chunk))
-            for col_idx, (_, row) in enumerate(chunk.iterrows()):
-                with btn_cols[col_idx]:
-                    label = f"{row['순위']}. {row['종목명']}"
-                    sig   = str(row.get("차트 신호", ""))
-                    btn_type = "primary" if "즉시 매수" in sig else "secondary"
-                    if st.button(
-                        label,
-                        key=f"qbtn_{tab_key}_{row['코드']}",
-                        use_container_width=True,
-                        type=btn_type,
-                    ):
-                        st.session_state["search_query"] = row["코드"]
-                        st.session_state["auto_analyze"]  = True
-                        st.rerun()
+        sel = getattr(event, "selection", None)
+        if sel and sel.rows:
+            idx          = sel.rows[0]
+            clicked_code = df.iloc[idx]["코드"]
+            clicked_name = df.iloc[idx]["종목명"]
+            # 무한루프 방지: 동일 종목 연속 rerun 차단
+            if st.session_state.get("_sel_code") != clicked_code:
+                st.session_state["_sel_code"]    = clicked_code
+                st.session_state["search_query"] = clicked_code
+                st.session_state["auto_analyze"] = True
+                st.rerun()
+            else:
+                st.markdown(
+                    f'<p style="color:#D4AF37;font-size:0.82rem;margin:4px 0;">'
+                    f'⚡ <strong>{clicked_name}</strong> ({clicked_code}) 선택됨 — 하단 정밀 해부 확인 ▼</p>',
+                    unsafe_allow_html=True,
+                )
 
     # ── 대형주: FDR Marcap 기준 시총 5,000억+ (200종목 풀에서 필터) ──────
     large = sorted(
@@ -1863,17 +1864,22 @@ def main():
     # ── 글로벌/국내 증시 전광판 ─────────────────────────────────────────────
     with st.spinner("시장 데이터 동기화 중…"):
         indices = get_market_indices()
-    st.markdown("### 글로벌 시장 실시간 전광판")
+    st.markdown(
+        '<h2 style="color:#D4AF37;font-size:20px;font-weight:700;'
+        'letter-spacing:.05em;margin:4px 0 2px;">글로벌 시장 실시간 전광판</h2>',
+        unsafe_allow_html=True,
+    )
     ui_market_header(indices)
     st.divider()
 
     # ── 투자 지표 정밀 분석 Top 15 ───────────────────────────────────────────
-    st.markdown("### 투자 지표 정밀 분석 Top 15")
     st.markdown(
-        '<p style="color:#A0AEC0;font-size:0.85rem;margin:-6px 0 6px;">'
-        "거래대금 상위 200종목(KOSPI 100 + KOSDAQ 100) 자동 스캔 → "
-        "<strong>즉시 매수 신호 최우선 랭킹</strong> | "
-        "하단 버튼 클릭 → 정밀 해부 즉시 시작</p>",
+        '<h2 style="color:#D4AF37;font-size:22px;font-weight:700;'
+        'letter-spacing:.05em;margin:4px 0 2px;">투자 지표 정밀 분석 Top 15</h2>'
+        '<p style="color:#A0AEC0;font-size:0.82rem;margin:2px 0 8px;">'
+        "거래대금 상위 200종목 자동 스캔 → "
+        "<strong style='color:#fff;'>즉시 매수 신호 최우선 랭킹</strong> &nbsp;|&nbsp; "
+        "표의 행을 클릭하면 하단 정밀 해부가 즉시 실행됩니다</p>",
         unsafe_allow_html=True,
     )
 
@@ -1892,7 +1898,11 @@ def main():
     st.divider()
 
     # ── 검색 영역 ─────────────────────────────────────────────────────────────
-    st.markdown("## 단일 종목 정밀 해부")
+    st.markdown(
+        '<h2 style="color:#D4AF37;font-size:22px;font-weight:700;'
+        'letter-spacing:.05em;margin:4px 0 8px;">단일 종목 정밀 해부</h2>',
+        unsafe_allow_html=True,
+    )
 
     col_q, col_btn = st.columns([5, 1])
     with col_q:
@@ -1937,16 +1947,28 @@ def main():
             ui_price_header(result)
 
             # ② 숨비 종합 진단 점수 — Plotly 속도계 게이지
-            st.markdown("### 숨비 종합 진단 점수")
+            st.markdown(
+                '<h3 style="color:#D4AF37;font-size:18px;font-weight:700;margin:8px 0 2px;">'
+                '숨비 종합 진단 점수</h3>',
+                unsafe_allow_html=True,
+            )
             ui_score_card(result)
 
             # ③ 기업 정밀 브리핑 — ①섹터 ②저평가해설 ③모멘텀 3카드
-            st.markdown("#### 숨비 기업 정밀 브리핑")
+            st.markdown(
+                '<h3 style="color:#D4AF37;font-size:16px;font-weight:600;margin:8px 0 2px;">'
+                '숨비 기업 정밀 브리핑</h3>',
+                unsafe_allow_html=True,
+            )
             ui_auto_briefing(result, name, ticker)
             st.divider()
 
             # ④ 4주체 확정 수급표 (기관·외국인·개인·기타법인)
-            st.markdown("#### 세력 수급 역추적 — 최근 5거래일 확정 데이터")
+            st.markdown(
+                '<h3 style="color:#D4AF37;font-size:16px;font-weight:600;margin:8px 0 2px;">'
+                '세력 수급 역추적 — 최근 5거래일 확정 데이터</h3>',
+                unsafe_allow_html=True,
+            )
             ui_investor_table(result["inv_data"])
             st.divider()
 
@@ -1963,11 +1985,19 @@ def main():
 
             # ⑧ 차트 이동평균 지표
             st.divider()
-            st.markdown("#### 기술적 이동평균 지표")
+            st.markdown(
+                '<h3 style="color:#D4AF37;font-size:16px;font-weight:600;margin:8px 0 2px;">'
+                '기술적 이동평균 지표</h3>',
+                unsafe_allow_html=True,
+            )
             ui_ma_strip(result["pb"])
 
             # ⑨ 미반영 호재 뉴스 & 팩트체크
-            st.markdown("#### 미반영 호재 뉴스 & 팩트 분석")
+            st.markdown(
+                '<h3 style="color:#D4AF37;font-size:16px;font-weight:600;margin:8px 0 2px;">'
+                '미반영 호재 뉴스 & 팩트 분석</h3>',
+                unsafe_allow_html=True,
+            )
             ui_news(result["news_score"], result["news"])
 
     else:
