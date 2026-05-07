@@ -1264,36 +1264,41 @@ def ui_auto_briefing(result: dict, name: str, ticker: str):
 
     _html_block(f"""
 <style>
-  .ab-grid {{ display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin:4px 0 14px; }}
-  .ab-card {{ background:#12192b; border:1px solid #2a3550; border-radius:14px;
-              padding:20px 22px; display:flex; flex-direction:column; gap:10px; }}
+  .ab-wrap  {{ display:flex; flex-direction:column; gap:12px; margin:4px 0 14px; }}
+  .ab-card  {{ background:#12192b; border:1px solid #2a3550; border-radius:14px;
+               padding:22px 28px; display:flex; flex-direction:column; gap:8px; }}
+  .ab-row2  {{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }}
   .ab-badge {{ font-size:.67rem; font-weight:800; letter-spacing:.16em;
-               text-transform:uppercase; color:#D4AF37; }}
-  .ab-title {{ font-size:.94rem; font-weight:800; color:#F0F0F0; line-height:1.3; }}
-  .ab-body  {{ font-size:.82rem; color:#c0c8d8; line-height:1.68; }}
-  .ab-lbl   {{ display:inline-block; font-size:.71rem; font-weight:700;
-               border-radius:6px; padding:2px 9px; margin-bottom:3px;
-               background:rgba(255,255,255,.06); }}
-  .ab-item  {{ font-size:.82rem; color:#c0c8d8; line-height:1.62;
-               border-bottom:1px solid #1e2a3a; padding:5px 0; }}
+               text-transform:uppercase; color:#D4AF37; margin-bottom:2px; }}
+  .ab-title {{ font-size:1.0rem; font-weight:800; color:#F5F5F5; line-height:1.35; }}
+  .ab-body  {{ font-size:.86rem; color:#D8E0EC; line-height:1.75; }}
+  .ab-lbl   {{ display:inline-block; font-size:.72rem; font-weight:700;
+               border-radius:6px; padding:3px 10px; margin:2px 0;
+               background:rgba(255,255,255,.07); }}
+  .ab-item  {{ font-size:.84rem; color:#D8E0EC; line-height:1.65;
+               border-bottom:1px solid #1e2a3a; padding:6px 0; }}
   .ab-item:last-child {{ border-bottom:none; }}
 </style>
-<div class="ab-grid">
+<div class="ab-wrap">
+  <!-- ① 기업 핵심 요약 — 전체 폭 단독 카드 -->
   <div class="ab-card">
     <div class="ab-badge">① 기업 핵심 요약</div>
     <div class="ab-title">{sector}</div>
     <div class="ab-body">{sector_desc}</div>
   </div>
-  <div class="ab-card">
-    <div class="ab-badge">② 저평가 및 수익률 해설</div>
-    <div class="ab-lbl" style="color:{per_col}">{per_lbl}</div>
-    <div class="ab-body">{per_cmt}</div>
-    <div class="ab-lbl" style="color:{pbr_col}">{pbr_lbl}</div>
-    <div class="ab-body">{pbr_cmt}</div>
-  </div>
-  <div class="ab-card">
-    <div class="ab-badge">③ 독점 기술 &amp; 모멘텀</div>
-    {mom_html}
+  <!-- ② 저평가 해설 + ③ 모멘텀 — 2열 나란히 -->
+  <div class="ab-row2">
+    <div class="ab-card">
+      <div class="ab-badge">② 저평가 및 수익률 해설</div>
+      <div class="ab-lbl" style="color:{per_col}">{per_lbl}</div>
+      <div class="ab-body">{per_cmt}</div>
+      <div class="ab-lbl" style="color:{pbr_col}">{pbr_lbl}</div>
+      <div class="ab-body">{pbr_cmt}</div>
+    </div>
+    <div class="ab-card">
+      <div class="ab-badge">③ 독점 기술 &amp; 모멘텀</div>
+      {mom_html}
+    </div>
   </div>
 </div>
 """)
@@ -1498,11 +1503,31 @@ def ui_moat_expander(name: str, ticker: str):
         }
 
     with st.expander(f"◈ 정밀 사업 분석 — {info['title']}", expanded=False):
-        st.markdown(f"**기업 개요**: {info['overview']}")
-        st.markdown("**핵심 경쟁 우위 (경제적 해자)**:")
-        for point in info["moat"]:
-            st.markdown(f"- {point}")
-        st.caption("※ 공개 IR·뉴스·사업보고서 기반 분석. 투자 권유 아님.")
+        _bold_pat = re.compile(r"\*\*(.+?)\*\*")
+        _strong   = '<strong style="color:#D4AF37;">\\1</strong>'
+
+        def _md2html(text: str) -> str:
+            return _bold_pat.sub(_strong, text)
+
+        moat_items = "".join(
+            '<li style="color:#D8E0EC;font-size:.87rem;line-height:1.7;margin:4px 0;">'
+            + _md2html(p) + "</li>"
+            for p in info["moat"]
+        )
+        overview_html = _md2html(info["overview"])
+        html = (
+            '<div style="padding:4px 0;">'
+            '<p style="color:#E8E8E8;font-size:.9rem;line-height:1.7;margin-bottom:14px;">'
+            '<strong style="color:#D4AF37;">기업 개요</strong> — ' + overview_html + "</p>"
+            '<p style="color:#D4AF37;font-size:.8rem;font-weight:800;'
+            'letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px;">'
+            "핵심 경쟁 우위 (경제적 해자)</p>"
+            '<ul style="margin:0;padding-left:18px;">' + moat_items + "</ul>"
+            '<p style="color:#4a5568;font-size:.72rem;margin-top:14px;">'
+            "※ 공개 IR·뉴스·사업보고서 기반 분석. 투자 권유 아님.</p>"
+            "</div>"
+        )
+        st.markdown(html, unsafe_allow_html=True)
 
 
 def ui_block_alert(msg: str):
@@ -1765,11 +1790,34 @@ def ui_news(news_result: dict, all_news: list[dict]):
 
 
 def ui_ma_strip(pb: dict):
-    """이동평균 3개 작은 메트릭 행."""
-    c1, c2, c3 = st.columns(3)
-    c1.metric("MA5 (5일선)",  f"{pb['ma5']:,}원"  if pb['ma5']  else "—")
-    c2.metric("MA20 (20일선)", f"{pb['ma20']:,}원" if pb['ma20'] else "—")
-    c3.metric("MA60 (60일선)", f"{pb['ma60']:,}원" if pb['ma60'] else "—")
+    """이동평균 3개 카드 행 — 다크모드 가독성 보장."""
+    def _v(val: int) -> str:
+        return f"{val:,}원" if val else "—"
+
+    _html_block(f"""
+<style>
+  .ma-row  {{ display:grid; grid-template-columns:repeat(3,1fr); gap:14px; margin:4px 0; }}
+  .ma-card {{ background:#12192b; border:1px solid #2a3550; border-radius:12px;
+              padding:18px 22px; display:flex; flex-direction:column; gap:6px; }}
+  .ma-lbl  {{ font-size:.72rem; font-weight:700; letter-spacing:.1em;
+              text-transform:uppercase; color:#8fa3b8; }}
+  .ma-val  {{ font-size:1.3rem; font-weight:900; color:#FFFFFF; }}
+</style>
+<div class="ma-row">
+  <div class="ma-card">
+    <div class="ma-lbl">MA5 (5일선)</div>
+    <div class="ma-val">{_v(pb.get("ma5", 0))}</div>
+  </div>
+  <div class="ma-card">
+    <div class="ma-lbl">MA20 (20일선)</div>
+    <div class="ma-val">{_v(pb.get("ma20", 0))}</div>
+  </div>
+  <div class="ma-card">
+    <div class="ma-lbl">MA60 (60일선)</div>
+    <div class="ma-val">{_v(pb.get("ma60", 0))}</div>
+  </div>
+</div>
+""")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1782,6 +1830,37 @@ def main():
     # ── 세션 스테이트 초기화 ─────────────────────────────────────────────────
     if "auto_analyze" not in st.session_state:
         st.session_state["auto_analyze"] = False
+
+    # ── 전역 CSS: 다크모드 텍스트 가독성 강제 복구 ───────────────────────────
+    st.markdown("""
+<style>
+/* 마크다운 / 익스팬더 내부 텍스트 강제 흰색 */
+[data-testid="stMarkdownContainer"] p,
+[data-testid="stMarkdownContainer"] li,
+[data-testid="stMarkdownContainer"] span,
+[data-testid="stMarkdownContainer"] strong,
+[data-testid="stMarkdownContainer"] em,
+section[data-testid="stExpander"] p,
+section[data-testid="stExpander"] li,
+section[data-testid="stExpander"] span {
+    color: #E8E8E8 !important;
+}
+/* 익스팬더 헤더 골드 강조 */
+button[data-testid="stBaseButton-header"] p,
+summary p { color: #D4AF37 !important; font-weight: 700 !important; }
+/* 메트릭 위젯 */
+[data-testid="stMetricValue"]       { color: #FFFFFF !important; font-weight: 900 !important; }
+[data-testid="stMetricLabel"]       { color: #A0AEC0 !important; }
+[data-testid="stMetricDeltaIcon"]   { display: none; }
+/* 캡션 */
+[data-testid="stCaptionContainer"] p { color: #6b7c93 !important; }
+/* 경고/정보 박스 */
+[data-testid="stAlert"] p { color: #E8E8E8 !important; }
+/* 탭 텍스트 */
+button[data-baseweb="tab"] p { color: #A0AEC0 !important; }
+button[data-baseweb="tab"][aria-selected="true"] p { color: #D4AF37 !important; }
+</style>
+""", unsafe_allow_html=True)
 
     # ── 사이드바 ─────────────────────────────────────────────────────────────
     with st.sidebar:
