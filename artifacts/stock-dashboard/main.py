@@ -1586,7 +1586,7 @@ def ui_score_card(r: dict):
         f"""
 <div style="
   background:#1a1a2e;
-  border:1px solid {vd_border};
+  border:4px solid {vd_border};
   border-top:4px solid {vd_col};
   border-radius:16px;
   padding:28px 32px;
@@ -1879,7 +1879,13 @@ def main():
     # ── 전역 CSS: SOOMBI 마스터 테마 ─────────────────────────────────────────
     st.markdown("""
 <style>
-/* ① 앱 전체 투명도 완벽 제거 — 색상 강제 없이 가시성만 보장 */
+/* ① 유니버설 투명도 제거 + 기본 흰색 */
+* {
+    opacity: 1 !important;
+    visibility: visible !important;
+    color: #FFFFFF !important;
+}
+/* ① 앱 요소 투명도 재확인 */
 html, body, [class*="css"], [class*="st-"],
 p, span, label, div, th, td, li {
     opacity: 1 !important;
@@ -1899,9 +1905,9 @@ p,
 [data-testid="stCaptionContainer"] p,
 table th, table td {
     color: #F8F9FA !important;
-    font-size: 18px !important;
+    font-size: 19px !important;
     line-height: 1.6 !important;
-    font-weight: 500 !important;
+    font-weight: 600 !important;
 }
 
 /* ③ 익스팬더 내부 텍스트 */
@@ -1928,18 +1934,22 @@ summary p { color: #D4AF37 !important; font-weight: 700 !important; }
 [data-testid="stMarkdown"] p,
 .st-emotion-cache-1wivap2 {
     color: #FFD700 !important;
-    font-size: 18px !important;
+    font-size: 19px !important;
     font-weight: 800 !important;
     opacity: 1 !important;
     visibility: visible !important;
 }
 
-/* ⑤-b 수급표 + 등락 HTML 클래스 — 색상 100% 보장 */
+/* ⑤-b 수급표 + 등락 + 뉴스 HTML 클래스 — 색상 100% 보장 */
 .red-val    { color: #FF5050 !important; font-weight: 700 !important; }
 .blue-val   { color: #3399FF !important; font-weight: 700 !important; }
+.red-plus   { color: #FF5050 !important; font-weight: 700 !important; }
+.blue-minus { color: #3399FF !important; font-weight: 700 !important; }
 .up-stock   { color: #FF5050 !important; font-weight: 700 !important; }
 .down-stock { color: #3399FF !important; font-weight: 700 !important; }
 .steady-stock { color: #FFFFFF !important; }
+.news-box   { color: #00FF00 !important; font-weight: 700 !important;
+              border-left: 5px solid #00FF00; padding-left: 12px; }
 
 /* ⑥ 메트릭 수치 — 크기 유지, 색상 완전 선명 */
 [data-testid="stMetricValue"] {
