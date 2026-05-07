@@ -769,7 +769,7 @@ def get_top_volume_tickers() -> list[dict]:
                     continue
                 candidates.append({"code": code, "name": name, "market": market})
                 count += 1
-                if count >= 25:
+                if count >= 100:
                     break
         except Exception:
             pass
@@ -824,7 +824,7 @@ def quick_score(ticker: str, name: str, market: str) -> dict | None:
 
 def scan_top_stocks(candidates: list[dict]) -> list[dict]:
     """후보 종목 병렬 스코어링 → FDR Marcap 병합 → 점수 내림차순 정렬."""
-    with ThreadPoolExecutor(max_workers=12) as ex:
+    with ThreadPoolExecutor(max_workers=24) as ex:
         futs = {
             ex.submit(quick_score, c["code"], c["name"], c["market"]): c
             for c in candidates
@@ -846,6 +846,13 @@ def scan_top_stocks(candidates: list[dict]) -> list[dict]:
             r["cap"] = round(cap_lookup[code], 0)
 
     return sorted(results, key=lambda x: x["total"], reverse=True)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _scan_top_cached(candidate_tuples: tuple) -> list[dict]:
+    """scan_top_stocks의 캐시 래퍼 — tuple 입력으로 hashable 처리 (TTL 300s)."""
+    candidates = [{"code": c[0], "name": c[1], "market": c[2]} for c in candidate_tuples]
+    return scan_top_stocks(candidates)
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -1007,45 +1014,70 @@ def ui_top15_tabs(scored: list[dict]):
         "숨비 점수", min_value=0, max_value=100, format="%d점"
     )
 
-    def _show(df: pd.DataFrame, empty_msg: str = "데이터 동기화 중 — 잠시 후 재시도하세요."):
+    def _show(df: pd.DataFrame, tab_key: str):
+        """데이터프레임 표시 + 행 클릭 → 단일 종목 정밀 해부 자동 연동."""
         if df.empty:
-            st.info(empty_msg)
-        else:
-            st.dataframe(
-                df, use_container_width=True, hide_index=True,
-                column_config={"숨비 점수": _prog_col},
+            st.info("데이터 동기화 중 — 잠시 후 재시도하세요.")
+            return
+        event = st.dataframe(
+            df, use_container_width=True, hide_index=True,
+            on_select="rerun", selection_mode="single-row",
+            column_config={"숨비 점수": _prog_col},
+            key=f"top15_df_{tab_key}",
+        )
+        sel = getattr(event, "selection", None)
+        if sel and sel.rows:
+            idx          = sel.rows[0]
+            clicked_code = df.iloc[idx]["코드"]
+            clicked_name = df.iloc[idx]["종목명"]
+            if st.session_state.get("search_query") != clicked_code:
+                st.session_state["search_query"] = clicked_code
+                st.session_state["auto_analyze"]  = True
+            st.caption(
+                f"🎯 **{clicked_name}** ({clicked_code}) 선택됨 "
+                "— 하단 '단일 종목 정밀 해부'에서 분석이 자동 시작됩니다 ▼"
             )
 
-    # ── 대형주: FDR Marcap 기준 시총 5,000억+ ──────────────────────────────
-    large = [s for s in scored if s.get("cap", 0) >= 5_000]
-    if len(large) < 3:
-        # 폴백: cap 내림차순 상위 15개
+    # ── 대형주: FDR Marcap 기준 시총 5,000억+ (200종목 풀에서 필터) ──────
+    large = sorted(
+        [s for s in scored if s.get("cap", 0) >= 5_000],
+        key=lambda x: x.get("cap", 0), reverse=True,
+    )
+    if len(large) < 5:
         large = sorted(
             [s for s in scored if s.get("cap", 0) > 0],
-            key=lambda x: x.get("cap", 0), reverse=True
+            key=lambda x: x.get("cap", 0), reverse=True,
         )
-        if not large:
-            # 최후 폴백: KOSPI 종목 (일반적으로 대형주 비율 높음)
-            large = [s for s in scored if s["market"] == "KOSPI"]
-        if not large:
-            large = list(scored)
+    if not large:
+        large = [s for s in scored if s["market"] == "KOSPI"] or list(scored)
 
-    # ── 우량주: 숨비 점수 45+ (수급·차트 동시 고점) ──────────────────────
-    qual = [s for s in scored if s["total"] >= 45]
-    if len(qual) < 3:
-        # 폴백: 수급+차트 합계 내림차순
+    # ── 우량주: 숨비 45점+ AND (수급 15+ OR 차트 15+) ────────────────────
+    qual = sorted(
+        [s for s in scored if s["total"] >= 45
+         and (s["pb_score"] >= 12 or s["inv_score"] >= 12)],
+        key=lambda x: x["total"], reverse=True,
+    )
+    if len(qual) < 5:
+        qual = sorted(
+            [s for s in scored if s["total"] >= 40],
+            key=lambda x: x["pb_score"] + x["inv_score"], reverse=True,
+        )
+    if not qual:
         qual = sorted(scored, key=lambda x: x["pb_score"] + x["inv_score"], reverse=True)
-        if not qual:
-            qual = list(scored)
 
-    # ── 소형주: 현재가 10,000원 이하 ──────────────────────────────────────
-    penny = [s for s in scored if 0 < s["price"] < 10_000]
-    if len(penny) < 3:
-        # 폴백: 저가 순
-        penny = sorted([s for s in scored if s["price"] > 0],
-                       key=lambda x: x["price"])
-        if not penny:
-            penny = list(scored)
+    # ── 소형주: 현재가 10,000원 이하, 대형주 탭과 중복 배제 ──────────────
+    large_codes = {s["ticker"] for s in large[:15]}
+    penny = sorted(
+        [s for s in scored if 0 < s["price"] < 10_000 and s["ticker"] not in large_codes],
+        key=lambda x: x["total"], reverse=True,
+    )
+    if len(penny) < 5:
+        penny = sorted(
+            [s for s in scored if s["price"] > 0 and s["ticker"] not in large_codes],
+            key=lambda x: x["price"],
+        )
+    if not penny:
+        penny = sorted([s for s in scored if s["price"] > 0], key=lambda x: x["price"])
 
     tab1, tab2, tab3, tab4 = st.tabs([
         "🏆 전체 Top 15",
@@ -1053,10 +1085,10 @@ def ui_top15_tabs(scored: list[dict]):
         "💎 우량주 (숨비 45점+)",
         "🪙 소형주 (~10,000원)",
     ])
-    with tab1: _show(_to_df(scored))
-    with tab2: _show(_to_df(large))
-    with tab3: _show(_to_df(qual))
-    with tab4: _show(_to_df(penny))
+    with tab1: _show(_to_df(scored),  "all")
+    with tab2: _show(_to_df(large),   "large")
+    with tab3: _show(_to_df(qual),    "qual")
+    with tab4: _show(_to_df(penny),   "penny")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1065,6 +1097,171 @@ def ui_top15_tabs(scored: list[dict]):
 def _html_block(html: str):
     """st.html() — iframe 격리. CSS는 블록 내 <style>에 직접 포함."""
     st.html(html)
+
+
+# ── 자동 브리핑 헬퍼 ─────────────────────────────────────────────────────────
+_SECTOR_KW_MAP: list[tuple[str, str, list[str]]] = [
+    ("반도체·AI칩",
+     "메모리·파운드리·시스템 반도체 설계·제조 기업으로, AI·HPC·데이터센터 수요 확대의 직접 수혜 섹터입니다.",
+     ["반도체", "하이닉스", "DB하이텍", "팹리스", "파운드리", "웨이퍼", "칩"]),
+    ("조선·방산·해양",
+     "대형 선박·군함·LNG선 건조 전문 기업으로, K-방산 수출 확대 및 친환경 선박 전환의 핵심 수혜 섹터입니다.",
+     ["조선", "오션", "중공업", "함정", "방산", "항공우주", "LIG"]),
+    ("자동차·모빌리티",
+     "완성차·부품·전기차 플랫폼 기업으로, 글로벌 전동화 전환과 SDV(소프트웨어 정의 차량) 패러다임 수혜 섹터입니다.",
+     ["자동차", "현대차", "기아", "모터스", "모빌리티"]),
+    ("바이오·제약·헬스케어",
+     "신약·의료기기·진단키트 개발 기업으로, 고령화 사회 및 글로벌 헬스케어 수요 확대의 장기 수혜 섹터입니다.",
+     ["바이오", "제약", "생명", "헬스", "메디", "의료", "치료", "백신"]),
+    ("2차전지·소재",
+     "배터리셀·양극재·음극재·전해질 기업으로, 전기차·ESS 시장 확대와 에너지 전환의 핵심 소재 공급 섹터입니다.",
+     ["배터리", "에코프로", "양극재", "전지", "셀", "2차전지"]),
+    ("IT·플랫폼·소프트웨어",
+     "인터넷·게임·SaaS·AI 소프트웨어 기업으로, 디지털 전환·AI 기반 수익화·구독경제 성장의 직접 수혜 섹터입니다.",
+     ["소프트", "플랫폼", "게임", "네이버", "카카오", "솔루션"]),
+    ("화학·정유·소재",
+     "범용·특수 화학 및 정유 기업으로, 원자재 스프레드와 글로벌 산업 사이클에 수익성이 연동되는 경기민감 섹터입니다.",
+     ["화학", "정유", "케미칼", "소재"]),
+    ("건설·플랜트·인프라",
+     "건축·토목·해외 플랜트 수주 기업으로, 국내외 인프라 투자 확대 및 정책 모멘텀의 직접 수혜 섹터입니다.",
+     ["건설", "엔지니어링", "플랜트", "GS건설"]),
+    ("금융·증권·보험",
+     "은행·증권·보험·캐피탈 기업으로, 금리 환경 변화 및 자본시장 활성화에 수익성이 연동되는 섹터입니다.",
+     ["금융", "은행", "보험", "증권", "캐피탈"]),
+    ("에너지·환경·유틸리티",
+     "태양광·풍력·원자력·가스 발전 기업으로, 탄소중립 전환 및 에너지 안보 강화 정책의 장기 수혜 섹터입니다.",
+     ["에너지", "태양광", "풍력", "원자력", "발전"]),
+    ("유통·소비재·식품",
+     "유통·식품·생활용품 브랜드 기업으로, 내수 소비 회복 및 K-소비재 글로벌 수출 확대 수혜 섹터입니다.",
+     ["유통", "마트", "식품", "소비", "롯데", "신세계"]),
+    ("통신·미디어·콘텐츠",
+     "이동통신·방송·OTT·K-콘텐츠 기업으로, 구독경제·AI B2B 통신 인프라·한류 글로벌 확산 수혜 섹터입니다.",
+     ["통신", "KT", "SKT", "LGU", "미디어", "방송", "콘텐츠"]),
+]
+
+
+def _infer_sector_overview(name: str) -> tuple[str, str]:
+    """종목명 키워드 → (섹터명, 섹터 설명) 추론."""
+    for sector, desc, kws in _SECTOR_KW_MAP:
+        if any(kw in name for kw in kws):
+            return sector, desc
+    return "종합주식", (
+        f"{name}는 다양한 사업을 영위하는 기업입니다. "
+        "정밀 업종 정보는 DART 공시(dart.fss.or.kr) 및 공식 IR 자료를 참고하세요."
+    )
+
+
+def _per_label_comment(per: float | None) -> tuple[str, str, str]:
+    """PER → (레이블, 해설, 색상코드)."""
+    if per is None or per <= 0:
+        return "산출 불가", "현재 적자 상태이거나 PER 집계가 미완료 상태입니다. 다음 분기 실적 발표 후 재확인하세요.", "#6b7c93"
+    if per < 5:
+        return "극심한 저평가 ★★★", f"PER {per:.1f}x — 이익 대비 주가가 극단적으로 낮은 저평가 구간. 안전마진 극대화, 리스크 대비 기대수익 최고 구간입니다.", "#27ae60"
+    if per < 10:
+        return "저평가 매력 ★★", f"PER {per:.1f}x — 업종 평균 하단 수준의 매력적 가격대. 중장기 가치투자 매수 기회 구간입니다.", "#27ae60"
+    if per < 15:
+        return "적정 가치권 ★", f"PER {per:.1f}x — 시장 평균 PER에 근접한 합리적 가격대. 안정적 투자 영역입니다.", "#D4AF37"
+    if per < 25:
+        return "성장 프리미엄", f"PER {per:.1f}x — 성장 기대치가 선반영된 구간. 실적 성장 지속 여부 확인이 핵심입니다.", "#f39c12"
+    return "고밸류에이션", f"PER {per:.1f}x — 높은 밸류에이션. 고성장 기대 또는 턴어라운드 전망이 전제된 가격 수준입니다.", "#e74c3c"
+
+
+def _pbr_label_comment(pbr: float | None) -> tuple[str, str, str]:
+    """PBR → (레이블, 해설, 색상코드)."""
+    if pbr is None or pbr <= 0:
+        return "산출 불가", "PBR 집계가 미완료 상태이거나 자본잠식 여부를 점검하세요.", "#6b7c93"
+    if pbr < 0.5:
+        return "청산가치 이하 ★★★", f"PBR {pbr:.2f}x — 장부 순자산의 절반 이하. 자산 대비 극단 저평가로 청산가치 미만 구간입니다.", "#27ae60"
+    if pbr < 1.0:
+        return "자산 안전마진 ★★", f"PBR {pbr:.2f}x — 순자산보다 주가가 낮아 하방 리스크가 제한적인 안전마진 구간입니다.", "#27ae60"
+    if pbr < 2.0:
+        return "적정 자산가치 ★", f"PBR {pbr:.2f}x — 순자산 대비 합리적 프리미엄 수준입니다.", "#D4AF37"
+    return "프리미엄 자산", f"PBR {pbr:.2f}x — 브랜드·기술력·성장성 기반 프리미엄. 실적 유지 여부가 밸류에이션의 관건입니다.", "#f39c12"
+
+
+def _momentum_lines(result: dict) -> list[str]:
+    """수급·뉴스 기반 모멘텀 요인 리스트 생성."""
+    lines: list[str] = []
+    inv     = result.get("inv_score", {})
+    streak  = inv.get("streak", 0)
+    inst_5d = inv.get("inst_5d", 0)
+    frgn_5d = inv.get("frgn_5d", 0)
+    total   = result.get("total", 0)
+    good_news = result.get("news_score", {}).get("good", [])
+
+    if streak >= 4:
+        lines.append(f"🔴 기관 {streak}일 연속 순매수 — 세력 장기 매집 패턴 감지")
+    elif streak >= 2:
+        lines.append(f"🟡 기관 {streak}일 연속 순매수 — 단기 매집 신호")
+    if frgn_5d > 1_000_000:
+        lines.append(f"🔴 외국인 대규모 유입 ({frgn_5d:+,}주) — 외국계 기관 적극 매수")
+    elif frgn_5d > 200_000:
+        lines.append(f"🟡 외국인 순매수 ({frgn_5d:+,}주) — 외국계 관심 포착")
+    if inst_5d > 1_000_000:
+        lines.append(f"🔴 기관 대량 누적 ({inst_5d:+,}주) — 5거래일 총량 대형")
+    for n in good_news[:2]:
+        title = n.get("title", "")
+        if title:
+            short = title[:32] + ("…" if len(title) > 32 else "")
+            lines.append(f"📰 호재 뉴스: {short}")
+    if total >= 75:
+        lines.append(f"⭐ 숨비 종합 {total}점 — 즉시 진입 가능 HIGH CONFIDENCE")
+    elif total >= 55:
+        lines.append(f"🔵 숨비 종합 {total}점 — 진입 검토 MID 구간")
+    if not lines:
+        lines.append("현재 수집된 수급·뉴스 모멘텀 신호 없음 — 관망 권고")
+    return lines
+
+
+def ui_auto_briefing(result: dict, name: str, ticker: str):
+    """기업 정밀 브리핑 — ①섹터 요약 ②저평가 해설 ③모멘텀 3카드 자동 생성."""
+    fund = result.get("fund", {})
+    per  = fund.get("PER")
+    pbr  = fund.get("PBR")
+
+    sector, sector_desc          = _infer_sector_overview(name)
+    per_lbl, per_cmt, per_col    = _per_label_comment(per)
+    pbr_lbl, pbr_cmt, pbr_col    = _pbr_label_comment(pbr)
+    mom_lines                    = _momentum_lines(result)
+    mom_html = "".join(
+        f'<div class="ab-item">{ln}</div>' for ln in mom_lines
+    )
+
+    _html_block(f"""
+<style>
+  .ab-grid {{ display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin:4px 0 14px; }}
+  .ab-card {{ background:#12192b; border:1px solid #2a3550; border-radius:14px;
+              padding:20px 22px; display:flex; flex-direction:column; gap:10px; }}
+  .ab-badge {{ font-size:.67rem; font-weight:800; letter-spacing:.16em;
+               text-transform:uppercase; color:#D4AF37; }}
+  .ab-title {{ font-size:.94rem; font-weight:800; color:#F0F0F0; line-height:1.3; }}
+  .ab-body  {{ font-size:.82rem; color:#c0c8d8; line-height:1.68; }}
+  .ab-lbl   {{ display:inline-block; font-size:.71rem; font-weight:700;
+               border-radius:6px; padding:2px 9px; margin-bottom:3px;
+               background:rgba(255,255,255,.06); }}
+  .ab-item  {{ font-size:.82rem; color:#c0c8d8; line-height:1.62;
+               border-bottom:1px solid #1e2a3a; padding:5px 0; }}
+  .ab-item:last-child {{ border-bottom:none; }}
+</style>
+<div class="ab-grid">
+  <div class="ab-card">
+    <div class="ab-badge">① 기업 핵심 요약</div>
+    <div class="ab-title">{sector}</div>
+    <div class="ab-body">{sector_desc}</div>
+  </div>
+  <div class="ab-card">
+    <div class="ab-badge">② 저평가 및 수익률 해설</div>
+    <div class="ab-lbl" style="color:{per_col}">{per_lbl}</div>
+    <div class="ab-body">{per_cmt}</div>
+    <div class="ab-lbl" style="color:{pbr_col}">{pbr_lbl}</div>
+    <div class="ab-body">{pbr_cmt}</div>
+  </div>
+  <div class="ab-card">
+    <div class="ab-badge">③ 독점 기술 &amp; 모멘텀</div>
+    {mom_html}
+  </div>
+</div>
+""")
 
 
 def ui_price_header(r: dict):
@@ -1547,6 +1744,10 @@ def main():
     # ── 전종목 로드 ──────────────────────────────────────────────────────────
     tickers_df = load_krx_tickers()
 
+    # ── 세션 스테이트 초기화 ─────────────────────────────────────────────────
+    if "auto_analyze" not in st.session_state:
+        st.session_state["auto_analyze"] = False
+
     # ── 사이드바 ─────────────────────────────────────────────────────────────
     with st.sidebar:
         st.markdown("## SOOMBI ANALYTICS")
@@ -1646,12 +1847,16 @@ def main():
 
     # ── 투자 지표 정밀 분석 Top 15 ───────────────────────────────────────────
     st.markdown("### 투자 지표 정밀 분석 Top 15")
-    st.caption("거래대금 상위 50종목(KOSPI 25 + KOSDAQ 25) 자동 스캔 → Impact Score 순위 정렬")
+    st.caption(
+        "거래대금 상위 200종목(KOSPI 100 + KOSDAQ 100) 자동 스캔 → Impact Score 순위 정렬"
+        " | **종목 클릭 시 하단 정밀 해부 자동 시작** ▼"
+    )
 
-    with st.spinner("데이터 동기화 중 — 전종목 세력 수급 역추적 파이프라인 가동 중 (최대 30초)…"):
+    with st.spinner("데이터 동기화 중 — 전종목 세력 수급 역추적 파이프라인 가동 중 (최대 60초)…"):
         candidates = get_top_volume_tickers()
         if candidates:
-            scored = scan_top_stocks(candidates)
+            candidate_tuples = tuple((c["code"], c["name"], c["market"]) for c in candidates)
+            scored = _scan_top_cached(candidate_tuples)
         else:
             scored = []
 
@@ -1668,12 +1873,15 @@ def main():
     with col_q:
         query = st.text_input(
             "종목명 또는 6자리 코드 입력",
-            placeholder="예: 한화오션  /  042660  /  삼성전자  /  대한조선  /  439260",
+            placeholder="예: 한화오션 / 042660 / 삼성전자 — 또는 위 표에서 종목 클릭",
             label_visibility="collapsed",
             key="search_query",
         )
     with col_btn:
         go = st.button("🔍 해부 시작", use_container_width=True, type="primary")
+
+    # 클릭-투-애널라이즈: Top15 행 클릭 시 자동 트리거
+    auto_go = bool(st.session_state.pop("auto_analyze", False))
 
     # ── 검색 → 선택 → 분석 ───────────────────────────────────────────────────
     if query:
@@ -1682,16 +1890,17 @@ def main():
             st.warning(f"'{query}' 검색 결과 없음 — 종목명 또는 6자리 코드를 확인하세요.")
             return
 
-        if len(results) > 1:
+        if len(results) > 1 and not auto_go:
             opts = [f"{r['name']} ({r['code']}) [{r['market']}]" for r in results]
             sel_i = st.selectbox("종목 선택", range(len(opts)),
                                   format_func=lambda i: opts[i], key="sel_stock")
             selected = results[sel_i]
         else:
             selected = results[0]
-            st.success(f"✅ {selected['name']} ({selected['code']}) [{selected['market']}] 즉시 검색됨")
+            if not auto_go:
+                st.success(f"✅ {selected['name']} ({selected['code']}) [{selected['market']}] 즉시 검색됨")
 
-        if go or len(results) == 1:
+        if go or auto_go or len(results) == 1:
             ticker = selected["code"]
             name   = selected["name"]
             market = selected["market"]
@@ -1702,33 +1911,37 @@ def main():
             # ① 현재가 Gold·Dark 카드
             ui_price_header(result)
 
-            # ② [1순위] 숨비 종합 진단 점수 — Plotly 속도계 게이지
+            # ② 숨비 종합 진단 점수 — Plotly 속도계 게이지
             st.markdown("### 숨비 종합 진단 점수")
             ui_score_card(result)
+
+            # ③ 기업 정밀 브리핑 — ①섹터 ②저평가해설 ③모멘텀 3카드
+            st.markdown("#### 숨비 기업 정밀 브리핑")
+            ui_auto_briefing(result, name, ticker)
             st.divider()
 
-            # ③ [2순위] 4주체 확정 수급표 (기관·외국인·개인·기타법인)
+            # ④ 4주체 확정 수급표 (기관·외국인·개인·기타법인)
             st.markdown("#### 세력 수급 역추적 — 최근 5거래일 확정 데이터")
             ui_investor_table(result["inv_data"])
             st.divider()
 
-            # ④ [3순위] 펀더멘털 & 가치 평가 (한글 용어)
+            # ⑤ 펀더멘털 & 가치 평가 (한글 용어)
             ui_fundamentals_card(result)
 
-            # ⑤ 정밀 사업 분석 아코디언
+            # ⑥ 정밀 사업 분석 아코디언
             ui_moat_expander(name, ticker)
 
-            # ⑥ 세력 동향 경보 (해당 시)
+            # ⑦ 세력 동향 경보 (해당 시)
             if result["block_alert"]:
                 st.divider()
                 ui_block_alert(result["block_alert"])
 
-            # ⑦ [4순위] 차트 이동평균 지표
+            # ⑧ 차트 이동평균 지표
             st.divider()
             st.markdown("#### 기술적 이동평균 지표")
             ui_ma_strip(result["pb"])
 
-            # ⑧ 미반영 호재 뉴스 & 팩트체크
+            # ⑨ 미반영 호재 뉴스 & 팩트체크
             st.markdown("#### 미반영 호재 뉴스 & 팩트 분석")
             ui_news(result["news_score"], result["news"])
 
