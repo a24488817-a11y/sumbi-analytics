@@ -71,6 +71,35 @@ _INVESTOR_OVERRIDE: dict[tuple, list] = {
     ],
 }
 
+# KRX 휴장일 내장 폴백 테이블 (open.krx.co.kr API 불가 시 사용)
+_KRX_HOLIDAYS_FALLBACK: dict[int, list[str]] = {
+    2025: [
+        "2025-01-01",
+        "2025-01-28", "2025-01-29", "2025-01-30",
+        "2025-03-01",
+        "2025-05-05", "2025-05-06",
+        "2025-06-06",
+        "2025-08-15",
+        "2025-10-03",
+        "2025-10-05", "2025-10-06", "2025-10-07",
+        "2025-10-09",
+        "2025-12-25",
+        "2025-12-31",
+    ],
+    2026: [
+        "2026-01-01",
+        "2026-02-17", "2026-02-18", "2026-02-19",
+        "2026-03-01",
+        "2026-05-05",
+        "2026-06-06",
+        "2026-08-17",
+        "2026-10-05",
+        "2026-10-09",
+        "2026-12-25",
+        "2026-12-31",
+    ],
+}
+
 # 블록딜·오버행 경보 종목 (팩트 기반 고정)
 _BLOCK_ALERT: dict[str, str] = {
     "042660": (
@@ -80,7 +109,55 @@ _BLOCK_ALERT: dict[str, str] = {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 3. KRX 전종목 로드 (FDR, 앱 시작 시 1회)
+# 3. KRX 공휴일 조회 (open.krx.co.kr OTP API → 폴백 테이블)
+# ─────────────────────────────────────────────────────────────────────────────
+@st.cache_data(ttl=3600, show_spinner=False)
+def _get_krx_holidays(year: int) -> tuple[frozenset, bool]:
+    """
+    KRX 휴장일 목록 조회.
+    Returns (dates: frozenset[str "YYYY-MM-DD"], is_fallback: bool)
+    is_fallback=True → open.krx.co.kr API 실패, 내장 테이블 사용 중
+    """
+    try:
+        otp_resp = requests.get(
+            "https://open.krx.co.kr/contents/COM/GenerateOTP.jspx",
+            params={"bld": "MKD/01/0110/01100305/mkd01100305_01", "name": "form"},
+            headers={"User-Agent": "Mozilla/5.0", "Referer": "https://open.krx.co.kr/"},
+            timeout=8,
+        )
+        otp = otp_resp.text.strip()
+        if not otp or len(otp) < 10:
+            raise ValueError("OTP 발급 실패")
+
+        data_resp = requests.post(
+            "https://open.krx.co.kr/contents/OPN/99/OPN99000001.jspx",
+            data={
+                "search_bas_yy": str(year),
+                "gridTp": "KRX",
+                "pagePath": "/contents/MKD/01/0110/01100305/MKD01100305.jsp",
+                "code": otp,
+            },
+            headers={"User-Agent": "Mozilla/5.0", "Referer": "https://open.krx.co.kr/"},
+            timeout=10,
+        )
+        items = data_resp.json().get("block1", [])
+        if not items:
+            raise ValueError("공휴일 데이터 없음")
+
+        dates = frozenset(
+            datetime.strptime(item["calnd_dd"], "%Y%m%d").strftime("%Y-%m-%d")
+            for item in items
+            if "calnd_dd" in item
+        )
+        if not dates:
+            raise ValueError("공휴일 파싱 실패")
+        return dates, False
+    except Exception:
+        return frozenset(_KRX_HOLIDAYS_FALLBACK.get(year, [])), True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. KRX 전종목 로드 (FDR, 앱 시작 시 1회)
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_resource(show_spinner="KRX 전종목 리스트 로딩 중…")
 def load_krx_tickers() -> pd.DataFrame:
@@ -773,9 +850,17 @@ def main():
         st.markdown("## 🐋 숨비 애널리틱스")
         st.markdown("**SOOMBI Analytics v4.0**")
         now_kst = datetime.now(KST)
-        is_mkt  = (9, 0) <= (now_kst.hour, now_kst.minute) <= (15, 30) \
-                  and now_kst.weekday() < 5
+        holidays, hol_fallback = _get_krx_holidays(now_kst.year)
+        today_str = now_kst.strftime("%Y-%m-%d")
+        is_holiday = today_str in holidays
+        is_mkt  = (
+            not is_holiday
+            and (9, 0) <= (now_kst.hour, now_kst.minute) <= (15, 30)
+            and now_kst.weekday() < 5
+        )
         st.markdown(f"**KRX 상태**: {'🟢 장 중' if is_mkt else '🔴 장 마감'}")
+        if hol_fallback:
+            st.warning("공휴일 API 오류 — 기본 테이블 사용 중", icon="⚠️")
         st.markdown(f"**시각**: {now_kst.strftime('%Y-%m-%d %H:%M KST')}")
         st.markdown(f"**전종목**: {len(tickers_df):,}개 (FDR 실시간)")
         st.divider()
