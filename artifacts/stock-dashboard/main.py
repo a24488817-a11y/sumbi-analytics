@@ -1705,9 +1705,9 @@ def ui_investor_table(inv_data: list[dict]):
         return f"{v:+,}"
 
     def _color(v: int) -> str:
-        if v > 0:  return "color:#c0392b;font-weight:700"
-        if v < 0:  return "color:#2471a3;font-weight:700"
-        return "color:#999"
+        if v > 0:  return "color:#FF5050;font-weight:700"
+        if v < 0:  return "color:#3399FF;font-weight:700"
+        return "color:#AAAAAA"
 
     col_heads = ["날짜", "기관", "외국인", "개인"]
     if has_other:
@@ -1835,22 +1835,27 @@ def main():
     st.markdown("""
 <style>
 /* ① 앱 전체 투명도 완벽 제거 — 모든 글씨 100% 선명 */
+html, body, [class*="css"], [class*="st-"],
 p, span, label, div, th, td, li {
     opacity: 1 !important;
     visibility: visible !important;
 }
 
-/* ② 마크다운 일반 텍스트 — 1.5배 확대, 완전 가시 */
+/* ② 마크다운 일반 텍스트 + 기본 p/th/td — 16px, #F8F9FA */
+p,
 .stMarkdown p,
 .stText,
 [data-testid="stMarkdownContainer"] p,
 [data-testid="stMarkdownContainer"] li,
 [data-testid="stMarkdownContainer"] span,
 [data-testid="stMarkdownContainer"] strong,
-[data-testid="stMarkdownContainer"] em {
-    color: #F0F2F6 !important;
-    font-size: 1.05rem !important;
-    line-height: 1.7 !important;
+[data-testid="stMarkdownContainer"] em,
+[data-testid="stText"],
+[data-testid="stCaptionContainer"] p,
+table th, table td {
+    color: #F8F9FA !important;
+    font-size: 16px !important;
+    line-height: 1.6 !important;
     font-weight: 500 !important;
 }
 
@@ -1869,11 +1874,11 @@ section[data-testid="stExpander"] span,
 button[data-testid="stBaseButton-header"] p,
 summary p { color: #D4AF37 !important; font-weight: 700 !important; }
 
-/* ⑤ 메트릭 라벨 — 1.5배 확대, 완전 흰색 */
+/* ⑤ 메트릭 라벨 — 완전 흰색, 16px, 강조 */
 [data-testid="stMetricLabel"] {
     color: #FFFFFF !important;
-    font-size: 1.05rem !important;
-    font-weight: 700 !important;
+    font-size: 16px !important;
+    font-weight: 800 !important;
     opacity: 1 !important;
     visibility: visible !important;
 }
