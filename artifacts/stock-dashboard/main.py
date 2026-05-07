@@ -618,6 +618,223 @@ def analyze_ticker(ticker: str, name: str, market: str) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 10. 글로벌 지수 + 배치 스캐너 (Top 15 랭킹)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@st.cache_data(ttl=60, show_spinner=False)
+def get_market_indices() -> dict:
+    """KOSPI·KOSDAQ·NASDAQ·S&P500 실시간 지수."""
+    out: dict = {}
+
+    # 국내 지수 — Naver 모바일 index API
+    for label, code in [("KOSPI", "KOSPI"), ("KOSDAQ", "KOSDAQ")]:
+        try:
+            r = requests.get(
+                f"https://m.stock.naver.com/api/index/{code}/basic",
+                headers=NAVER_HDRS, timeout=6,
+            )
+            d = r.json()
+            val = float(str(d.get("closePrice", "0")).replace(",", "") or 0)
+            chg = float(d.get("fluctuationsRatio", 0))
+            out[label] = {"value": val, "change": chg}
+        except Exception:
+            out[label] = {"value": 0.0, "change": 0.0}
+
+    # 해외 지수 — Yahoo Finance chart API (인증 불필요)
+    for label, sym in [("NASDAQ", "%5EIXIC"), ("S&P500", "%5EGSPC")]:
+        try:
+            r = requests.get(
+                f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}"
+                "?interval=1d&range=1d",
+                headers={"User-Agent": "Mozilla/5.0"}, timeout=6,
+            )
+            meta = r.json()["chart"]["result"][0]["meta"]
+            val  = float(meta.get("regularMarketPrice", 0))
+            prev = float(meta.get("previousClose", val) or val)
+            chg  = round((val - prev) / prev * 100, 2) if prev else 0.0
+            out[label] = {"value": val, "change": chg}
+        except Exception:
+            out[label] = {"value": 0.0, "change": 0.0}
+
+    return out
+
+
+_ETF_ETN_KW = (
+    "ETF", "ETN", "KODEX", "TIGER", "KINDEX", "KOSEF", "ARIRANG",
+    "HANARO", "TIMEFOLIO", "PLUS", "ACE", "SOL", "RISE",
+    "레버리지", "인버스", "선물", "채권", "달러", "원유",
+)
+
+@st.cache_data(ttl=300, show_spinner=False)
+def get_top_volume_tickers() -> list[dict]:
+    """
+    거래대금 상위 50종목 — Naver sise_quant (KOSPI 25 + KOSDAQ 25).
+    ETF/ETN 자동 제외, 일반 주식만 수집.
+    """
+    candidates: list[dict] = []
+    for sosok, market in [("0", "KOSPI"), ("1", "KOSDAQ")]:
+        try:
+            url  = f"https://finance.naver.com/sise/sise_quant.naver?sosok={sosok}"
+            resp = requests.get(url, headers=NAVER_HDRS, timeout=10)
+            soup = BeautifulSoup(resp.text, "lxml")
+            count = 0
+            for a in soup.select('td a[href*="/item/main.naver?code="]'):
+                m = re.search(r"code=(\d{6})", a.get("href", ""))
+                if not m:
+                    continue
+                code = m.group(1)
+                name = a.get_text(strip=True)
+                if not name or len(name) < 2:
+                    continue
+                # ETF·ETN·파생상품 제외
+                if any(kw in name for kw in _ETF_ETN_KW):
+                    continue
+                candidates.append({"code": code, "name": name, "market": market})
+                count += 1
+                if count >= 25:
+                    break
+        except Exception:
+            pass
+    return candidates
+
+
+@st.cache_data(ttl=180, show_spinner=False)
+def quick_score(ticker: str, name: str, market: str) -> dict | None:
+    """
+    배치 스캐너용 빠른 점수 산출 (펀더멘털·뉴스 제외).
+    기존 score_investor() + calc_pullback_score() GOLDEN RULE 그대로 사용.
+    """
+    try:
+        price_data = get_realtime_price(ticker)
+        if not price_data or price_data.get("현재가", 0) == 0:
+            return None
+
+        ohlcv    = get_ohlcv(ticker, 90)
+        inv_data = get_investor_flow(ticker)
+
+        pb = (
+            calc_pullback_score(
+                ohlcv["Close"],
+                ohlcv["Volume"] if "Volume" in ohlcv.columns else pd.Series(dtype=float),
+            )
+            if not ohlcv.empty and len(ohlcv) >= 22
+            else {"score": 0, "signal": "데이터 부족", "rsi": 50.0,
+                  "ma5": 0, "ma20": 0, "ma60": 0}
+        )
+        inv   = score_investor(inv_data)
+        short = 10  # 공매도 기본 중립
+
+        raw   = pb["score"] + inv["score"] + short   # 최대 80점 (뉴스 20점 제외)
+        total = int(min(raw / 80 * 100, 100))        # 100점 척도 환산
+
+        return {
+            "ticker":    ticker,
+            "name":      name,
+            "market":    market,
+            "price":     price_data.get("현재가", 0),
+            "change":    float(price_data.get("등락률", 0)),
+            "cap":       price_data.get("시가총액", 0),
+            "pb_score":  pb["score"],
+            "inv_score": inv["score"],
+            "total":     total,
+            "signal":    pb["signal"],
+            "rsi":       pb["rsi"],
+        }
+    except Exception:
+        return None
+
+
+def scan_top_stocks(candidates: list[dict]) -> list[dict]:
+    """후보 종목 병렬 스코어링 → 점수 내림차순 정렬."""
+    with ThreadPoolExecutor(max_workers=12) as ex:
+        futs = {
+            ex.submit(quick_score, c["code"], c["name"], c["market"]): c
+            for c in candidates
+        }
+        results = []
+        for f in futs:
+            try:
+                r = f.result(timeout=20)
+                if r:
+                    results.append(r)
+            except Exception:
+                pass
+    return sorted(results, key=lambda x: x["total"], reverse=True)
+
+
+def ui_market_header(indices: dict):
+    """글로벌/국내 증시 전광판 — 4열 메트릭."""
+    st.markdown("### 🌐 글로벌/국내 증시 실시간")
+    c1, c2, c3, c4 = st.columns(4)
+    for col, label in zip([c1, c2, c3, c4], ["KOSPI", "KOSDAQ", "NASDAQ", "S&P500"]):
+        d   = indices.get(label, {"value": 0.0, "change": 0.0})
+        val = d["value"]
+        chg = d["change"]
+        val_str   = f"{val:,.2f}" if val else "—"
+        delta_str = f"{chg:+.2f}%" if val else "—"
+        col.metric(
+            label=label,
+            value=val_str,
+            delta=delta_str if val else None,
+            delta_color="normal",
+        )
+
+
+def ui_top15_tabs(scored: list[dict]):
+    """Top 15 랭킹 테이블 + 탭(전체 / 대형주 / 우량주 / 동전주)."""
+
+    def _to_df(items: list[dict]) -> pd.DataFrame:
+        if not items:
+            return pd.DataFrame()
+        rows = []
+        for i, s in enumerate(items[:15], 1):
+            rows.append({
+                "순위":     i,
+                "종목명":   s["name"],
+                "코드":     s["ticker"],
+                "시장":     s["market"],
+                "현재가":   f"{s['price']:,}원" if s["price"] else "—",
+                "등락률":   f"{s['change']:+.2f}%" if s["price"] else "—",
+                "시가총액": f"{s['cap']:,.0f}억" if s.get("cap") else "—",
+                "42대 점수": s["total"],
+                "수급 점수": s["inv_score"],
+                "눌림목 점수": s["pb_score"],
+                "RSI":      s.get("rsi", "—"),
+                "차트 신호": s.get("signal", "—"),
+            })
+        return pd.DataFrame(rows)
+
+    _prog_col = st.column_config.ProgressColumn(
+        "42대 점수", min_value=0, max_value=100, format="%d점"
+    )
+
+    def _show(df: pd.DataFrame, empty_msg: str = "해당 조건 종목 없음"):
+        if df.empty:
+            st.info(empty_msg)
+        else:
+            st.dataframe(
+                df, use_container_width=True, hide_index=True,
+                column_config={"42대 점수": _prog_col},
+            )
+
+    # 탭별 필터링
+    large  = [s for s in scored if s.get("cap", 0) >= 10_000]         # 1조+ 대형주
+    qual   = [s for s in scored if s["pb_score"] >= 18 and s["inv_score"] >= 18]  # 차트+수급 우량
+    penny  = [s for s in scored if 0 < s["price"] < 2_000]            # 동전주
+
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "🏆 전체 Top 15",
+        "🏢 대형주 (시총 1조+)",
+        "💎 우량주 (차트·수급 쌍끌이)",
+        "🪙 동전주 (~2,000원)",
+    ])
+    with tab1: _show(_to_df(scored))
+    with tab2: _show(_to_df(large),  "대형주(1조+) 조건 해당 종목 없음")
+    with tab3: _show(_to_df(qual),   "우량주(차트·수급 동시 고점) 조건 없음")
+    with tab4: _show(_to_df(penny),  "동전주 조건 해당 종목 없음")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 11. UI 컴포넌트
 # ─────────────────────────────────────────────────────────────────────────────
 def _html_block(html: str):
@@ -1012,6 +1229,29 @@ def main():
     # ── 헤더 ──────────────────────────────────────────────────────────────────
     st.markdown("# 🐋 숨비 애널리틱스")
     st.markdown("### SOOMBI Analytics v4.0 — 42대 필살기 기반 한국 주식 매수 적합도 즉시 판단")
+    st.divider()
+
+    # ── 글로벌/국내 증시 전광판 ─────────────────────────────────────────────
+    with st.spinner("지수 수집 중…"):
+        indices = get_market_indices()
+    ui_market_header(indices)
+    st.divider()
+
+    # ── 42대 필살기 Top 15 랭킹 스캐너 ──────────────────────────────────────
+    st.markdown("### 🔭 42대 필살기 Top 15 랭킹 스캐너")
+    st.caption("거래대금 상위 50종목(KOSPI 25 + KOSDAQ 25) 자동 스캔 → 수급·차트 종합 점수순 정렬")
+
+    with st.spinner("거래대금 상위 종목 수집 및 42대 스코어 산출 중 (최대 30초)…"):
+        candidates = get_top_volume_tickers()
+        if candidates:
+            scored = scan_top_stocks(candidates)
+        else:
+            scored = []
+
+    if scored:
+        ui_top15_tabs(scored)
+    else:
+        st.warning("거래대금 상위 종목 데이터를 수집할 수 없습니다. ⚡ 캐시 초기화 후 재시도하세요.")
     st.divider()
 
     # ── 검색 영역 ─────────────────────────────────────────────────────────────
