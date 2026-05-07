@@ -1726,76 +1726,65 @@ def ui_score_card(r: dict):
 
 
 def ui_investor_table(inv_data: list[dict]):
-    """하단: 투자자별 5거래일 수급표 — Pandas Styler HTML 직결 방식 (색상 100% 보장)."""
+    """하단: 투자자별 5거래일 수급표 — 순수 HTML + CSS 클래스 방식 (색상 !important 완전 보장)."""
     if not inv_data:
         st.info("수급 데이터를 수집할 수 없습니다.")
         return
 
     has_other = any(r.get("기타법인", 0) != 0 for r in inv_data)
-    num_cols   = ["기관", "외국인", "개인"] + (["기타법인"] if has_other else [])
+    num_cols  = ["기관", "외국인", "개인"] + (["기타법인"] if has_other else [])
+    all_cols  = ["날짜"] + num_cols
 
     def _fmt(v: int) -> str:
         return "—" if v == 0 else f"{v:+,}"
 
-    def _apply_color(val: str) -> str:
-        try:
-            n = float(str(val).replace(",", "").replace("+", "").replace("—", "0").strip())
-            if n > 0: return "color:#FF5050;font-weight:700;background-color:transparent;"
-            if n < 0: return "color:#3399FF;font-weight:700;background-color:transparent;"
-        except Exception:
-            pass
-        return "color:#AAAAAA;background-color:transparent;"
+    def _cls(v: int) -> str:
+        if v > 0: return "up"
+        if v < 0: return "down"
+        return "steady-stock"
 
-    rows = []
-    for r in inv_data:
-        row: dict = {"날짜": r["날짜"]}
-        for key in num_cols:
-            row[key] = _fmt(int(r.get(key, 0)))
-        rows.append(row)
-
-    import pandas as _pd
-    df = _pd.DataFrame(rows)
-
-    tbl_styles = [
-        {"selector": "table", "props": [
-            ("width", "100%"), ("border-collapse", "collapse"),
-            ("background", "#12192b"), ("border-radius", "12px"), ("overflow", "hidden"),
-        ]},
-        {"selector": "thead th", "props": [
-            ("background-color", "#0d1526"), ("color", "#D4AF37"),
-            ("font-size", "13px"), ("font-weight", "800"), ("letter-spacing", ".1em"),
-            ("text-transform", "uppercase"), ("text-align", "center"),
-            ("padding", "11px 18px"), ("border-bottom", "1px solid #2a3550"),
-        ]},
-        {"selector": "tbody td", "props": [
-            ("font-size", "15px"), ("text-align", "center"),
-            ("padding", "10px 18px"), ("border-bottom", "1px solid #1e2a3a"),
-            ("color", "#F8F9FA"),
-        ]},
-        {"selector": "tbody tr:last-child td", "props": [("border-bottom", "none")]},
-        {"selector": "tbody tr:hover td",       "props": [("background", "#1a2236")]},
-    ]
-
-    styled_html = (
-        df.style
-        .map(_apply_color, subset=num_cols)
-        .set_table_styles(tbl_styles)
-        .hide(axis="index")
-        .to_html()
+    # 헤더
+    th_cells = "".join(
+        f"<th style='background:#0d1526;color:#D4AF37;font-size:13px;font-weight:800;"
+        f"letter-spacing:.1em;text-transform:uppercase;text-align:center;"
+        f"padding:11px 18px;border-bottom:1px solid #2a3550;'>{c}</th>"
+        for c in all_cols
     )
+
+    # 데이터 행
+    body_rows = []
+    for r in inv_data:
+        date_td = (
+            f"<td style='text-align:center;padding:10px 18px;"
+            f"border-bottom:1px solid #1e2a3a;font-size:15px;'>{r['날짜']}</td>"
+        )
+        num_tds = []
+        for key in num_cols:
+            val = int(r.get(key, 0))
+            css = _cls(val)
+            num_tds.append(
+                f"<td class='{css}' style='text-align:center;padding:10px 18px;"
+                f"border-bottom:1px solid #1e2a3a;font-size:15px;'>{_fmt(val)}</td>"
+            )
+        body_rows.append(f"<tr>{date_td}{''.join(num_tds)}</tr>")
 
     note_html = "" if has_other else (
         "<p style='font-size:13px;color:#5a6a7a;margin-top:8px;'>"
         "※ 개인 = 역산(기관+외국인+기타법인 零合). 기타법인 별도 집계 없음.</p>"
     )
 
-    st.markdown(
-        "<p style='font-size:.72rem;font-weight:800;letter-spacing:.14em;"
-        "color:#D4AF37;text-transform:uppercase;margin-bottom:8px;'>"
-        "◈ 세력 수급 역추적 — 4주체 5거래일 확정 수급 (단위: 주)</p>",
-        unsafe_allow_html=True,
-    )
-    st.markdown(styled_html + note_html, unsafe_allow_html=True)
+    html = f"""
+<p style='font-size:.72rem;font-weight:800;letter-spacing:.14em;
+color:#D4AF37;text-transform:uppercase;margin-bottom:8px;'>
+◈ 세력 수급 역추적 — 4주체 5거래일 확정 수급 (단위: 주)</p>
+<table style='width:100%;border-collapse:collapse;background:#12192b;
+border-radius:12px;overflow:hidden;'>
+  <thead><tr>{th_cells}</tr></thead>
+  <tbody>{''.join(body_rows)}</tbody>
+</table>
+{note_html}
+"""
+    st.markdown(html, unsafe_allow_html=True)
 
 
 def ui_news(news_result: dict, all_news: list[dict]):
