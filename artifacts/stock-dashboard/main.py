@@ -1947,6 +1947,10 @@ summary p { color: #D4AF37 !important; font-weight: 700 !important; }
 .blue-minus { color: #3399FF !important; font-weight: 700 !important; }
 .up-stock   { color: #FF5050 !important; font-weight: 700 !important; }
 .down-stock { color: #3399FF !important; font-weight: 700 !important; }
+.up         { color: #FF5050 !important; font-weight: 700 !important; }
+.down       { color: #3399FF !important; font-weight: 700 !important; }
+.label      { color: #FFD700 !important; font-weight: 700 !important; }
+.white      { color: #FFFFFF !important; }
 .steady-stock { color: #FFFFFF !important; }
 .news-box   { color: #00FF00 !important; font-weight: 700 !important;
               border-left: 5px solid #00FF00; padding-left: 12px; }
