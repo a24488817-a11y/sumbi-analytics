@@ -1879,12 +1879,11 @@ def main():
     # ── 전역 CSS: SOOMBI 마스터 테마 ─────────────────────────────────────────
     st.markdown("""
 <style>
-/* ① 앱 전체 투명도 완벽 제거 + 기본 흰색 보장 */
+/* ① 앱 전체 투명도 완벽 제거 — 색상 강제 없이 가시성만 보장 */
 html, body, [class*="css"], [class*="st-"],
 p, span, label, div, th, td, li {
     opacity: 1 !important;
     visibility: visible !important;
-    color: #FFFFFF !important;
 }
 
 /* ② 마크다운 일반 텍스트 + 기본 p/th/td — 16px, #F8F9FA */
@@ -1935,9 +1934,12 @@ summary p { color: #D4AF37 !important; font-weight: 700 !important; }
     visibility: visible !important;
 }
 
-/* ⑤-b 수급표 HTML 클래스 — 색상 100% 보장 */
-.red-val  { color: #FF5050 !important; font-weight: 700 !important; }
-.blue-val { color: #3399FF !important; font-weight: 700 !important; }
+/* ⑤-b 수급표 + 등락 HTML 클래스 — 색상 100% 보장 */
+.red-val    { color: #FF5050 !important; font-weight: 700 !important; }
+.blue-val   { color: #3399FF !important; font-weight: 700 !important; }
+.up-stock   { color: #FF5050 !important; font-weight: 700 !important; }
+.down-stock { color: #3399FF !important; font-weight: 700 !important; }
+.steady-stock { color: #FFFFFF !important; }
 
 /* ⑥ 메트릭 수치 — 크기 유지, 색상 완전 선명 */
 [data-testid="stMetricValue"] {
