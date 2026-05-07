@@ -138,32 +138,39 @@ _BAD_KW = [
 
 
 # KRX 휴장일 내장 폴백 테이블 (open.krx.co.kr API 불가 시 사용)
-_KRX_HOLIDAYS_FALLBACK: dict[int, list[str]] = {
-    2025: [
-        "2025-01-01",
-        "2025-01-28", "2025-01-29", "2025-01-30",
-        "2025-03-01",
-        "2025-05-05", "2025-05-06",
-        "2025-06-06",
-        "2025-08-15",
-        "2025-10-03",
-        "2025-10-05", "2025-10-06", "2025-10-07",
-        "2025-10-09",
-        "2025-12-25",
-        "2025-12-31",
-    ],
-    2026: [
-        "2026-01-01",
-        "2026-02-17", "2026-02-18", "2026-02-19",
-        "2026-03-01",
-        "2026-05-05",
-        "2026-06-06",
-        "2026-08-17",
-        "2026-10-05",
-        "2026-10-09",
-        "2026-12-25",
-        "2026-12-31",
-    ],
+_KRX_HOLIDAYS_FALLBACK: dict[int, dict[str, str]] = {
+    2025: {
+        "2025-01-01": "신정",
+        "2025-01-28": "설날 연휴",
+        "2025-01-29": "설날",
+        "2025-01-30": "설날 연휴",
+        "2025-03-01": "삼일절",
+        "2025-05-05": "어린이날",
+        "2025-05-06": "어린이날 대체공휴일",
+        "2025-06-06": "현충일",
+        "2025-08-15": "광복절",
+        "2025-10-03": "개천절",
+        "2025-10-05": "추석 연휴",
+        "2025-10-06": "추석",
+        "2025-10-07": "추석 연휴",
+        "2025-10-09": "한글날",
+        "2025-12-25": "성탄절",
+        "2025-12-31": "연말 휴장",
+    },
+    2026: {
+        "2026-01-01": "신정",
+        "2026-02-17": "설날 연휴",
+        "2026-02-18": "설날",
+        "2026-02-19": "설날 연휴",
+        "2026-03-01": "삼일절",
+        "2026-05-05": "어린이날",
+        "2026-06-06": "현충일",
+        "2026-08-17": "광복절 대체공휴일",
+        "2026-10-05": "추석",
+        "2026-10-09": "한글날",
+        "2026-12-25": "성탄절",
+        "2026-12-31": "연말 휴장",
+    },
 }
 
 # 블록딜·오버행 경보 — 실시간 수급 기반 자동 감지
@@ -174,10 +181,10 @@ _BLOCK_ALERT: dict[str, str] = {}
 # 3. KRX 공휴일 조회 (open.krx.co.kr OTP API → 폴백 테이블)
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=3600, show_spinner=False)
-def _get_krx_holidays(year: int) -> tuple[frozenset, bool]:
+def _get_krx_holidays(year: int) -> tuple[dict[str, str], bool]:
     """
     KRX 휴장일 목록 조회.
-    Returns (dates: frozenset[str "YYYY-MM-DD"], is_fallback: bool)
+    Returns (dates: dict[str "YYYY-MM-DD", str holiday_name], is_fallback: bool)
     is_fallback=True → open.krx.co.kr API 실패, 내장 테이블 사용 중
     """
     try:
@@ -206,16 +213,23 @@ def _get_krx_holidays(year: int) -> tuple[frozenset, bool]:
         if not items:
             raise ValueError("공휴일 데이터 없음")
 
-        dates = frozenset(
-            datetime.strptime(item["calnd_dd"], "%Y%m%d").strftime("%Y-%m-%d")
-            for item in items
-            if "calnd_dd" in item
-        )
+        dates: dict[str, str] = {}
+        for item in items:
+            if "calnd_dd" not in item:
+                continue
+            date_str = datetime.strptime(item["calnd_dd"], "%Y%m%d").strftime("%Y-%m-%d")
+            name = (
+                item.get("calnd_dd_nm")
+                or item.get("holdy_nm")
+                or item.get("remark")
+                or ""
+            )
+            dates[date_str] = name
         if not dates:
             raise ValueError("공휴일 파싱 실패")
         return dates, False
     except Exception:
-        return frozenset(_KRX_HOLIDAYS_FALLBACK.get(year, [])), True
+        return dict(_KRX_HOLIDAYS_FALLBACK.get(year, {})), True
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2013,7 +2027,14 @@ button[data-baseweb="tab"][aria-selected="true"] p { color: #D4AF37 !important; 
             and (9, 0) <= (now_kst.hour, now_kst.minute) <= (15, 30)
             and now_kst.weekday() < 5
         )
-        st.markdown(f"**KRX 시장**: {'🟢 장 중' if is_mkt else '🔴 장 마감'}")
+        if is_mkt:
+            mkt_label = "🟢 장 중"
+        elif is_holiday:
+            hol_name = holidays.get(today_str, "")
+            mkt_label = f"🔴 공휴일 휴장 ({hol_name})" if hol_name else "🔴 공휴일 휴장"
+        else:
+            mkt_label = "🔴 장 마감"
+        st.markdown(f"**KRX 시장**: {mkt_label}")
         if hol_fallback:
             st.warning("시장 캘린더 동기화 중 — 기본 데이터 사용", icon="⚠️")
         st.markdown(f"**기준 시각**: {now_kst.strftime('%Y-%m-%d %H:%M KST')}")
