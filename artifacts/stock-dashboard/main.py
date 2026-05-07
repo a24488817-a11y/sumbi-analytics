@@ -1268,15 +1268,15 @@ def ui_auto_briefing(result: dict, name: str, ticker: str):
   .ab-card  {{ background:#12192b; border:1px solid #2a3550; border-radius:14px;
                padding:22px 28px; display:flex; flex-direction:column; gap:8px; }}
   .ab-row2  {{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }}
-  .ab-badge {{ font-size:.67rem; font-weight:800; letter-spacing:.16em;
-               text-transform:uppercase; color:#D4AF37; margin-bottom:2px; }}
-  .ab-title {{ font-size:1.0rem; font-weight:800; color:#F5F5F5; line-height:1.35; }}
-  .ab-body  {{ font-size:.86rem; color:#D8E0EC; line-height:1.75; }}
-  .ab-lbl   {{ display:inline-block; font-size:.72rem; font-weight:700;
-               border-radius:6px; padding:3px 10px; margin:2px 0;
-               background:rgba(255,255,255,.07); }}
-  .ab-item  {{ font-size:.84rem; color:#D8E0EC; line-height:1.65;
-               border-bottom:1px solid #1e2a3a; padding:6px 0; }}
+  .ab-badge {{ font-size:.72rem; font-weight:800; letter-spacing:.16em;
+               text-transform:uppercase; color:#D4AF37; margin-bottom:4px; }}
+  .ab-title {{ font-size:1.1rem; font-weight:800; color:#F5F5F5; line-height:1.4; }}
+  .ab-body  {{ font-size:1.0rem; color:#E0E0E0; line-height:1.75; font-weight:500; }}
+  .ab-lbl   {{ display:inline-block; font-size:.76rem; font-weight:700;
+               border-radius:6px; padding:4px 12px; margin:4px 0;
+               background:rgba(255,255,255,.08); }}
+  .ab-item  {{ font-size:.95rem; color:#E0E0E0; line-height:1.7; font-weight:500;
+               border-bottom:1px solid #1e2a3a; padding:7px 0; }}
   .ab-item:last-child {{ border-bottom:none; }}
 </style>
 <div class="ab-wrap">
@@ -1848,10 +1848,28 @@ section[data-testid="stExpander"] span {
 /* 익스팬더 헤더 골드 강조 */
 button[data-testid="stBaseButton-header"] p,
 summary p { color: #D4AF37 !important; font-weight: 700 !important; }
-/* 메트릭 위젯 */
-[data-testid="stMetricValue"]       { color: #FFFFFF !important; font-weight: 900 !important; }
-[data-testid="stMetricLabel"]       { color: #A0AEC0 !important; }
-[data-testid="stMetricDeltaIcon"]   { display: none; }
+/* 메트릭 위젯 — 라벨/수치 강제 표시 */
+[data-testid="stMetricValue"] {
+    color: #FFFFFF !important;
+    font-size: 26px !important;
+    font-weight: 900 !important;
+}
+[data-testid="stMetricLabel"] {
+    color: #F0F2F6 !important;
+    font-size: 16px !important;
+    font-weight: 700 !important;
+    opacity: 1 !important;
+    visibility: visible !important;
+}
+[data-testid="stMetricDeltaIcon"] { display: none; }
+/* 기업 설명 / 브리핑 본문 — 초보자 가독성 최적화 */
+.sumbi-description {
+    color: #E0E0E0 !important;
+    font-size: 17px !important;
+    line-height: 1.7 !important;
+    padding: 15px 0 !important;
+    font-weight: 500 !important;
+}
 /* 캡션 */
 [data-testid="stCaptionContainer"] p { color: #6b7c93 !important; }
 /* 경고/정보 박스 */
