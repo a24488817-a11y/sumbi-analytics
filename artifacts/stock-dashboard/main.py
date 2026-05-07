@@ -803,20 +803,30 @@ def quick_score(ticker: str, name: str, market: str) -> dict | None:
         short = 10  # 공매도 기본 중립
 
         raw   = pb["score"] + inv["score"] + short   # 최대 80점 (뉴스 20점 제외)
-        total = int(min(raw / 80 * 100, 100))        # 100점 척도 환산
+        total = int(min(raw / 80 * 100, 100))        # 100점 척도 환산 (표시용 GOLDEN RULE 불변)
+
+        # ── rank_score: 신호 강도 가중치 적용 (정렬 전용, 표시 점수와 별도) ──
+        # "즉시 매수" 신호가 최상위 독식하도록 pb_score에 시그널 멀티플라이어 적용
+        _SIG_MULT = {"즉시 매수": 2.5, "매수 준비": 1.2, "관망": 0.3, "데이터 부족": 0.2}
+        pb_sig = pb.get("signal", "관망")
+        sig_mult = next((v for k, v in _SIG_MULT.items() if k in pb_sig), 0.3)
+        _RANK_DENOM = 30 * 2.5 + 30 * 2.0 + 20   # 최대 가중 합산 = 155
+        rank_raw   = pb["score"] * sig_mult + inv["score"] * 2.0 + short
+        rank_score = int(min(rank_raw / _RANK_DENOM * 100, 100))
 
         return {
-            "ticker":    ticker,
-            "name":      name,
-            "market":    market,
-            "price":     price_data.get("현재가", 0),
-            "change":    float(price_data.get("등락률", 0)),
-            "cap":       price_data.get("시가총액", 0),
-            "pb_score":  pb["score"],
-            "inv_score": inv["score"],
-            "total":     total,
-            "signal":    pb["signal"],
-            "rsi":       pb["rsi"],
+            "ticker":     ticker,
+            "name":       name,
+            "market":     market,
+            "price":      price_data.get("현재가", 0),
+            "change":     float(price_data.get("등락률", 0)),
+            "cap":        price_data.get("시가총액", 0),
+            "pb_score":   pb["score"],
+            "inv_score":  inv["score"],
+            "total":      total,
+            "rank_score": rank_score,
+            "signal":     pb["signal"],
+            "rsi":        pb["rsi"],
         }
     except Exception:
         return None
@@ -845,7 +855,8 @@ def scan_top_stocks(candidates: list[dict]) -> list[dict]:
         if r.get("cap", 0) < 100 and code in cap_lookup:
             r["cap"] = round(cap_lookup[code], 0)
 
-    return sorted(results, key=lambda x: x["total"], reverse=True)
+    # 정렬 기준: rank_score (신호 가중치 반영) — 즉시 매수 종목이 상위 독식
+    return sorted(results, key=lambda x: x.get("rank_score", 0), reverse=True)
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -1015,28 +1026,39 @@ def ui_top15_tabs(scored: list[dict]):
     )
 
     def _show(df: pd.DataFrame, tab_key: str):
-        """데이터프레임 표시 + 행 클릭 → 단일 종목 정밀 해부 자동 연동."""
+        """데이터프레임 + 원클릭 해부 버튼 매트릭스."""
         if df.empty:
             st.info("데이터 동기화 중 — 잠시 후 재시도하세요.")
             return
-        event = st.dataframe(
+        # 표 출력 (체크박스 없음 — 버튼 매트릭스로 클릭 처리)
+        st.dataframe(
             df, use_container_width=True, hide_index=True,
-            on_select="rerun", selection_mode="single-row",
             column_config={"숨비 점수": _prog_col},
-            key=f"top15_df_{tab_key}",
         )
-        sel = getattr(event, "selection", None)
-        if sel and sel.rows:
-            idx          = sel.rows[0]
-            clicked_code = df.iloc[idx]["코드"]
-            clicked_name = df.iloc[idx]["종목명"]
-            if st.session_state.get("search_query") != clicked_code:
-                st.session_state["search_query"] = clicked_code
-                st.session_state["auto_analyze"]  = True
-            st.caption(
-                f"🎯 **{clicked_name}** ({clicked_code}) 선택됨 "
-                "— 하단 '단일 종목 정밀 해부'에서 분석이 자동 시작됩니다 ▼"
-            )
+        # ── 원클릭 종목 해부 버튼 매트릭스 (5열 × 최대 3행) ─────────────
+        st.markdown(
+            '<p style="color:#A0AEC0;font-size:0.8rem;margin:6px 0 8px;">'
+            '⚡ 아래 버튼 클릭 → 해당 종목 정밀 해부 즉시 시작</p>',
+            unsafe_allow_html=True,
+        )
+        n = len(df)
+        for row_start in range(0, n, 5):
+            chunk = df.iloc[row_start: row_start + 5]
+            btn_cols = st.columns(len(chunk))
+            for col_idx, (_, row) in enumerate(chunk.iterrows()):
+                with btn_cols[col_idx]:
+                    label = f"{row['순위']}. {row['종목명']}"
+                    sig   = str(row.get("차트 신호", ""))
+                    btn_type = "primary" if "즉시 매수" in sig else "secondary"
+                    if st.button(
+                        label,
+                        key=f"qbtn_{tab_key}_{row['코드']}",
+                        use_container_width=True,
+                        type=btn_type,
+                    ):
+                        st.session_state["search_query"] = row["코드"]
+                        st.session_state["auto_analyze"]  = True
+                        st.rerun()
 
     # ── 대형주: FDR Marcap 기준 시총 5,000억+ (200종목 풀에서 필터) ──────
     large = sorted(
@@ -1847,9 +1869,12 @@ def main():
 
     # ── 투자 지표 정밀 분석 Top 15 ───────────────────────────────────────────
     st.markdown("### 투자 지표 정밀 분석 Top 15")
-    st.caption(
-        "거래대금 상위 200종목(KOSPI 100 + KOSDAQ 100) 자동 스캔 → Impact Score 순위 정렬"
-        " | **종목 클릭 시 하단 정밀 해부 자동 시작** ▼"
+    st.markdown(
+        '<p style="color:#A0AEC0;font-size:0.85rem;margin:-6px 0 6px;">'
+        "거래대금 상위 200종목(KOSPI 100 + KOSDAQ 100) 자동 스캔 → "
+        "<strong>즉시 매수 신호 최우선 랭킹</strong> | "
+        "하단 버튼 클릭 → 정밀 해부 즉시 시작</p>",
+        unsafe_allow_html=True,
     )
 
     with st.spinner("데이터 동기화 중 — 전종목 세력 수급 역추적 파이프라인 가동 중 (최대 60초)…"):
