@@ -975,7 +975,7 @@ def ui_market_header(indices: dict):
         up   = chg >= 0
         val_str = f"{val:,.2f}" if val else "—"
         chg_str = f"{'▲' if up else '▼'} {abs(chg):.2f}%"
-        chg_col = "#c0392b" if up else "#2471a3"
+        chg_col = "#FF5050" if up else "#3399FF"
         spark   = get_index_sparkline(_INDEX_YF.get(label, ""))
         svg     = _sparkline_svg(spark, up=up)
         cards_html += f"""
@@ -1313,7 +1313,7 @@ def ui_price_header(r: dict):
     cap = p.get("시가총액", 0)
     sign = "▲" if chg >= 0 else "▼"
     up   = chg >= 0
-    c_price = "#ff6b6b" if up else "#5ba3f5"
+    c_price = "#FF5050" if up else "#3399FF"
     c_chg   = c_price
     mkt_bg  = "#1a2a4a" if r["market"] == "KOSPI" else "#1a3a2a"
     mkt_col = "#5ba3f5" if r["market"] == "KOSPI" else "#4ec76a"
