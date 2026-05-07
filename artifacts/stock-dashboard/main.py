@@ -1598,11 +1598,11 @@ def ui_score_card(r: dict):
               text-transform:uppercase;color:#8fa3b8;margin-bottom:8px;">
     숨비 종합 진단 점수
   </div>
-  <div style="font-size:64px;font-weight:900;color:{sc};
-              line-height:1;margin-bottom:10px;">
-    {total}<span style="font-size:32px;">점</span>
+  <div style="font-size:80px;font-weight:900;color:{sc};
+              line-height:1;margin-bottom:12px;">
+    {total}<span style="font-size:40px;">점</span>
   </div>
-  <div style="font-size:1.15rem;font-weight:800;color:{vd_col};">
+  <div style="font-size:1.3rem;font-weight:800;color:{vd_col};">
     {emoji} 숨비 종합 판정 — {badge}
   </div>
 </div>
@@ -1879,11 +1879,12 @@ def main():
     # ── 전역 CSS: SOOMBI 마스터 테마 ─────────────────────────────────────────
     st.markdown("""
 <style>
-/* ① 앱 전체 투명도 완벽 제거 — 모든 글씨 100% 선명 */
+/* ① 앱 전체 투명도 완벽 제거 + 기본 흰색 보장 */
 html, body, [class*="css"], [class*="st-"],
 p, span, label, div, th, td, li {
     opacity: 1 !important;
     visibility: visible !important;
+    color: #FFFFFF !important;
 }
 
 /* ② 마크다운 일반 텍스트 + 기본 p/th/td — 16px, #F8F9FA */
@@ -1899,7 +1900,7 @@ p,
 [data-testid="stCaptionContainer"] p,
 table th, table td {
     color: #F8F9FA !important;
-    font-size: 16px !important;
+    font-size: 18px !important;
     line-height: 1.6 !important;
     font-weight: 500 !important;
 }
@@ -1919,7 +1920,7 @@ section[data-testid="stExpander"] span,
 button[data-testid="stBaseButton-header"] p,
 summary p { color: #D4AF37 !important; font-weight: 700 !important; }
 
-/* ⑤ 메트릭 라벨 — 최상위 + 모든 자식 태그 심층 타겟 */
+/* ⑤ 메트릭 라벨 — 골드 강조, 심층 타겟 전체 */
 [data-testid="stMetricLabel"],
 [data-testid="stMetricLabel"] > div,
 [data-testid="stMetricLabel"] label,
@@ -1927,12 +1928,16 @@ summary p { color: #D4AF37 !important; font-weight: 700 !important; }
 [data-testid="stText"] p,
 [data-testid="stMarkdown"] p,
 .st-emotion-cache-1wivap2 {
-    color: #FFFFFF !important;
-    font-size: 16px !important;
+    color: #FFD700 !important;
+    font-size: 18px !important;
     font-weight: 800 !important;
     opacity: 1 !important;
     visibility: visible !important;
 }
+
+/* ⑤-b 수급표 HTML 클래스 — 색상 100% 보장 */
+.red-val  { color: #FF5050 !important; font-weight: 700 !important; }
+.blue-val { color: #3399FF !important; font-weight: 700 !important; }
 
 /* ⑥ 메트릭 수치 — 크기 유지, 색상 완전 선명 */
 [data-testid="stMetricValue"] {
