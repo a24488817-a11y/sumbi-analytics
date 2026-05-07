@@ -1565,17 +1565,50 @@ def ui_score_card(r: dict):
     verdict = r["verdict"]
 
     if total >= 75:
-        vd_col = "#27ae60"; vd_bg = "#0d2a1a"; vd_border = "#27ae60"
-        badge  = "강력 매수"; sc = "#27ae60"
+        vd_col = "#FF5050"; vd_bg = "#1e0a0a"; vd_border = "#FF5050"
+        badge  = "즉시 매수 (HIGH)"; sc = "#FF5050"
+        emoji  = "🔴"
     elif total >= 55:
-        vd_col = "#D4AF37"; vd_bg = "#2a2200"; vd_border = "#D4AF37"
-        badge  = "관심 매집"; sc = "#D4AF37"
+        vd_col = "#FFB300"; vd_bg = "#1e1600"; vd_border = "#FFB300"
+        badge  = "분할 매수 (MID)";  sc = "#FFB300"
+        emoji  = "🟡"
     elif total >= 35:
         vd_col = "#f39c12"; vd_bg = "#221600"; vd_border = "#f39c12"
-        badge  = "관망";     sc = "#f39c12"
+        badge  = "관망 (LOW)";        sc = "#f39c12"
+        emoji  = "⚪"
     else:
-        vd_col = "#e74c3c"; vd_bg = "#2a0d0d"; vd_border = "#e74c3c"
-        badge  = "진입 불가"; sc = "#e74c3c"
+        vd_col = "#6b7c93"; vd_bg = "#0d1120"; vd_border = "#4a5568"
+        badge  = "진입 불가";         sc = "#6b7c93"
+        emoji  = "❌"
+
+    # ── 히어로 점수 배너 (전체 폭, 중앙 정렬) ─────────────────────────────
+    st.markdown(
+        f"""
+<div style="
+  background:#1a1a2e;
+  border:1px solid {vd_border};
+  border-top:4px solid {vd_col};
+  border-radius:16px;
+  padding:28px 32px;
+  text-align:center;
+  margin-bottom:18px;
+  box-shadow:0 4px 24px rgba(0,0,0,.5);
+">
+  <div style="font-size:.78rem;font-weight:800;letter-spacing:.2em;
+              text-transform:uppercase;color:#8fa3b8;margin-bottom:8px;">
+    숨비 종합 진단 점수
+  </div>
+  <div style="font-size:64px;font-weight:900;color:{sc};
+              line-height:1;margin-bottom:10px;">
+    {total}<span style="font-size:32px;">점</span>
+  </div>
+  <div style="font-size:1.15rem;font-weight:800;color:{vd_col};">
+    {emoji} 숨비 종합 판정 — {badge}
+  </div>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
 
     # ── Plotly 속도계 게이지 ───────────────────────────────────────────────
     fig = go.Figure(go.Indicator(
