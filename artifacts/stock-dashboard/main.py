@@ -1868,19 +1868,26 @@ def main():
     # ── 전역 CSS: SOOMBI 마스터 테마 ─────────────────────────────────────────
     st.markdown("""
 <style>
-/* ① 유니버설 투명도 제거 + 기본 흰색 */
-* {
-    opacity: 1 !important;
-    visibility: visible !important;
-    color: #FFFFFF !important;
-    -webkit-text-fill-color: initial !important;
-}
-/* ① 앱 요소 투명도 재확인 */
+/* ① 기본 배경 + 글자색 (전역 !important 색상 강제 완전 제거) */
+.stApp { background-color: #111111; color: #FFFFFF; }
+p, span, h1, h2, h3, label { color: #FFFFFF; font-weight: bold; }
+
+/* ① 투명도 — 색상 강제 없이 가시성만 보장 */
 html, body, [class*="css"], [class*="st-"],
 p, span, label, div, th, td, li {
     opacity: 1 !important;
     visibility: visible !important;
 }
+
+/* ① 전광판 st.metric 상승(빨강) / 하락(파랑) */
+[data-testid="stMetricDelta"] > div {
+    font-weight: 900 !important;
+    font-size: 22px !important;
+}
+[data-testid="stMetricDelta"] svg[title="Price up"] + div  { color: #FF5050 !important; }
+[data-testid="stMetricDelta"] svg[title="Price up"] path   { fill:  #FF5050 !important; }
+[data-testid="stMetricDelta"] svg[title="Price down"] + div { color: #3399FF !important; }
+[data-testid="stMetricDelta"] svg[title="Price down"] path  { fill:  #3399FF !important; }
 
 /* ② 마크다운 일반 텍스트 + 기본 p/th/td — 16px, #F8F9FA */
 p,
