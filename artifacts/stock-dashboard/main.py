@@ -1831,52 +1831,95 @@ def main():
     if "auto_analyze" not in st.session_state:
         st.session_state["auto_analyze"] = False
 
-    # ── 전역 CSS: 다크모드 텍스트 가독성 강제 복구 ───────────────────────────
+    # ── 전역 CSS: SOOMBI 마스터 테마 ─────────────────────────────────────────
     st.markdown("""
 <style>
-/* 마크다운 / 익스팬더 내부 텍스트 강제 흰색 */
+/* ① 앱 전체 투명도 완벽 제거 — 모든 글씨 100% 선명 */
+p, span, label, div, th, td, li {
+    opacity: 1 !important;
+    visibility: visible !important;
+}
+
+/* ② 마크다운 일반 텍스트 — 1.5배 확대, 완전 가시 */
+.stMarkdown p,
+.stText,
 [data-testid="stMarkdownContainer"] p,
 [data-testid="stMarkdownContainer"] li,
 [data-testid="stMarkdownContainer"] span,
 [data-testid="stMarkdownContainer"] strong,
-[data-testid="stMarkdownContainer"] em,
+[data-testid="stMarkdownContainer"] em {
+    color: #F0F2F6 !important;
+    font-size: 1.05rem !important;
+    line-height: 1.7 !important;
+    font-weight: 500 !important;
+}
+
+/* ③ 익스팬더 내부 텍스트 */
 section[data-testid="stExpander"] p,
 section[data-testid="stExpander"] li,
-section[data-testid="stExpander"] span {
-    color: #E8E8E8 !important;
+section[data-testid="stExpander"] span,
+[data-testid="stExpander"] p {
+    color: #F0F2F6 !important;
+    font-size: 1.05rem !important;
+    line-height: 1.7 !important;
+    font-weight: 500 !important;
 }
-/* 익스팬더 헤더 골드 강조 */
+
+/* ④ 익스팬더 헤더 골드 강조 */
 button[data-testid="stBaseButton-header"] p,
 summary p { color: #D4AF37 !important; font-weight: 700 !important; }
-/* 메트릭 위젯 — 라벨/수치 강제 표시 */
-[data-testid="stMetricValue"] {
-    color: #FFFFFF !important;
-    font-size: 26px !important;
-    font-weight: 900 !important;
-}
+
+/* ⑤ 메트릭 라벨 — 1.5배 확대, 완전 흰색 */
 [data-testid="stMetricLabel"] {
-    color: #F0F2F6 !important;
-    font-size: 16px !important;
+    color: #FFFFFF !important;
+    font-size: 1.05rem !important;
     font-weight: 700 !important;
     opacity: 1 !important;
     visibility: visible !important;
 }
+
+/* ⑥ 메트릭 수치 — 크기 유지, 색상 완전 선명 */
+[data-testid="stMetricValue"] {
+    color: #FFFFFF !important;
+    font-size: 1.7rem !important;
+    font-weight: 900 !important;
+    opacity: 1 !important;
+}
 [data-testid="stMetricDeltaIcon"] { display: none; }
-/* 기업 설명 / 브리핑 본문 — 초보자 가독성 최적화 */
+
+/* ⑦ 헤딩 — 완전 흰색 선명 유지 */
+h1, h2, h3, h4 {
+    color: #FFFFFF !important;
+    opacity: 1 !important;
+}
+
+/* ⑧ 데이터프레임 테이블 — 1.3배 확대 */
+[data-testid="stDataFrame"] th,
+[data-testid="stDataFrame"] td,
+table th, table td {
+    font-size: 1.0rem !important;
+    color: #FFFFFF !important;
+    opacity: 1 !important;
+}
+
+/* ⑨ 기업 설명 / 브리핑 본문 커스텀 클래스 */
 .sumbi-description {
     color: #E0E0E0 !important;
-    font-size: 17px !important;
-    line-height: 1.7 !important;
+    font-size: 1.05rem !important;
+    line-height: 1.75 !important;
     padding: 15px 0 !important;
     font-weight: 500 !important;
 }
-/* 캡션 */
-[data-testid="stCaptionContainer"] p { color: #6b7c93 !important; }
-/* 경고/정보 박스 */
-[data-testid="stAlert"] p { color: #E8E8E8 !important; }
-/* 탭 텍스트 */
+
+/* ⑩ 캡션 */
+[data-testid="stCaptionContainer"] p { color: #6b7c93 !important; font-size: .85rem !important; }
+
+/* ⑪ 경고/정보 박스 */
+[data-testid="stAlert"] p { color: #F0F2F6 !important; font-size: 1.0rem !important; }
+
+/* ⑫ 탭 텍스트 */
 button[data-baseweb="tab"] p { color: #A0AEC0 !important; }
-button[data-baseweb="tab"][aria-selected="true"] p { color: #D4AF37 !important; }
+button[data-baseweb="tab"][aria-selected="true"] p { color: #D4AF37 !important; font-weight: 700 !important; }
 </style>
 """, unsafe_allow_html=True)
 
