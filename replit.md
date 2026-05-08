@@ -15,7 +15,7 @@ Primary product: **숨비 애널리틱스 (SOOMBI Analytics)** — Korean KRX st
 - **Database**: PostgreSQL + Drizzle ORM
 - **Validation**: Zod (`zod/v4`), `drizzle-zod`
 - **Build**: esbuild (CJS bundle)
-- **Stock Dashboard**: Python 3.11 + Streamlit, `artifacts/stock-dashboard/main.py` (~3800 lines)
+- **Stock Dashboard**: Python 3.11 + Streamlit, `artifacts/stock-dashboard/main.py` (~4300 lines)
 
 ## Key Commands
 
@@ -43,9 +43,12 @@ Primary product: **숨비 애널리틱스 (SOOMBI Analytics)** — Korean KRX st
 - `_analyze_investor_flow(inv_data)` — 5거래일 누적 4주체 수급 분석 → 결론 도출 (표시 전용)
   - 블록딜 패턴: other<-200k + indiv>200k + inst<0 + frgn<0 → "최악 수급 구조" verdict
 - `get_naver_news_full(ticker)` — URL 포함 뉴스 수집 `{title, url, date}` (표시 전용)
+- `get_naver_news_api(query, display=100)` — **[V9.0 정식 채널]** 네이버 검색 오픈 API (NAVER_CLIENT_ID/SECRET), HTML태그+엔티티 완전 제거, TTL=300s
+- `get_news(ticker, name, aliases)` — **[V9.0]** 1차=오픈API, 2차=크롤링 폴백, Flexible Match 필터 동일 적용; `{"items":[{title,url,date,description}], "status", "fetch_count"}`
 
 ## Architecture Decisions
 
+- **뉴스 파이프라인 V9.0 (2026-05-08)**: `get_news()` 1차 채널을 웹 크롤링 → 네이버 검색 오픈 API로 전면 교체. 크롤링은 API 키 미설정 또는 API 오류 시에만 자동 폴백. `score_news()` NLP 엔진·Flexible Match 로직은 무변경. 아이템 구조에 `description` 필드 추가 (NLP 확장 대비).
 - **GOLDEN RULE**: 42대 필살기 점수 로직 절대 불변. `get_investor_data_naver()`, `calc_pullback_score()` 등 점수 함수는 절대 수정 금지. ※ `score_investor()` 는 소유자 지시(2026-05-08)로 쌍끌이 15점 보너스 로직 추가 — 이후 수정은 소유자 명시적 승인 필요.
 - **이중 파이프라인**: `_sinv` (GOLDEN RULE, 점수용) + `_sinv_detail` (기타법인 포함, 표시용) 분리 운영.
 - **CSS iframe 격리**: `st.html()` 은 별도 iframe으로 렌더링 → `st.markdown()` CSS 미적용. 스나이퍼 카드 등 `st.html()` 내부에 `<style>` 블록 직접 포함 필수.

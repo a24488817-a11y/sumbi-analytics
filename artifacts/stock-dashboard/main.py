@@ -876,18 +876,61 @@ def _fetch_mobile_naver(query: str, seen: set[str]) -> list[dict]:
 
 
 @st.cache_data(ttl=300, show_spinner=False)
+def get_naver_news_api(query: str, display: int = 100) -> list[dict]:
+    """네이버 검색 오픈 API (뉴스) — 정식 인증 채널 V9.0.
+
+    환경변수 NAVER_CLIENT_ID / NAVER_CLIENT_SECRET 필수 (Replit Secrets).
+    반환: [{"title": str, "url": str, "date": str, "description": str}, ...]
+    HTML 태그(<b>, <br> 등)는 정규식으로 완전 제거.
+    """
+    client_id     = os.environ.get("NAVER_CLIENT_ID",     "")
+    client_secret = os.environ.get("NAVER_CLIENT_SECRET", "")
+    if not client_id or not client_secret:
+        return []   # API 키 미설정 → 빈 리스트 반환 (호출부에서 크롤링 폴백 처리)
+
+    import html as _html_mod
+    _strip = lambda s: _html_mod.unescape(re.sub(r"<[^>]+>", "", s or "")).strip()
+
+    try:
+        resp = requests.get(
+            "https://openapi.naver.com/v1/search/news.json",
+            headers={
+                "X-Naver-Client-Id":     client_id,
+                "X-Naver-Client-Secret": client_secret,
+            },
+            params={"query": query, "display": min(int(display), 100), "sort": "date"},
+            timeout=8,
+        )
+        if resp.status_code != 200:
+            return []
+        data  = resp.json()
+        items = []
+        for art in data.get("items", []):
+            title = _strip(art.get("title", ""))
+            desc  = _strip(art.get("description", ""))
+            url   = art.get("originallink", art.get("link", ""))
+            date  = art.get("pubDate", "")[:16]
+            if title:
+                items.append({"title": title, "url": url, "date": date, "description": desc})
+        return items
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=300, show_spinner=False)
 def get_news(ticker: str, name: str, aliases: tuple[str, ...] = ()) -> dict:
-    """검색 기반 종목 전용 뉴스 수집 엔진 (V8.0 Flexible Match).
+    """종목 전용 뉴스 수집 엔진 — V9.0 Naver Open API 정식 채널.
 
     반환값: {"items": [...], "status": "ok"|"empty"|"error", "fetch_count": n}
     ┌──────────┬────────────────────────────────────────────────────────────┐
     │ "ok"     │ 수집 성공 + Flexible Match 통과 뉴스 1건 이상             │
     │ "empty"  │ 수집 성공 + 종목 전용 뉴스 0건 (시장 잡음으로 채우지 않음)│
-    │ "error"  │ 모든 채널 네트워크 오류 — 재시도 필요                     │
+    │ "error"  │ 모든 채널 네트워크/API 오류 — 재시도 필요                 │
     └──────────┴────────────────────────────────────────────────────────────┘
+    1차: 네이버 오픈 API (NAVER_CLIENT_ID/SECRET) — 차단 없는 정식 채널
+    2차: 크롤링 폴백 (API 키 미설정 또는 API 오류 시 자동 전환)
     Flexible Match: 한글 종목명 + 영문 alias + 종목코드 중 하나라도 포함 → 유효
     """
-    enc          = requests.utils.quote
     seen:         set[str]   = set()
     raw:          list[dict] = []
     any_fetch_ok: bool       = False
@@ -911,80 +954,88 @@ def get_news(ticker: str, name: str, aliases: tuple[str, ...] = ()) -> dict:
                 return True, tok
         return False, ""
 
-    # ── 검색 쿼리 (한글 종목명 + 영문 alias 쿼리 병행) ───────────────────────
-    search_queries: list[str] = [
-        name, name + " 실적", name + " 수주",
-        name + " 계약", name + " 영업이익",
-        name + " 호재", name + " 상장", name + " 급등",
+    # ── 1차 채널: 네이버 오픈 API (정식 인증) ────────────────────────────────
+    _api_queries: list[str] = [
+        name,
+        name + " 실적",
+        name + " 수주",
+        name + " 계약",
+        name + " 주가",
     ]
-    for alias in list(aliases)[:2]:         # alias 쿼리 최대 2개 (과부하 방지)
-        search_queries += [alias, alias + " 실적"]
+    for alias in list(aliases)[:2]:
+        _api_queries.append(alias)
 
-    search_hdrs = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/124.0.0.0 Safari/537.36"
-        ),
-        "Accept-Language": "ko-KR,ko;q=0.9",
-        "Referer": "https://search.naver.com/",
-    }
-
-    # ── 채널 1: Naver 뉴스 검색 (최신순 sort=1) ──────────────────────────────
-    for q in search_queries:
-        url = f"https://search.naver.com/search.naver?where=news&query={enc(q)}&sort=1&pd=1"
-        try:
-            resp = requests.get(url, headers=search_hdrs, timeout=8)
-            if resp.status_code == 200:
-                any_fetch_ok = True
-                soup = BeautifulSoup(resp.text, "lxml")
-                for el in soup.select("a.news_tit, a.title, .news_area a[href*='news']"):
-                    title = el.get_text(strip=True)
-                    href  = el.get("href", "")
-                    if title and len(title) > 6 and title not in seen:
-                        seen.add(title)
-                        raw.append({"title": title, "url": href, "date": ""})
-        except Exception:
-            pass
-
-    # ── 채널 2: Naver Finance 뉴스 검색 ───────────────────────────────────────
-    for q in [name, name + " 실적", name + " 수주"]:
-        url = f"https://finance.naver.com/news/news_search.naver?q={enc(q)}&pd=1&sm=tab_jum"
-        items = _fetch_with_fallback(url, seen)
-        if items:
+    _api_total = 0
+    for q in _api_queries:
+        api_items = get_naver_news_api(q, display=100)
+        if api_items:
             any_fetch_ok = True
-        raw += items
+            _api_total  += len(api_items)
+        for item in api_items:
+            if item["title"] not in seen:
+                seen.add(item["title"])
+                raw.append(item)
 
-    # ── 채널 3: Naver Finance 종목코드 직접 뉴스 ─────────────────────────────
-    url_code = f"https://finance.naver.com/item/news_news.naver?code={ticker}&page=1"
-    code_items = _fetch_with_fallback(url_code, seen)
-    if code_items:
-        any_fetch_ok = True
-    raw += code_items
+    # ── 2차 채널: 크롤링 폴백 (API 키 없거나 API 결과 0건) ───────────────────
+    if not any_fetch_ok:
+        enc = requests.utils.quote
+        search_hdrs = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+            "Accept-Language": "ko-KR,ko;q=0.9",
+            "Referer": "https://search.naver.com/",
+        }
+        for q in [name, name + " 실적", name + " 수주"]:
+            url = (f"https://search.naver.com/search.naver"
+                   f"?where=news&query={enc(q)}&sort=1&pd=1")
+            try:
+                resp = requests.get(url, headers=search_hdrs, timeout=8)
+                if resp.status_code == 200:
+                    any_fetch_ok = True
+                    soup = BeautifulSoup(resp.text, "lxml")
+                    for el in soup.select("a.news_tit, a.title"):
+                        title = el.get_text(strip=True)
+                        href  = el.get("href", "")
+                        if title and len(title) > 6 and title not in seen:
+                            seen.add(title)
+                            raw.append({"title": title, "url": href,
+                                        "date": "", "description": ""})
+            except Exception:
+                pass
+        url_code = (f"https://finance.naver.com/item/news_news.naver"
+                    f"?code={ticker}&page=1")
+        code_items = _fetch_with_fallback(url_code, seen)
+        if code_items:
+            any_fetch_ok = True
+        raw += code_items
 
     # ── Flexible Match Filter ─────────────────────────────────────────────────
     filtered: list[dict] = []
     dropped:  list[str]  = []
     for n in raw:
-        ok, matched = _is_stock_news(n["title"])
+        ok, _ = _is_stock_news(n["title"])
         if ok:
             filtered.append(n)
         else:
             dropped.append(n["title"][:70])
 
-    # ── 디버깅 로그 — 사장님 필터 탈락 원인 확인용 ───────────────────────────
+    # ── 디버깅 로그 ───────────────────────────────────────────────────────────
+    _ch = "API" if any_fetch_ok and _api_total > 0 else ("크롤링 폴백" if any_fetch_ok else "전채널 실패")
     alias_str = ", ".join(aliases) if aliases else "없음"
-    print(f"\n[SOOMBI NEWS] {name}({ticker}) | aliases=[{alias_str}]")
-    print(f"  매칭 토큰: {all_tokens}")
+    print(f"\n[SOOMBI NEWS v9] {name}({ticker}) | 채널={_ch} | aliases=[{alias_str}]")
+    print(f"  토큰: {all_tokens}")
     print(f"  수집 {len(raw)}건 → Flexible Match 통과 {len(filtered)}건 (탈락 {len(dropped)}건)")
     for i, n in enumerate(filtered[:20], 1):
         print(f"  ✅ [{i:02d}] {n['title'][:70]}")
     if dropped:
-        print(f"  ── 탈락 뉴스 (필터 미통과, 상위 {min(len(dropped),15)}건) ──")
-        for t in dropped[:15]:
+        print(f"  ── 탈락 (상위 {min(len(dropped),10)}건) ──")
+        for t in dropped[:10]:
             print(f"  ❌ {t}")
     if not any_fetch_ok:
-        print(f"  ⚠ 모든 수집 채널 실패 — Network Error")
+        print(f"  ⚠ 모든 채널 실패 — Network Error")
 
     # ── 상태 판정 ─────────────────────────────────────────────────────────────
     if not any_fetch_ok:
