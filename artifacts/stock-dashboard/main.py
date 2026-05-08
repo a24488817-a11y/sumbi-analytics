@@ -753,7 +753,24 @@ def get_news(ticker: str, name: str) -> list[dict]:
         for q in [name, name + " 수주", name + " 상장"]:
             news += _fetch_mobile_naver(q, seen)
 
-    return news[:40]
+    # ── Strict Filtering: 선택 종목 전용 뉴스만 유지 ─────────────────────────
+    # 종목명을 의미 단위(2자 이상)로 토큰화 후 제목 매칭 여부 판별
+    _stopwords = {"주식회사", "(주)", "㈜", "홀딩스", "그룹", "코리아", "코퍼레이션", "인터내셔널"}
+    name_clean = name
+    for sw in _stopwords:
+        name_clean = name_clean.replace(sw, "")
+    name_tokens = [t.strip() for t in name_clean.split() if len(t.strip()) >= 2]
+
+    def _matches_stock(title: str) -> bool:
+        if ticker in title:                                    # 종목코드 직접 포함
+            return True
+        if any(tok in title for tok in name_tokens):           # 종목명 토큰 매칭
+            return True
+        return False
+
+    strict = [n for n in news if _matches_stock(n["title"])]
+    # 필터 후 3건 미만이면 원본 유지 (수집 자체가 실패한 상황 대비)
+    return (strict if len(strict) >= 3 else news)[:40]
 
 
 def classify_news(title: str) -> str:
@@ -937,7 +954,9 @@ def score_fundamentals(fund: dict) -> dict:
 
 
 def score_news(news: list[dict]) -> dict:
-    """뉴스 등급제 점수 20점 — Tier1(20점) / Tier2(건당 5점·최대 10점) / 소음 제외."""
+    """뉴스 등급제 점수 30점 — Tier1(30점 즉시) / Tier2(건당 7점·최대 20점) / 소음 제외.
+    news 리스트는 get_news()의 Strict Filtering이 적용된 종목 전용 뉴스여야 함.
+    """
     empty = {"score": 0, "good": [], "bad": [], "neutral": [],
              "impact_hits": [], "tier1_news": [], "tier2_news": []}
     if not news:
@@ -2228,6 +2247,72 @@ def ui_score_card(r: dict):
     _mini_card(c4, "리스크/숏스퀴즈 (10점)", rs["score"], 10,
                rs.get("detail", "—"))
 
+    # ── LEGENDARY 판정 상세 근거 카드 (80점 이상 시 자동 출력) ────────────────
+    if total >= 80:
+        # 4대 근거 수집
+        ev: list[tuple[str, str, str]] = []   # (아이콘, 축, 근거 텍스트)
+
+        # 수급 근거
+        streak = iv.get("streak", 0)
+        inst5  = iv.get("inst_5d", 0)
+        frgn5  = iv.get("frgn_5d", 0)
+        if "쌍끌이" in iv.get("detail", ""):
+            ev.append(("🔴", "수급", f"당일 기관·외국인 쌍끌이 매집 포착"))
+        if streak >= 3:
+            ev.append(("🔴", "수급", f"기관 {streak}일 연속 순매수 — 세력 장기 매집"))
+        if frgn5 > 300_000:
+            ev.append(("🔴", "수급", f"외국인 5일 누적 {frgn5:+,}주 대규모 유입"))
+
+        # 뉴스 근거
+        t1 = ns.get("tier1_news", [])
+        t2 = ns.get("tier2_news", [])
+        ih = ns.get("impact_hits", [])
+        if t1:
+            ev.append(("🔥", "뉴스", f"Tier 1 확정 호재 {len(t1)}건 — {', '.join(ih[:3]) if ih else t1[0]['title'][:28]}"))
+        elif t2:
+            ev.append(("📈", "뉴스", f"Tier 2 기대 호재 {len(t2)}건 집중 포착"))
+
+        # 차트 근거
+        sig = pb.get("signal", "")
+        rsi = pb.get("rsi", 50.0)
+        if "즉시 매수" in sig or "눌림목" in sig:
+            ev.append(("📊", "차트", f"눌림목 매수 타점 — {sig} · RSI {rsi:.0f}"))
+        elif pb_contrib_disp >= 14:
+            ev.append(("📊", "차트", f"차트 고득점 {pb_contrib_disp}점 · RSI {rsi:.0f}"))
+
+        # 리스크·숏스퀴즈 근거
+        for sig_txt in rs.get("signals", [])[:2]:
+            ev.append(("⚡", "리스크", sig_txt))
+
+        if ev:
+            rows_html = "".join(
+                f'<div style="display:flex;align-items:flex-start;gap:10px;'
+                f'padding:8px 0;border-bottom:1px solid #2a2000;">'
+                f'<span style="font-size:1.1rem;width:24px;flex-shrink:0;">{ico}</span>'
+                f'<span style="background:#2a1f00;color:#D4AF37;font-size:.68rem;'
+                f'font-weight:800;border-radius:4px;padding:2px 7px;'
+                f'white-space:nowrap;flex-shrink:0;">{axis}</span>'
+                f'<span style="color:#E8E8E8;font-size:.88rem;line-height:1.5;">{txt}</span>'
+                f'</div>'
+                for ico, axis, txt in ev
+            )
+            _html_block(f"""
+<style>
+  .leg-wrap {{
+    background:#1a1200; border:2px solid #D4AF37;
+    border-radius:14px; padding:22px 26px; margin-top:16px;
+  }}
+  .leg-title {{
+    font-size:.75rem; font-weight:900; letter-spacing:.18em;
+    color:#D4AF37; text-transform:uppercase; margin-bottom:14px;
+  }}
+</style>
+<div class="leg-wrap">
+  <div class="leg-title">👑 LEGENDARY 판정 근거 — 42대 필살기 수급·뉴스·차트·리스크 전수 확인</div>
+  {rows_html}
+</div>
+""")
+
 
 def ui_investor_table(inv_data: list[dict]):
     """하단: 투자자별 5거래일 수급표 — 순수 HTML + CSS 클래스 방식 (색상 !important 완전 보장)."""
@@ -2705,7 +2790,7 @@ button[data-baseweb="tab"][aria-selected="true"] p { color: #D4AF37 !important; 
         st.session_state["scored_cache"] = {r["ticker"]: r for r in scored}
         ui_top15_tabs(scored)
     else:
-        st.warning("데이터 동기화 중입니다. ⚡ 즉시 갱신 버튼을 눌러 재시도하세요.")
+        st.warning("실시간 데이터 수급 대기 중 (KRX / Yahoo Finance) — ⚡ 즉시 갱신 버튼으로 재시도하세요.")
     st.divider()
 
     # ── 검색 영역 ─────────────────────────────────────────────────────────────
