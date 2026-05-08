@@ -890,7 +890,7 @@ def score_investor(inv: list[dict]) -> dict:
         score += 15  # 쌍끌이 발생 시 누적 음수여도 강력한 보정치 부여
         details.append("🔥당일 쌍끌이 대량 매집 (+15점)🔥")
 
-    score = max(0, min(score, 35))  # V5.0: 수급 35점 만점
+    score = max(0, min(score, 40))  # V7.0: 수급 40점 만점
 
     if streak >= 2:           details.append(f"기관 {streak}일 연속 매수")
     if frgn_5d > 100_000:     details.append(f"외국인 순매수 {frgn_5d:+,}")
@@ -978,10 +978,10 @@ def score_news(news: list[dict]) -> dict:
 
     # ── 점수 산출 ──────────────────────────────────────────────────────────────
     if tier1_news:
-        score = 20                                          # Tier 1: 즉시 만점
+        score = 30                                          # V7.0 Tier 1: 즉시 30점 만점
     elif tier2_news:
-        raw = min(len(tier2_news) * 5, 10)                 # Tier 2: 건당 5점·최대 10점
-        score = max(0, raw - len(bad_news) * 2)
+        raw = min(len(tier2_news) * 7, 20)                 # Tier 2: 건당 7점·최대 20점
+        score = max(0, raw - len(bad_news) * 3)
     else:
         score = 0
 
@@ -995,6 +995,87 @@ def score_news(news: list[dict]) -> dict:
         "tier1_news": tier1_news[:5],
         "tier2_news": tier2_news[:5],
     }
+
+
+def score_risk_squeeze(price_data: dict, inv_data: list[dict], pb: dict) -> dict:
+    """V7.0 리스크/숏스퀴즈 점수 10점 — 공매도역발상·신용잔고·프로그램매매."""
+    score:   int       = 0
+    signals: list[str] = []
+
+    chg_rate = float((price_data or {}).get("등락률", 0))
+    rsi      = pb.get("rsi", 50.0)
+    ma5      = pb.get("ma5",  0)
+    ma20     = pb.get("ma20", 0)
+
+    # ── ① 숏커버링 시그널 ──────────────────────────────────────────────────────
+    # 가격 급등 + RSI 과매도권 탈출 → 대차잔고 감소 대용 시그널
+    if chg_rate >= 3.0 and rsi < 45:
+        score += 5
+        signals.append(f"⚡ 숏커버링 강력 시그널 (+{chg_rate:.1f}%, RSI {rsi:.0f})")
+    elif chg_rate >= 1.5 and rsi < 50:
+        score += 3
+        signals.append(f"🟡 숏커버링 초기 신호 (+{chg_rate:.1f}%, RSI {rsi:.0f})")
+
+    # ── ② 숏스퀴즈 최적 구조 ───────────────────────────────────────────────────
+    # 당일 기관+외국인 쌍끌이 + 개인 매도 = 세력 수취 + 숏스퀴즈 세팅
+    if inv_data:
+        inst_d = inv_data[0].get("기관",   0)
+        frgn_d = inv_data[0].get("외국인", 0)
+        indv_d = inv_data[0].get("개인",   0)
+        if inst_d > 0 and frgn_d > 0 and indv_d < 0:
+            score += 5
+            signals.append("🔴 숏스퀴즈 최적 구조 (세력 쌍끌이·개인 매도)")
+
+    # ── ③ 신용잔고 위험 감점 ───────────────────────────────────────────────────
+    # 3일 연속 개인 대량 순매수 + 기관 이탈 → 신용 반대매매 위험
+    if inv_data and len(inv_data) >= 3:
+        indv_3 = [r.get("개인",   0) for r in inv_data[:3]]
+        inst_3 = [r.get("기관",   0) for r in inv_data[:3]]
+        if all(v > 100_000 for v in indv_3) and all(v < 0 for v in inst_3):
+            score -= 5
+            signals.append("⚠ 신용잔고 위험 — 개인 연속 대량 매수 / 기관 3일 이탈")
+
+    # ── ④ 장막판 프로그램 매수 추정 ────────────────────────────────────────────
+    # 단기선(MA5) > 중기선(MA20) + 당일 상승 = 프로그램 매수 유입 추정
+    if ma5 > 0 and ma20 > 0 and ma5 > ma20 and chg_rate > 0:
+        score += 2
+        signals.append("📈 단기선 우위·상승 = 프로그램 매수 유입 추정 (+2)")
+
+    score  = max(0, min(score, 10))
+    detail = " | ".join(signals) if signals else "리스크 중립 — 이상 신호 없음"
+    return {"score": score, "signals": signals, "detail": detail}
+
+
+def calc_tomorrow_prob(result: dict) -> tuple[int, str]:
+    """내일 상승 확률(%) + 타점 레이블 산출 — V7.0 Quantum Vanguard."""
+    total = result.get("total", 0)
+    ns    = result.get("news_score",  {})
+    iv    = result.get("inv_score",   {})
+    rs    = result.get("risk_score",  {"score": 0})
+
+    # ── 전설적 타점: Tier 1 뉴스 + 쌍끌이 + 숏스퀴즈 동시 포착 ────────────────
+    legendary = (
+        bool(ns.get("tier1_news")) and
+        "쌍끌이" in iv.get("detail", "") and
+        rs.get("score", 0) >= 8
+    )
+    if legendary:
+        return 98, "전설적 타점 — Tier1 뉴스·쌍끌이·숏스퀴즈 동시 포착"
+
+    # ── 점수 기반 확률 산출 ─────────────────────────────────────────────────────
+    if   total >= 80: prob = 85 + min(int((total - 80) * 1.3), 12)
+    elif total >= 65: prob = 68 + int((total - 65) * 1.1)
+    elif total >= 45: prob = 45 + int((total - 45) * 1.15)
+    elif total >= 30: prob = 25 + int((total - 30) * 1.3)
+    else:             prob = max(10, int(total * 0.8))
+
+    if   total >= 80: tag = "최상위 매집 구간"
+    elif total >= 65: tag = "고신뢰 진입 구간"
+    elif total >= 45: tag = "분할 매수 구간"
+    elif total >= 30: tag = "관망 구간"
+    else:             tag = "진입 금지 구간"
+
+    return int(min(prob, 97)), tag
 
 
 def check_block_deal(ticker: str, inv: list[dict]) -> str | None:
@@ -1029,26 +1110,31 @@ def analyze_ticker(ticker: str, name: str, market: str) -> dict:
     fund_data  = f_fund.result()
     news_list  = f_news.result()
 
-    # ── V5.0 4축 점수 체계 ────────────────────────────────────────────────────
-    # 차트/기술 점수 (25점)
+    # ── V7.0 Quantum Vanguard 4축 점수 체계 ─────────────────────────────────
+    # 차트/신호 (20점 기여) — GOLDEN RULE: calc_pullback_score 함수 불변
     pb_result = calc_pullback_score(
         ohlcv["Close"],
         ohlcv["Volume"] if "Volume" in ohlcv.columns else pd.Series(dtype=float),
     ) if not ohlcv.empty and len(ohlcv) >= 22 else \
         {"score": 0, "signal": "데이터 부족", "rsi": 50.0, "ma5": 0, "ma20": 0, "ma60": 0}
+    pb_contrib = min(pb_result["score"], 20)   # 차트 기여 최대 20점 캡
 
-    # 수급 점수 (35점) — 쌍끌이 포함
+    # 수급 (40점) — 기관·외국인·쌍끌이
     inv_result = score_investor(inv_data)
 
-    # 가치/재무 점수 (20점) — ROE·PBR·PER 저평가 분석
+    # 가치/재무 — 표시 전용 (총점 미반영, 브리핑용 보조 데이터)
     fund_result = score_fundamentals(fund_data)
 
-    # 뉴스/공매도 점수 (20점) — 배거차숏 키워드 매칭
+    # 뉴스/미반영호재 (30점) — Tier 1 즉시 만점
     news_result = score_news(news_list)
 
+    # 리스크/숏스퀴즈 (10점) — 공매도·신용잔고·프로그램매매
+    risk_result = score_risk_squeeze(price_data, inv_data, pb_result)
+
+    # V7.0 총점: 수급40 + 뉴스30 + 차트20 + 리스크10 = 100
     total = min(
-        inv_result["score"] + pb_result["score"] +
-        fund_result["score"] + news_result["score"],
+        inv_result["score"] + news_result["score"] +
+        pb_contrib          + risk_result["score"],
         100
     )
 
@@ -1066,6 +1152,7 @@ def analyze_ticker(ticker: str, name: str, market: str) -> dict:
         "inv_data": inv_data, "fund": fund_data, "news": news_list,
         "pb": pb_result, "inv_score": inv_result,
         "fund_score": fund_result, "news_score": news_result,
+        "risk_score": risk_result,
         "short_score": news_result["score"],  # 하위 호환 유지
         "total": total, "verdict": verdict,
         "block_alert": block_alert, "collected_at": now_kst,
@@ -1177,10 +1264,11 @@ def quick_score(ticker: str, name: str, market: str) -> dict | None:
                   "ma5": 0, "ma20": 0, "ma60": 0}
         )
         inv   = score_investor(inv_data)
-        short = 10  # 공매도 기본 중립
-
-        # V5.0: 4축 공식과 동일 (가치/재무 기본 10점, 뉴스 미수집분 0점 — 상하단 점수 근사 일치)
-        total = min(inv["score"] + pb["score"] + 10, 100)
+        # V7.0: 4축 공식 근사 (뉴스·리스크 미수집 — 기본값 적용)
+        pb_cap = min(pb["score"], 20)   # 차트 최대 20점
+        total  = min(inv["score"] + pb_cap + 10, 100)
+        # news 기본 0점 + risk 기본 중립 10점 합산
+        total  = min(total + 10, 100)
 
         # ── rank_score: 신호 강도 가중치 적용 (정렬 전용, 표시 점수와 별도) ──
         # "즉시 매수" 신호가 최상위 독식하도록 pb_score에 시그널 멀티플라이어 적용
@@ -1946,13 +2034,15 @@ def ui_block_alert(msg: str):
 
 
 def ui_score_card(r: dict):
-    """숨비 종합 진단 점수 — Plotly 속도계 게이지 + 4분할 카드."""
+    """V7.0 Quantum Vanguard — 숨비 종합 진단 + 내일 상승 확률 히어로 배너."""
     total   = r["total"]
     pb      = r["pb"]
     iv      = r["inv_score"]
     ns      = r["news_score"]
-    ss      = r["short_score"]
+    rs      = r.get("risk_score", {"score": 0, "detail": "—"})
     verdict = r["verdict"]
+
+    prob, prob_tag = calc_tomorrow_prob(r)
 
     if total >= 80:
         vd_col = "#D4AF37"; vd_bg = "#1a1600"; vd_border = "#D4AF37"
@@ -1975,6 +2065,23 @@ def ui_score_card(r: dict):
         badge  = "진입 불가";         sc = "#6b7c93"
         emoji  = "❌"
 
+    # 확률 색상
+    if   prob >= 90: prob_col = "#D4AF37"
+    elif prob >= 70: prob_col = "#FF5050"
+    elif prob >= 50: prob_col = "#FFB300"
+    else:            prob_col = "#6b7c93"
+
+    prob_label = prob_tag if prob_tag else badge
+    is_legendary_shot = (prob >= 98)
+    legendary_txt = (
+        f'<div style="color:#D4AF37;font-size:1.05rem;font-weight:900;'
+        f'margin-top:10px;letter-spacing:.05em;">'
+        f'⚡ 내일 상승 확률 {prob}% — {prob_label}</div>'
+        if is_legendary_shot else
+        f'<div style="color:{prob_col};font-size:.95rem;font-weight:800;margin-top:10px;">'
+        f'내일 상승 확률 {prob}% — {prob_label}</div>'
+    )
+
     # ── 히어로 점수 배너 (전체 폭, 중앙 정렬) ─────────────────────────────
     st.markdown(
         f"""
@@ -1990,15 +2097,16 @@ def ui_score_card(r: dict):
 ">
   <div style="font-size:.78rem;font-weight:800;letter-spacing:.2em;
               text-transform:uppercase;color:#8fa3b8;margin-bottom:8px;">
-    숨비 종합 진단 점수
+    SOOMBI V7.0 Quantum Vanguard — 종합 진단
   </div>
   <div style="font-size:80px;font-weight:900;color:{sc};
-              line-height:1;margin-bottom:12px;">
+              line-height:1;margin-bottom:8px;">
     {total}<span style="font-size:40px;">점</span>
   </div>
   <div style="font-size:1.3rem;font-weight:800;color:{vd_col};">
-    {emoji} 숨비 종합 판정 — {badge}
+    {emoji} {badge}
   </div>
+  {legendary_txt}
 </div>
 """,
         unsafe_allow_html=True,
@@ -2110,15 +2218,15 @@ def ui_score_card(r: dict):
 </div>
 """)
 
-    fs = r.get("fund_score", {"score": 0, "detail": "—"})
-    _mini_card(c1, "수급 분석",    iv["score"], 35,
-               f"기관·외국인 세력 역추적<br>{iv['detail']}")
-    _mini_card(c2, "가치/재무",    fs["score"], 20,
-               f"ROE·PBR·PER 저평가 분석<br>{fs['detail']}")
-    _mini_card(c3, "차트 패턴",    pb["score"], 25,
-               f"눌림목 패턴 분석<br>RSI {pb['rsi']} · MA5 {pb['ma5']:,}")
-    _mini_card(c4, "뉴스/공매도",  ns["score"], 20,
-               f"배거차숏 호재 {len(ns['good'])}건<br>악재 {len(ns['bad'])}건 경보")
+    pb_contrib_disp = min(pb["score"], 20)
+    _mini_card(c1, "수급 (40점)",      iv["score"],        40,
+               f"기관·외국인·쌍끌이<br>{iv['detail']}")
+    _mini_card(c2, "뉴스/호재 (30점)", ns["score"],        30,
+               f"Tier1 {len(ns.get('tier1_news',[]))}건 · Tier2 {len(ns.get('tier2_news',[]))}건<br>악재 {len(ns['bad'])}건")
+    _mini_card(c3, "차트/신호 (20점)", pb_contrib_disp,    20,
+               f"눌림목 패턴<br>RSI {pb['rsi']} · MA5 {pb['ma5']:,}")
+    _mini_card(c4, "리스크/숏스퀴즈 (10점)", rs["score"], 10,
+               rs.get("detail", "—"))
 
 
 def ui_investor_table(inv_data: list[dict]):
