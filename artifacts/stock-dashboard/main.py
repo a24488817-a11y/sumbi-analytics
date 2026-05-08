@@ -8,6 +8,7 @@ import pandas as pd
 import numpy as np
 import requests
 import FinanceDataReader as fdr
+import yfinance as yf
 from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
@@ -179,6 +180,13 @@ _NOISE_KW = [
 ]
 # 하위 호환 — 기존 _IMPACT_KW 참조 코드가 있는 경우를 위해 별칭 유지
 _IMPACT_KW = _TIER1_KW
+
+# Tier 0 — 시장 구조 변경급 초강력 이벤트 (M&A·공개매수·이전상장 등)
+_TIER0_KW = [
+    "합병", "피인수", "공개매수", "MBO", "TOB", "상장폐지 기각",
+    "코스피 이전", "이전상장", "인수합병", "주식 교환", "적대적 인수",
+    "자진상장폐지 철회", "경영권 인수", "컨소시엄 구성",
+]
 
 
 # KRX 휴장일 내장 폴백 테이블 (open.krx.co.kr API 불가 시 사용)
@@ -1096,14 +1104,16 @@ def score_fundamentals(fund: dict) -> dict:
 
 
 def score_news(news: list[dict]) -> dict:
-    """뉴스 등급제 점수 30점 — Tier1(30점 즉시) / Tier2(건당 7점·최대 20점) / 소음 제외.
-    news 리스트는 get_news()의 Strict Filtering이 적용된 종목 전용 뉴스여야 함.
+    """뉴스 등급제 점수 30점 — V8.0 Tier 0(시장구조변경)·Tier1·Tier2 3단계 + 속도 분석.
+    news 리스트는 get_news()의 Hard Filter가 적용된 종목 전용 뉴스여야 함.
     """
     empty = {"score": 0, "good": [], "bad": [], "neutral": [],
-             "impact_hits": [], "tier1_news": [], "tier2_news": []}
+             "impact_hits": [], "tier0_news": [], "tier1_news": [], "tier2_news": [],
+             "velocity": 0, "velocity_label": "뉴스 없음"}
     if not news:
         return empty
 
+    tier0_news:  list[dict] = []
     tier1_news:  list[dict] = []
     tier2_news:  list[dict] = []
     bad_news:    list[dict] = []
@@ -1112,11 +1122,19 @@ def score_news(news: list[dict]) -> dict:
 
     for n in news:
         t = n["title"]
-        # ① 소음 필터 — Tier 3 즉시 제외
+        # ① 소음 필터 — 즉시 중립 처리
         if any(kw in t for kw in _NOISE_KW):
             neutral.append(n)
             continue
-        # ② Tier 1 확정 호재 감지
+        # ② Tier 0 — 시장 구조 변경급 초강력 이벤트 (M&A·공개매수·이전상장 등)
+        t0_hits = [kw for kw in _TIER0_KW if kw in t]
+        if t0_hits:
+            tier0_news.append(n)
+            for kw in t0_hits:
+                if kw not in impact_hits:
+                    impact_hits.append(kw)
+            continue
+        # ③ Tier 1 확정 호재
         t1_hits = [kw for kw in _TIER1_KW if kw in t]
         if t1_hits:
             tier1_news.append(n)
@@ -1124,37 +1142,49 @@ def score_news(news: list[dict]) -> dict:
                 if kw not in impact_hits:
                     impact_hits.append(kw)
             continue
-        # ③ 악재 감지 (Tier 1보다 먼저 확정된 악재는 없으므로 순서 유지)
+        # ④ 악재 감지
         b = sum(1 for kw in _BAD_KW if kw in t)
         g = (sum(1 for kw in _GOOD_KW if kw in t)
              + sum(1 for kw in _TIER2_KW if kw in t))
         if b > 0 and b >= g:
             bad_news.append(n)
             continue
-        # ④ Tier 2 기대감 호재
+        # ⑤ Tier 2 기대감 호재
         if any(kw in t for kw in _TIER2_KW) or g > 0:
             tier2_news.append(n)
             continue
         neutral.append(n)
 
     # ── 점수 산출 ──────────────────────────────────────────────────────────────
-    if tier1_news:
-        score = 30                                          # V7.0 Tier 1: 즉시 30점 만점
+    if tier0_news:
+        score = 30          # Tier 0: 시장 구조 변경 이벤트 → 즉시 만점
+    elif tier1_news:
+        score = 30          # Tier 1: 확정 호재 → 즉시 만점
     elif tier2_news:
-        raw = min(len(tier2_news) * 7, 20)                 # Tier 2: 건당 7점·최대 20점
+        raw   = min(len(tier2_news) * 7, 20)
         score = max(0, raw - len(bad_news) * 3)
     else:
         score = 0
 
-    good_all = tier1_news + tier2_news
+    # ── 뉴스 속도(Velocity) 산출 ─────────────────────────────────────────────
+    positive_cnt = len(tier0_news) + len(tier1_news) + len(tier2_news)
+    if   positive_cnt >= 6: velocity = 2; vel_label = "🚀 뉴스 랠리 — 세력 의도적 호재 집중 살포"
+    elif positive_cnt >= 3: velocity = 1; vel_label = "📈 호재 집중 — 기대감 형성 구간"
+    elif positive_cnt >= 1: velocity = 0; vel_label = "📰 단발성 호재 — 모멘텀 지속 확인 필요"
+    else:                   velocity = 0; vel_label = "— 종목 전용 호재 뉴스 없음"
+
+    good_all = tier0_news + tier1_news + tier2_news
     return {
-        "score": score,
-        "good":       good_all[:5],
-        "bad":        bad_news[:3],
-        "neutral":    neutral,
-        "impact_hits":impact_hits,
-        "tier1_news": tier1_news[:5],
-        "tier2_news": tier2_news[:5],
+        "score":       score,
+        "good":        good_all[:5],
+        "bad":         bad_news[:3],
+        "neutral":     neutral,
+        "impact_hits": impact_hits,
+        "tier0_news":  tier0_news[:3],
+        "tier1_news":  tier1_news[:5],
+        "tier2_news":  tier2_news[:5],
+        "velocity":    velocity,
+        "velocity_label": vel_label,
     }
 
 
@@ -1254,16 +1284,203 @@ def check_block_deal(ticker: str, inv: list[dict]) -> str | None:
     return None
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# V8.0 GOD MODE — 매크로 상관관계 · VWAP Smart Money · 숏스퀴즈 임계가 엔진
+# ─────────────────────────────────────────────────────────────────────────────
+@st.cache_data(ttl=300, show_spinner=False)
+def get_macro_data() -> dict:
+    """실시간 매크로 지표: 환율(USDKRW=X)·금(GC=F)·유가(CL=F)·미국채10Y(^TNX)."""
+    symbols = {"환율": "USDKRW=X", "금": "GC=F", "유가": "CL=F", "금리": "^TNX"}
+    out: dict = {}
+    for label, sym in symbols.items():
+        try:
+            df = yf.download(sym, period="5d", interval="1d",
+                             progress=False, auto_adjust=True)
+            if df is not None and not df.empty and "Close" in df.columns:
+                close = df["Close"].dropna()
+                if len(close) >= 2:
+                    cur  = float(close.iloc[-1])
+                    prev = float(close.iloc[-2])
+                    chg  = (cur - prev) / prev * 100 if prev else 0.0
+                    out[label] = {"cur": round(cur, 4), "chg": round(chg, 3), "sym": sym}
+        except Exception:
+            pass
+    return out
+
+
+def _detect_sector(name: str) -> str:
+    """종목명 기반 섹터 자동 추정."""
+    _MAP = [
+        (["조선", "해양", "선박", "드라이독", "잠수함"], "조선"),
+        (["반도체", "HBM", "DRAM", "낸드", "파운드리", "하이닉스", "마이크론"], "반도체"),
+        (["바이오", "제약", "의약", "헬스", "메디", "셀트리온", "삼바", "임상"], "바이오"),
+        (["에너지", "정유", "석유", "가스", "LNG", "오일", "원유"], "에너지"),
+        (["방산", "항공", "우주", "한화", "LIG", "현대로템", "무기"], "방산"),
+        (["은행", "금융", "증권", "보험", "카드", "캐피탈", "저축"], "금융"),
+        (["클라우드", "AI", "플랫폼", "소프트", "데이터", "네이버", "카카오", "IT"], "IT"),
+        (["건설", "부동산", "건축", "토목", "아파트", "시공"], "건설"),
+        (["자동차", "부품", "전기차", "배터리", "이차전지", "현대차", "기아"], "자동차"),
+        (["통신", "KT", "SKT", "LG유플", "인터넷", "케이블"], "통신"),
+    ]
+    for keywords, sector in _MAP:
+        if any(kw in name for kw in keywords):
+            return sector
+    return "일반"
+
+
+# 섹터별 매크로 민감도 (Beta 추정치 — 학술 연구 및 시장 관찰 기반)
+_MACRO_BETA: dict[str, dict[str, float]] = {
+    "조선":   {"환율": +1.8, "유가": -0.4, "금리": -0.3},
+    "반도체": {"환율": +1.2, "유가": -0.1, "금리": -0.6},
+    "바이오": {"환율": -0.4, "유가":  0.0, "금리": -1.1},
+    "에너지": {"환율": +0.5, "유가": +1.5, "금리": +0.2},
+    "방산":   {"환율": +0.8, "유가": +0.2, "금리": -0.2},
+    "금융":   {"환율": -0.3, "유가":  0.0, "금리": +1.2},
+    "IT":     {"환율": +0.9, "유가": -0.1, "금리": -0.8},
+    "건설":   {"환율": +0.3, "유가": +0.5, "금리": -1.5},
+    "자동차": {"환율": +1.0, "유가": -0.6, "금리": -0.5},
+    "통신":   {"환율": -0.1, "유가": -0.1, "금리": -0.5},
+    "일반":   {"환율": +0.5, "유가": -0.1, "금리": -0.3},
+}
+
+
+def calc_macro_sensitivity(name: str, macro_data: dict) -> dict:
+    """섹터 Beta × 매크로 등락률 → 종목 예상 영향도 산출 (달국금공 실시간 상관관계 엔진)."""
+    sector = _detect_sector(name)
+    betas  = _MACRO_BETA.get(sector, _MACRO_BETA["일반"])
+    items: list[dict] = []
+    sym_label = {"환율": "USD/KRW", "금": "Gold(oz)", "유가": "WTI(bbl)", "금리": "US10Y(%)"}
+    unit      = {"환율": "원",       "금": "$",        "유가": "$",          "금리": "%"}
+    for key, beta in betas.items():
+        m = macro_data.get(key)
+        if not m:
+            continue
+        chg    = m["chg"]
+        cur    = m["cur"]
+        impact = round(chg * beta, 2)
+        col    = "#27ae60" if impact > 0.05 else "#e74c3c" if impact < -0.05 else "#6b7c93"
+        arrow  = "▲ 수혜" if impact > 0.05 else "▼ 역풍" if impact < -0.05 else "— 중립"
+        items.append({
+            "label": key, "sym": sym_label.get(key, key),
+            "cur": cur, "unit": unit.get(key, ""),
+            "macro_chg": chg, "beta": beta,
+            "impact": impact, "direction": arrow, "col": col,
+        })
+    return {"sector": sector, "items": items}
+
+
+def calc_vwap_smart_money(ohlcv: pd.DataFrame) -> dict:
+    """20일 VWAP·OBV·CMF 기반 Smart Money Flow 분석 (세력 심리 역추적)."""
+    _e = {"vwap": 0, "gap_pct": 0.0, "obv_trend": "—", "cmf": 0.0,
+          "verdict": "데이터 부족", "score": 0}
+    try:
+        if ohlcv.empty or len(ohlcv) < 10:
+            return _e
+        if not {"High", "Low", "Close", "Volume"}.issubset(set(ohlcv.columns)):
+            return _e
+        hi  = ohlcv["High"].astype(float)
+        lo  = ohlcv["Low"].astype(float)
+        cl  = ohlcv["Close"].astype(float)
+        vol = ohlcv["Volume"].astype(float)
+
+        # 20일 VWAP (Typical Price 가중)
+        tp   = (hi + lo + cl) / 3
+        w20  = vol.tail(20)
+        vwap = float((tp.tail(20) * w20).sum() / w20.sum()) if w20.sum() > 0 else float(cl.iloc[-1])
+        cur_px = float(cl.iloc[-1])
+        gap    = (cur_px - vwap) / vwap * 100 if vwap > 0 else 0.0
+
+        # OBV 5일 추세
+        obv = [0.0]
+        for i in range(1, len(cl)):
+            if float(cl.iloc[i]) > float(cl.iloc[i - 1]):
+                obv.append(obv[-1] + float(vol.iloc[i]))
+            elif float(cl.iloc[i]) < float(cl.iloc[i - 1]):
+                obv.append(obv[-1] - float(vol.iloc[i]))
+            else:
+                obv.append(obv[-1])
+        obv_s     = pd.Series(obv)
+        obv5      = float(obv_s.iloc[-1]) - float(obv_s.iloc[-6]) if len(obv_s) >= 6 else 0.0
+        obv_trend = "Smart Money 순유입 ▲" if obv5 > 0 else "매도 우세 ▼"
+
+        # CMF (Chaikin Money Flow 20일)
+        hl  = (hi - lo).replace(0, 1)
+        mfm = ((cl - lo) - (hi - cl)) / hl
+        mfv = mfm * vol
+        cmf = float(mfv.tail(20).sum() / vol.tail(20).sum()) if vol.tail(20).sum() > 0 else 0.0
+
+        score = 0
+        parts: list[str] = []
+        if gap < -1.0:
+            score += 4; parts.append(f"VWAP 하단 {gap:.1f}% — 세력 저점 매집 구간")
+        elif gap > 3.0:
+            score -= 2; parts.append(f"VWAP 상단 {gap:+.1f}% — 단기 과매수 주의")
+        else:
+            parts.append(f"VWAP 근접 {gap:+.1f}% — 균형 구간")
+        if obv5 > 0:
+            score += 3; parts.append("OBV 상승 — Smart Money 순유입 확인")
+        else:
+            parts.append("OBV 하락 — 매도세 우세")
+        if cmf > 0.10:
+            score += 3; parts.append(f"CMF {cmf:.3f} — 자금 집중 유입")
+        elif cmf < -0.10:
+            score -= 2; parts.append(f"CMF {cmf:.3f} — 자금 유출")
+
+        score = max(0, min(score, 10))
+        return {
+            "vwap": round(vwap), "gap_pct": round(gap, 2),
+            "obv_trend": obv_trend, "cmf": round(cmf, 3),
+            "verdict": " | ".join(parts), "score": score,
+        }
+    except Exception:
+        return _e
+
+
+def calc_short_squeeze_trigger(price_data: dict, ohlcv: pd.DataFrame) -> dict:
+    """숏스퀴즈 임계가 자동 산출 — ATR14·20일 저항선 기반 (배거차숏 엔진)."""
+    _e = {"trigger": 0, "atr": 0, "resistance": 0,
+          "gap_pct": 0.0, "zone": "데이터 부족", "verdict": "데이터 부족"}
+    try:
+        cur = int((price_data or {}).get("현재가", 0))
+        if cur == 0 or ohlcv.empty or len(ohlcv) < 14:
+            return _e
+        hi = ohlcv["High"].astype(float)
+        lo = ohlcv["Low"].astype(float)
+        cl = ohlcv["Close"].astype(float)
+
+        hl  = hi - lo
+        hc  = (hi - cl.shift(1)).abs()
+        lc  = (lo - cl.shift(1)).abs()
+        tr  = pd.concat([hl, hc, lc], axis=1).max(axis=1)
+        atr = float(tr.tail(14).mean())
+
+        resistance = int(hi.tail(20).max())
+        trigger    = int(resistance + atr * 0.5)
+        gap_pct    = (trigger - cur) / cur * 100 if cur > 0 else 0.0
+
+        if   gap_pct <= 1.0: zone = "🔴 임박 — 즉시 숏커버링 발동 가능"
+        elif gap_pct <= 3.0: zone = "🟡 근접 — 1~3% 내 돌파 시 숏스퀴즈"
+        elif gap_pct <= 7.0: zone = "⚪ 대기 — 임계가까지 여유 있음"
+        else:                zone = "❌ 원거리 — 숏스퀴즈 가능성 낮음"
+
+        verdict = f"임계가 {trigger:,}원 (현재 대비 +{gap_pct:.1f}%) — {zone}"
+        return {"trigger": trigger, "atr": round(atr), "resistance": resistance,
+                "gap_pct": round(gap_pct, 1), "zone": zone, "verdict": verdict}
+    except Exception:
+        return _e
+
+
 def analyze_ticker(ticker: str, name: str, market: str) -> dict:
     """42대 필살기 전수조사 — 병렬 수집 후 종합 점수 산출."""
     now_kst = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S KST")
 
-    with ThreadPoolExecutor(max_workers=5) as ex:
+    with ThreadPoolExecutor(max_workers=6) as ex:
         f_price = ex.submit(get_realtime_price, ticker)
         f_ohlcv = ex.submit(get_ohlcv, ticker, 90)
         f_inv   = ex.submit(get_investor_flow, ticker)
         f_fund  = ex.submit(get_fundamentals, ticker)
         f_news  = ex.submit(get_news, ticker, name)
+        f_macro = ex.submit(get_macro_data)
 
     # ── Zero-Error 방어: 각 Future 개별 try-except + 안전 기본값 ────────────
     try:
@@ -1288,6 +1505,15 @@ def analyze_ticker(ticker: str, name: str, market: str) -> dict:
         news_list = f_news.result() or []
     except Exception:
         news_list = []
+    try:
+        macro_data = f_macro.result() or {}
+    except Exception:
+        macro_data = {}
+
+    # ── V8.0 God Mode 추가 분석 (매크로·VWAP·숏스퀴즈) ──────────────────────
+    macro_sens   = calc_macro_sensitivity(name, macro_data)
+    vwap_result  = calc_vwap_smart_money(ohlcv)
+    squeeze_data = calc_short_squeeze_trigger(price_data, ohlcv)
 
     # ── V7.0 Quantum Vanguard 4축 점수 체계 ─────────────────────────────────
     # 차트/신호 (20점 기여) — GOLDEN RULE: calc_pullback_score 함수 불변
@@ -1335,6 +1561,11 @@ def analyze_ticker(ticker: str, name: str, market: str) -> dict:
         "short_score": news_result["score"],  # 하위 호환 유지
         "total": total, "verdict": verdict,
         "block_alert": block_alert, "collected_at": now_kst,
+        # V8.0 God Mode
+        "macro_data":  macro_data,
+        "macro_sens":  macro_sens,
+        "vwap_result": vwap_result,
+        "squeeze":     squeeze_data,
     }
 
 
@@ -2664,6 +2895,181 @@ def ui_ma_strip(pb: dict):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# V8.0 GOD MODE UI — 매크로·Smart Money·숏스퀴즈 카드
+# ─────────────────────────────────────────────────────────────────────────────
+def ui_macro_godmode_card(result: dict):
+    """달국금공 매크로 상관관계 + Smart Money + 숏스퀴즈 임계가 통합 카드."""
+    ms   = result.get("macro_sens", {})
+    vr   = result.get("vwap_result", {})
+    sq   = result.get("squeeze", {})
+    ns   = result.get("news_score", {})   # Tier 0/1 뉴스 + velocity (f-string 내 변수 참조용)
+    name = result.get("name", "")
+
+    sector  = ms.get("sector", "일반")
+    items   = ms.get("items", [])
+    vwap    = vr.get("vwap", 0)
+    gap     = vr.get("gap_pct", 0.0)
+    obv_t   = vr.get("obv_trend", "—")
+    cmf     = vr.get("cmf", 0.0)
+    vverdict = vr.get("verdict", "—")
+    trigger = sq.get("trigger", 0)
+    gap_sq  = sq.get("gap_pct", 0.0)
+    zone    = sq.get("zone", "—")
+    atr     = sq.get("atr", 0)
+
+    # 매크로 행 HTML 생성 (f-string 내 중첩 따옴표 회피 — 변수 추출)
+    macro_rows_html = ""
+    if items:
+        for it in items:
+            col   = it["col"]
+            lbl   = it["label"]
+            sym   = it["sym"]
+            cur   = it["cur"]
+            unit  = it["unit"]
+            mchg  = it["macro_chg"]
+            beta  = it["beta"]
+            imp   = it["impact"]
+            direc = it["direction"]
+            cur_s = f"{cur:,.2f}" if cur < 5000 else f"{cur:,.0f}"
+            mchg_s  = f"{mchg:+.2f}%"
+            beta_s  = f"{beta:+.1f}x"
+            imp_s   = f"{imp:+.2f}%"
+            macro_rows_html += (
+                f'<tr><td class="mc-lbl">{lbl}</td>'
+                f'<td class="mc-val">{cur_s} {unit}</td>'
+                f'<td class="mc-chg">{mchg_s}</td>'
+                f'<td class="mc-beta">{beta_s}</td>'
+                f'<td class="mc-imp" style="color:{col};">{imp_s}</td>'
+                f'<td class="mc-dir" style="color:{col};font-weight:700;">{direc}</td></tr>'
+            )
+    else:
+        macro_rows_html = '<tr><td colspan="6" style="color:#6b7c93;padding:8px;">매크로 데이터 수집 중 (Yahoo Finance)</td></tr>'
+
+    # VWAP 색상
+    gap_col = "#27ae60" if gap < -1.0 else "#e74c3c" if gap > 3.0 else "#D4AF37"
+    gap_s   = f"{gap:+.2f}%"
+    cmf_col = "#27ae60" if cmf > 0.1 else "#e74c3c" if cmf < -0.1 else "#6b7c93"
+    cmf_s   = f"{cmf:+.3f}"
+
+    # 숏스퀴즈 색상
+    sq_col    = "#e74c3c" if gap_sq <= 1.0 else "#f39c12" if gap_sq <= 3.0 else "#6b7c93"
+    trig_s    = f"{trigger:,}" if trigger else "—"
+    gap_sq_s  = f"+{gap_sq:.1f}%" if trigger else "—"
+    atr_s     = f"{atr:,}" if atr else "—"
+    vwap_s    = f"{vwap:,}" if vwap else "—"
+
+    _html_block(f"""
+<style>
+  .gm {{ background:linear-gradient(135deg,#0a1428 0%,#0e1c3a 100%);
+         border:1px solid #1e3060; border-left:4px solid #D4AF37;
+         border-radius:14px; padding:22px 26px; margin:6px 0 10px; }}
+  .gm-title {{ color:#D4AF37; font-size:1.0rem; font-weight:700; letter-spacing:.08em; margin-bottom:14px; }}
+  .gm-sub   {{ color:#8899bb; font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; margin-bottom:8px; }}
+  .gm-grid  {{ display:grid; grid-template-columns:1fr 1fr; gap:14px; }}
+  .gm-sect  {{ background:#0d1830; border:1px solid #1e2e50; border-radius:10px; padding:14px 16px; }}
+  .mc-tbl   {{ width:100%; border-collapse:collapse; font-size:.82rem; }}
+  .mc-tbl th {{ color:#8899bb; font-size:.7rem; letter-spacing:.06em; padding:3px 6px;
+                border-bottom:1px solid #1e2e50; text-align:left; }}
+  .mc-lbl   {{ color:#c0cce0; padding:5px 6px; }}
+  .mc-val   {{ color:#ffffff; padding:5px 6px; font-weight:600; }}
+  .mc-chg   {{ color:#a0aec0; padding:5px 6px; }}
+  .mc-beta  {{ color:#D4AF37; padding:5px 6px; font-weight:600; }}
+  .mc-imp   {{ padding:5px 6px; font-weight:700; }}
+  .mc-dir   {{ padding:5px 6px; }}
+  .vw-row   {{ display:flex; justify-content:space-between; align-items:center; margin:6px 0; }}
+  .vw-lbl   {{ color:#8899bb; font-size:.8rem; }}
+  .vw-val   {{ font-weight:700; font-size:.9rem; }}
+  .sq-big   {{ color:{sq_col}; font-size:1.25rem; font-weight:900; margin:6px 0 2px; }}
+  .sq-zone  {{ color:{sq_col}; font-size:.82rem; margin:2px 0; }}
+  .gm-verdict {{ color:#c0cce0; font-size:.8rem; margin-top:10px;
+                  border-top:1px solid #1e2e50; padding-top:8px; line-height:1.5; }}
+</style>
+<div class="gm">
+  <div class="gm-title">⚡ V8.0 GOD MODE — 기관급 초정밀 분석 엔진 [{sector} 섹터]</div>
+  <div class="gm-grid">
+
+    <!-- 달국금공 매크로 상관관계 -->
+    <div class="gm-sect">
+      <div class="gm-sub">🌐 달국금공 매크로 실시간 상관관계</div>
+      <table class="mc-tbl">
+        <tr>
+          <th>지표</th><th>현재가</th><th>등락</th>
+          <th>Beta</th><th>영향도</th><th>판정</th>
+        </tr>
+        {macro_rows_html}
+      </table>
+    </div>
+
+    <!-- VWAP Smart Money Flow -->
+    <div class="gm-sect">
+      <div class="gm-sub">🧠 세력 심리 역추적 — VWAP Smart Money</div>
+      <div class="vw-row">
+        <span class="vw-lbl">20일 VWAP</span>
+        <span class="vw-val" style="color:#D4AF37;">{vwap_s}원</span>
+      </div>
+      <div class="vw-row">
+        <span class="vw-lbl">현재가 괴리율</span>
+        <span class="vw-val" style="color:{gap_col};">{gap_s}</span>
+      </div>
+      <div class="vw-row">
+        <span class="vw-lbl">OBV 추세</span>
+        <span class="vw-val" style="color:#c0cce0;">{obv_t}</span>
+      </div>
+      <div class="vw-row">
+        <span class="vw-lbl">CMF 자금흐름</span>
+        <span class="vw-val" style="color:{cmf_col};">{cmf_s}</span>
+      </div>
+      <div class="gm-verdict">{vverdict}</div>
+    </div>
+
+    <!-- 숏스퀴즈 임계가 -->
+    <div class="gm-sect">
+      <div class="gm-sub">💣 배거차숏 — 숏스퀴즈 임계가 자동 산출</div>
+      <div class="sq-big">임계가 {trig_s}원</div>
+      <div class="vw-row">
+        <span class="vw-lbl">현재가 대비</span>
+        <span class="vw-val" style="color:{sq_col};">{gap_sq_s}</span>
+      </div>
+      <div class="vw-row">
+        <span class="vw-lbl">20일 저항선</span>
+        <span class="vw-val" style="color:#D4AF37;">{sq.get("resistance",0):,}원</span>
+      </div>
+      <div class="vw-row">
+        <span class="vw-lbl">ATR(14)</span>
+        <span class="vw-val" style="color:#a0aec0;">{atr_s}원</span>
+      </div>
+      <div class="sq-zone">{zone}</div>
+    </div>
+
+    <!-- 뉴스 속도 (Sentiment Velocity) -->
+    <div class="gm-sect">
+      <div class="gm-sub">📡 감성 속도 분석 — News Sentiment Velocity</div>
+      {''.join([
+          f'<div style="background:#0a2a1a;border:1px solid #27ae60;border-radius:6px;'
+          f'padding:6px 10px;margin:4px 0;font-size:.78rem;color:#fff;">'
+          f'🔵 TIER 0 | {n["title"][:55]}</div>'
+          for n in ns.get("tier0_news", [])[:2]
+      ] or [
+          '<div style="color:#6b7c93;font-size:.8rem;margin:4px 0;">Tier 0 이벤트 없음 (M&amp;A·합병·공개매수)</div>'
+      ])}
+      {''.join([
+          f'<div style="background:#1a2a0a;border:1px solid #D4AF37;border-radius:6px;'
+          f'padding:5px 10px;margin:3px 0;font-size:.77rem;color:#fff;">'
+          f'🟡 TIER 1 | {n["title"][:55]}</div>'
+          for n in ns.get("tier1_news", [])[:2]
+      ])}
+      <div style="color:#D4AF37;font-size:.82rem;font-weight:700;margin-top:8px;
+                  border-top:1px solid #1e2e50;padding-top:6px;">
+        {ns.get("velocity_label", "—")}
+      </div>
+    </div>
+
+  </div>
+</div>
+""")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 12. 메인 앱
 # ─────────────────────────────────────────────────────────────────────────────
 def main():
@@ -3037,6 +3443,16 @@ button[data-baseweb="tab"][aria-selected="true"] p { color: #D4AF37 !important; 
                 unsafe_allow_html=True,
             )
             ui_score_card(result)
+
+            # ② V8.0 GOD MODE — 매크로·Smart Money·숏스퀴즈·Sentiment Velocity
+            st.markdown(
+                '<h3 style="color:#D4AF37;font-size:17px;font-weight:700;'
+                'letter-spacing:.06em;margin:10px 0 2px;">'
+                '⚡ V8.0 God Mode — 기관급 초정밀 4대 엔진</h3>',
+                unsafe_allow_html=True,
+            )
+            ui_macro_godmode_card(result)
+            st.divider()
 
             # ③ 기업 정밀 브리핑 — ①섹터 ②저평가해설 ③모멘텀 3카드
             st.markdown(
