@@ -142,6 +142,14 @@ _BAD_KW = [
     "금리 인상", "경기 침체", "파산", "상장폐지", "관리종목",
 ]
 
+# Negative Override — 이 키워드가 제목에 있으면 Tier1·Tier2 승격 즉시 차단
+# 긍정 키워드("수주", "목표가 상향")가 함께 있어도 악재 우선 강등 원칙
+_HARD_NEG_KW = [
+    "감소", "하락", "적자", "어닝쇼크", "어닝 쇼크", "지연", "취소",
+    "철회", "실패", "부진", "미달", "급락", "손실 확대",
+    "매출 감소", "영업손실", "전망 하향", "목표가 하향", "주가 급락",
+]
+
 # ── 뉴스 등급제 (News Tiering) ────────────────────────────────────────────────
 # Tier 1: 확정적 사실 — 주가 직접 영향 (20점 만점)
 _TIER1_KW = [
@@ -205,7 +213,7 @@ _DART_KW = [
 
 # V8.0 Flexible Match — 종목코드별 영문 약칭 하드코딩 맵
 _KNOWN_ENG_ALIAS: dict[str, list[str]] = {
-    "035760": ["LG CNS", "LGCNS"],
+    "064400": ["LG CNS", "LGCNS"],           # LG씨엔에스 (2025년 상장 실제 코드)
     "000660": ["SK Hynix", "SKHynix", "하이닉스"],
     "005930": ["Samsung Electronics", "Samsung", "삼성전자"],
     "005380": ["Hyundai Motor", "현대차"],
@@ -232,16 +240,11 @@ _KNOWN_ENG_ALIAS: dict[str, list[str]] = {
 def _build_eng_aliases(name: str, ticker: str) -> tuple[str, ...]:
     """종목명·코드로부터 영문 약칭 후보를 생성 — get_news() Flexible Match용 tuple."""
     aliases: list[str] = []
-    # ① 하드코딩 맵 우선
+    # ① 하드코딩 맵 — 완전한 구절("LG CNS", "LGCNS")만, 부분 prefix 절대 없음
     aliases.extend(_KNOWN_ENG_ALIAS.get(ticker, []))
-    # ② 이름 앞 영문 prefix (예: "LG씨엔에스"→"LG", "SK하이닉스"→"SK")
-    m = re.match(r"^([A-Za-z][A-Za-z0-9&]{0,9})", name)
-    if m:
-        prefix = m.group(1).strip()
-        if prefix and prefix not in aliases:
-            aliases.append(prefix)
-    # ③ 이름 자체가 영문인 경우 (NAVER, Kakao 등)
-    if re.match(r"^[A-Za-z]", name) and name not in aliases:
+    # ② 이름 자체가 순수 영문(한글 0글자)인 경우만 추가 (NAVER, Kakao 등)
+    #    "LG씨엔에스"처럼 한글 혼합명은 완전 제외 → "LG" 단독 prefix 오염 100% 차단
+    if re.match(r"^[A-Za-z][A-Za-z0-9\s\-&\.]+$", name) and name not in aliases:
         aliases.append(name)
     return tuple(dict.fromkeys(aliases))   # 순서 보존·중복 제거
 
@@ -1300,16 +1303,28 @@ def score_news(news: list[dict]) -> dict:
                     impact_hits.append(kw)
             continue
 
-        # ③ Tier 1 — 확정 팩트 (실적 서프라이즈·대형 수주·독점 기술)
+        # ③ Negative Override 선탐지 — 부정 핵심 키워드가 있으면 Tier1/Tier2 승격 즉시 차단
+        _neg_hits = [kw for kw in _HARD_NEG_KW if kw in t]
+        _hard_neg  = len(_neg_hits) > 0
+
+        # ④ Tier 1 — 확정 팩트 (실적 서프라이즈·대형 수주·독점 기술)
         t1_hits = [kw for kw in _TIER1_KW if kw in t]
         if t1_hits:
-            tier1_news.append(item)
-            for kw in t1_hits:
-                if kw not in impact_hits:
-                    impact_hits.append(kw)
+            if _hard_neg:
+                # Negative Override 발동: 긍정 키워드 무효화 → 즉시 악재 강등
+                override_reason = (
+                    f"⚠ Negative Override: '{_neg_hits[0]}' 감지 "
+                    f"→ Tier1 승격 차단·악재 강등"
+                )
+                bad_news.append({**item, "reason": override_reason})
+            else:
+                tier1_news.append(item)
+                for kw in t1_hits:
+                    if kw not in impact_hits:
+                        impact_hits.append(kw)
             continue
 
-        # ④ 악재 감지 (긍정 신호보다 부정이 우세할 때만 악재 분류)
+        # ⑤ 악재 감지 (긍정 신호보다 부정이 우세할 때만 악재 분류)
         b_score = sum(1 for kw in _BAD_KW if kw in t)
         g_score = (sum(1 for kw in _GOOD_KW if kw in t)
                    + sum(1 for kw in _TIER2_KW if kw in t))
@@ -1317,9 +1332,17 @@ def score_news(news: list[dict]) -> dict:
             bad_news.append(item)
             continue
 
-        # ⑤ Tier 2 — 긍정 기대감 (목표가 상향·파트너십·중소 계약)
+        # ⑥ Tier 2 — 긍정 기대감 (목표가 상향·파트너십·중소 계약)
         if any(kw in t for kw in _TIER2_KW) or g_score > 0:
-            tier2_news.append(item)
+            if _hard_neg:
+                # Negative Override 발동: Tier2 승격 차단 → 악재 강등
+                override_reason = (
+                    f"⚠ Negative Override: '{_neg_hits[0]}' 감지 "
+                    f"→ Tier2 승격 차단·악재 강등"
+                )
+                bad_news.append({**item, "reason": override_reason})
+            else:
+                tier2_news.append(item)
             continue
 
         # ⑥ Neutral (10점) — PR·채용·IR 등 주가 영향 미미 기업 활동
