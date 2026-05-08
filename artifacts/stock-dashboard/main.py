@@ -1953,6 +1953,10 @@ def quick_score(ticker: str, name: str, market: str) -> dict | None:
             "rank_score": rank_score,
             "signal":     pb["signal"],
             "rsi":        pb["rsi"],
+            # ── 스텔스 모드 전용 필드 ──────────────────────────────────────
+            "ma5":        pb.get("ma5",  0),   # 5일선 (눌림목 이격도 계산용)
+            "ma20":       pb.get("ma20", 0),   # 20일선 (눌림목 이격도 계산용)
+            "is_ssankkl": "쌍끌이" in inv.get("detail", ""),  # 기관+외인 당일 쌍끌이 플래그
         }
     except Exception:
         return None
@@ -2241,6 +2245,136 @@ def ui_top15_tabs(scored: list[dict]):
     with tab2: _show(_to_df(large),   "large")
     with tab3: _show(_to_df(qual),    "qual")
     with tab4: _show(_to_df(penny),   "penny")
+
+
+def ui_stealth_mode(scored: list[dict]):
+    """💎 눌림목/스텔스 모드 — 세력 매집 중이나 주가가 눌린 종목 최우선 랭킹.
+
+    필터 조건: inv_score ≥ 30 OR 기관+외인 쌍끌이(is_ssankkl)
+    정렬 기준: 수급 강도 + 음봉/RSI 과매도 + MA20 근접 이격도 가중 합산 (스텔스 점수)
+    """
+
+    def _stealth_score(s: dict) -> float:
+        """눌림목 스텔스 점수 — 클수록 '세력 매집 + 주가 눌림' 최적 구간."""
+        pts = float(s["inv_score"])   # ① 수급 강도 베이스 (최대 40)
+
+        # ② 음봉·보합 보너스 — 당일 하락할수록 매집 기회
+        chg = s.get("change", 0.0)
+        if   chg <= -2.0: pts += 25   # 급락 = 매집 황금 타이밍
+        elif chg <   0.0: pts += 18   # 음봉
+        elif chg <   0.5: pts += 8    # 보합권
+
+        # ③ RSI 과매도 구간 보너스
+        rsi = float(s.get("rsi", 50.0))
+        if   rsi <= 30: pts += 20
+        elif rsi <= 40: pts += 15
+        elif rsi <= 45: pts += 10
+        elif rsi <= 50: pts += 5
+
+        # ④ MA20 근접도 — 이격도 낮을수록 눌림목 진입 최적 (최대 25)
+        ma20  = s.get("ma20", 0)
+        price = s.get("price", 0)
+        if ma20 > 0 and price > 0:
+            dev = abs((price - ma20) / ma20 * 100)
+            if   dev <= 1.5: pts += 25
+            elif dev <= 3.0: pts += 18
+            elif dev <= 5.0: pts += 12
+            elif dev <= 8.0: pts += 6
+
+        # ⑤ 쌍끌이 보너스 (이미 수급에 반영되나 별도 가산)
+        if s.get("is_ssankkl"):
+            pts += 10
+
+        return pts
+
+    # ── 수급 조건 필터: 쌍끌이 OR 수급 30점 이상 ────────────────────────────
+    filtered = [s for s in scored if s.get("is_ssankkl") or s["inv_score"] >= 30]
+    if not filtered:
+        # 완화 fallback: inv_score 20점 이상
+        filtered = [s for s in scored if s["inv_score"] >= 20]
+    if not filtered:
+        filtered = list(scored)
+
+    # 스텔스 점수 계산 + 정렬
+    for s in filtered:
+        s["_stealth_pts"] = _stealth_score(s)
+    ranked = sorted(filtered, key=lambda x: x["_stealth_pts"], reverse=True)[:15]
+
+    if not ranked:
+        st.info("수급 조건(쌍끌이·30점+) 충족 종목 없음 — 전체 배치 재수집 후 재시도하세요.")
+        return
+
+    # ── 스텔스 데이터프레임 구성 ─────────────────────────────────────────────
+    rows = []
+    for i, s in enumerate(ranked, 1):
+        ma20  = s.get("ma20", 0)
+        price = s.get("price", 0)
+        if ma20 > 0 and price > 0:
+            dev_val = (price - ma20) / ma20 * 100
+            dev_str = f"{dev_val:+.1f}%"
+            dev_abs = abs(dev_val)
+        else:
+            dev_str = "—"
+            dev_abs = 99.9
+
+        badge = "🔥 쌍끌이" if s.get("is_ssankkl") else ("💪 수급강" if s["inv_score"] >= 30 else "📈 수급")
+
+        rows.append({
+            "순위":           i,
+            "종목명":         s["name"],
+            "코드":           s["ticker"],
+            "시장":           s["market"],
+            "현재가":         f"{price:,}원" if price else "—",
+            "등락률":         f"{s['change']:+.2f}%" if price else "—",
+            "세력 매집 강도": s["inv_score"],
+            "RSI":            round(float(s.get("rsi", 50.0)), 1),
+            "눌림목 이격도":  dev_str,
+            "이격도(abs)":    round(dev_abs, 2),
+            "매집 유형":      badge,
+            "차트 신호":      s.get("signal", "—"),
+        })
+
+    df = pd.DataFrame(rows)
+
+    # 컬럼 설정
+    _inv_col  = st.column_config.ProgressColumn(
+        "세력 매집 강도", min_value=0, max_value=40, format="%d점"
+    )
+
+    # ── 안내 메시지 ────────────────────────────────────────────────────────
+    st.markdown(
+        '<p style="color:#A0AEC0;font-size:0.82rem;margin:4px 0 10px;">'
+        "⬇ 세력이 '매집 중'이나 주가가 '아직 안 오른' 바닥 종목 Top 15 &nbsp;|&nbsp; "
+        "<span style='color:#D4AF37;font-weight:700;'>눌림목 이격도</span> → MA20 대비 주가 위치 "
+        "(음수 = MA20 아래 눌림, 0% 근접 = 최적 매수 타이밍)</p>",
+        unsafe_allow_html=True,
+    )
+
+    # 표시용 df (이격도(abs) 컬럼 숨김)
+    display_df = df.drop(columns=["이격도(abs)"])
+
+    event = st.dataframe(
+        display_df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={"세력 매집 강도": _inv_col},
+        selection_mode="single-row",
+        on_select="rerun",
+        key="df_stealth_main",
+    )
+
+    if event and len(event.selection.rows) > 0:
+        selected_idx = event.selection.rows[0]
+        st.session_state.selected_stock_code = display_df.iloc[selected_idx]["코드"]
+
+    # ── 스텔스 범례 ──────────────────────────────────────────────────────────
+    st.markdown(
+        '<p style="color:#6b7c93;font-size:0.75rem;margin:6px 0 0;">'
+        "🔥 쌍끌이 = 기관·외국인 당일 동시 순매수 &nbsp;|&nbsp; "
+        "💪 수급강 = 수급 점수 30점 이상 &nbsp;|&nbsp; "
+        "눌림목 이격도 0% 근접·음수 + RSI 45 이하 = 세력 바닥 매집 최적 타이밍</p>",
+        unsafe_allow_html=True,
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -3704,9 +3838,9 @@ button[data-baseweb="tab"][aria-selected="true"] p { color: #D4AF37 !important; 
         '<h2 style="color:#D4AF37;font-size:22px;font-weight:700;'
         'letter-spacing:.05em;margin:4px 0 2px;">투자 지표 정밀 분석 Top 15</h2>'
         '<p style="color:#A0AEC0;font-size:0.82rem;margin:2px 0 8px;">'
-        "거래대금 상위 200종목 자동 스캔 → "
-        "<strong style='color:#fff;'>즉시 매수 신호 최우선 랭킹</strong> &nbsp;|&nbsp; "
-        "표의 행을 클릭하면 하단 정밀 해부가 즉시 실행됩니다</p>",
+        "거래대금 상위 200종목 자동 스캔 &nbsp;|&nbsp; "
+        "<strong style='color:#FF5050;'>🔥 주도주/돌파</strong> → 총점 최강 종목 &nbsp;|&nbsp; "
+        "<strong style='color:#D4AF37;'>💎 눌림목/스텔스</strong> → 세력 매집 중 + 아직 안 오른 바닥 종목</p>",
         unsafe_allow_html=True,
     )
 
@@ -3721,7 +3855,26 @@ button[data-baseweb="tab"][aria-selected="true"] p { color: #D4AF37 !important; 
     if scored:
         # 코드 기준 역추적을 위한 scored 캐시 세션 저장 (detail 뷰 점수 동기화)
         st.session_state["scored_cache"] = {r["ticker"]: r for r in scored}
-        ui_top15_tabs(scored)
+
+        # ── 듀얼 랭킹 모드 토글 ──────────────────────────────────────────────
+        mode_tab1, mode_tab2 = st.tabs([
+            "🔥 주도주 / 돌파 모드",
+            "💎 눌림목 / 스텔스 모드",
+        ])
+        with mode_tab1:
+            st.markdown(
+                '<p style="color:#FF5050;font-size:0.8rem;font-weight:700;margin:4px 0 6px;">'
+                "총점(42대 필살기) 최강 종목 — 수급·뉴스·차트·리스크 4축 합산 최고점 순</p>",
+                unsafe_allow_html=True,
+            )
+            ui_top15_tabs(scored)
+        with mode_tab2:
+            st.markdown(
+                '<p style="color:#D4AF37;font-size:0.8rem;font-weight:700;margin:4px 0 6px;">'
+                "세력 매집 中 + 주가 아직 눌린 종목 — 추격 매수 금지 · 눌림목 진입 전용</p>",
+                unsafe_allow_html=True,
+            )
+            ui_stealth_mode(scored)
     else:
         st.warning("실시간 데이터 수급 대기 중 (KRX / Yahoo Finance) — ⚡ 즉시 갱신 버튼으로 재시도하세요.")
     st.divider()
