@@ -1850,38 +1850,100 @@ _ETF_ETN_KW = (
 @st.cache_data(ttl=300, show_spinner=False)
 def get_top_volume_tickers() -> list[dict]:
     """
-    거래대금 상위 50종목 — Naver sise_quant (KOSPI 25 + KOSDAQ 25).
-    ETF/ETN 자동 제외, 일반 주식만 수집.
+    Volume Anomaly 상위 200종목 — Naver sise_quant 3페이지 확장 수집.
+
+    [이상 거래 징후 Composite Score]
+    기준 A (회전율): 거래대금(백만) / 시가총액(억) → % (시총 대비 얼마나 돌았나)
+    기준 B (거래대금): 절대 유동성 (전통 지표, 보조)
+    Composite = norm_turnover * 0.6 + norm_tvol * 0.4  ← 회전율 가중 우선
+    → 소형주 매집 포착 특화 (절대 거래대금 작아도 회전율 폭증 시 상위 편입)
     """
-    candidates: list[dict] = []
+    rows_by_market: dict[str, list[dict]] = {}
+
     for sosok, market in [("0", "KOSPI"), ("1", "KOSDAQ")]:
-        try:
-            url  = f"https://finance.naver.com/sise/sise_quant.naver?sosok={sosok}"
-            resp = requests.get(url, headers=NAVER_HDRS, timeout=10)
-            soup = BeautifulSoup(resp.text, "lxml")
-            count = 0
-            for a in soup.select('td a[href*="/item/main.naver?code="]'):
-                m = re.search(r"code=(\d{6})", a.get("href", ""))
-                if not m:
-                    continue
-                code = m.group(1)
-                name = a.get_text(strip=True)
-                if not name or len(name) < 2:
-                    continue
-                # ETF·ETN·파생상품 제외
-                if any(kw in name for kw in _ETF_ETN_KW):
-                    continue
-                candidates.append({"code": code, "name": name, "market": market})
-                count += 1
-                if count >= 100:
+        pool: list[dict] = []
+        seen: set[str] = set()
+
+        for page in range(1, 4):   # 3페이지 ≈ 시장당 150~300 후보 수집
+            try:
+                url  = (f"https://finance.naver.com/sise/sise_quant.naver"
+                        f"?sosok={sosok}&page={page}")
+                resp = requests.get(url, headers=NAVER_HDRS, timeout=10)
+                soup = BeautifulSoup(resp.text, "lxml")
+                tbl  = soup.select_one("table.type_2")
+                if not tbl:
                     break
-        except Exception:
-            pass
+
+                for tr in tbl.select("tr"):
+                    a = tr.select_one('a[href*="/item/main.naver?code="]')
+                    if not a:
+                        continue
+                    m = re.search(r"code=(\d{6})", a.get("href", ""))
+                    if not m:
+                        continue
+                    code = m.group(1)
+                    if code in seen:
+                        continue
+                    name = a.get_text(strip=True)
+                    if not name or len(name) < 2:
+                        continue
+                    if any(kw in name for kw in _ETF_ETN_KW):
+                        continue
+
+                    # ── 시가총액·거래대금 파싱 (td[5]=거래대금 백만, td[6]=시총 억) ──
+                    tds = tr.select("td")
+                    tvol_백만 = 0.0   # 거래대금 (백만원)
+                    cap_억    = 0.0   # 시가총액 (억원)
+                    try:
+                        def _td_num(idx: int) -> float:
+                            txt = tds[idx].get_text(strip=True).replace(",", "")
+                            return float(txt) if txt.lstrip("-").isdigit() else 0.0
+                        v5, v6 = _td_num(5), _td_num(6)
+                        # sise_quant 열 순서: 거래대금(5) → 시가총액(6)
+                        # 두 값 모두 양수일 때만 사용
+                        if v5 > 0 and v6 > 0:
+                            tvol_백만, cap_억 = v5, v6
+                    except Exception:
+                        pass
+
+                    # turnover_pct (%) = 거래대금(백만) / 시가총액(억)
+                    # [단위 검증] 1억=100백만 → tvol(백만)/cap(억) = tvol(백만)/(cap(백만)/100) *1/100*100 = tvol/cap
+                    turnover_pct = (tvol_백만 / cap_억) if cap_억 > 0 else 0.0
+
+                    pool.append({
+                        "code":         code,
+                        "name":         name,
+                        "market":       market,
+                        "cap_억":       cap_억,
+                        "tvol_백만":    tvol_백만,
+                        "turnover_pct": turnover_pct,
+                    })
+                    seen.add(code)
+            except Exception:
+                break   # 페이지 없으면 중단
+
+        rows_by_market[market] = pool
+
+    # ── Composite Anomaly Score 정규화 → 시장별 상위 100종목 추출 ─────────────
+    candidates: list[dict] = []
+    for market, pool in rows_by_market.items():
+        if not pool:
+            continue
+        max_tv = max((r["tvol_백만"]    for r in pool), default=1) or 1
+        max_tr = max((r["turnover_pct"] for r in pool), default=1) or 1
+        for r in pool:
+            norm_tv = r["tvol_백만"]    / max_tv
+            norm_tr = r["turnover_pct"] / max_tr
+            r["anomaly_score"] = norm_tr * 0.6 + norm_tv * 0.4   # 회전율 가중
+
+        pool.sort(key=lambda x: x["anomaly_score"], reverse=True)
+        candidates.extend(pool[:100])   # 시장별 상위 100종목 = 전체 200종목
+
     return candidates
 
 
 @st.cache_data(ttl=180, show_spinner=False)
-def quick_score(ticker: str, name: str, market: str) -> dict | None:
+def quick_score(ticker: str, name: str, market: str, turnover_pct: float = 0.0) -> dict | None:
     """
     배치 스캐너용 점수 산출 — analyze_ticker()와 100% 동일한 42대 필살기 4축 공식.
 
@@ -1919,6 +1981,15 @@ def quick_score(ticker: str, name: str, market: str) -> dict | None:
         news_result = score_news(news_list)         # V8.1 Tier2 모멘텀 키워드 완전 동일
         risk_result = score_risk_squeeze(price_data, inv_data, pb)
 
+        # ── 상대 거래량 급증률 (vol_ratio) — OHLCV 이미 보유, 추가 API 없음 ──
+        vol_ratio = 1.0
+        if not ohlcv.empty and "Volume" in ohlcv.columns and len(ohlcv) >= 21:
+            vols = ohlcv["Volume"].dropna()
+            if len(vols) >= 21:
+                today_vol  = float(vols.iloc[-1])
+                avg20_vol  = float(vols.iloc[-21:-1].mean())   # 최근 20일 평균 (당일 제외)
+                vol_ratio  = round(today_vol / avg20_vol, 2) if avg20_vol > 0 else 1.0
+
         pb_cap = min(pb["score"], 20)   # 차트 기여 최대 20점 캡
         # analyze_ticker()와 100% 동일한 공식: 수급40 + 뉴스30 + 차트20 + 리스크10
         total  = min(inv["score"] + news_result["score"] + pb_cap + risk_result["score"], 100)
@@ -1936,27 +2007,48 @@ def quick_score(ticker: str, name: str, market: str) -> dict | None:
         _news_sc = min(news_result["score"],  30)   # 뉴스  최대 30점
         _pb_sc   = min(pb["score"],           20)   # 차트  최대 20점 (raw 최대 25 → 20-cap)
         _risk_sc = min(risk_result["score"],  10)   # 리스크 최대 10점
+
+        # ── 소형주 세력 입질 가산점 (+15, inv_sc 40점 캡 유지) ──────────────────
+        # 조건: 시총 3,000억 미만 AND (거래량 3배+ OR 회전율 10%+) AND RSI 40~65 AND 수급 최소
+        _cap_억 = price_data.get("시가총액", 0)
+        if 0 < _cap_억 < 3_000:
+            _vol_bomb      = vol_ratio  >= 3.0
+            _turnover_bomb = turnover_pct >= 10.0
+            _rsi_zone_ok   = 40.0 <= pb["rsi"] <= 65.0
+            if (_vol_bomb or _turnover_bomb) and _rsi_zone_ok and inv["score"] >= 5:
+                _inv_sc = min(_inv_sc + 15, 40)   # 가산 후 40점 캡 재적용
+
         _total   = min(_inv_sc + _news_sc + _pb_sc + _risk_sc, 100)
 
+        # ── 시총 규모 레이블 ──────────────────────────────────────────────────
+        _cap_label = (
+            "대형" if _cap_억 >= 10_000
+            else ("중형" if _cap_억 >= 3_000 else "소형")
+        )
+
         return {
-            "ticker":     ticker,
-            "name":       name,
-            "market":     market,
-            "price":      price_data.get("현재가", 0),
-            "change":     float(price_data.get("등락률", 0)),
-            "cap":        price_data.get("시가총액", 0),
-            "pb_score":   _pb_sc,    # 20점 상한 적용된 확정치
-            "inv_score":  _inv_sc,   # 40점 상한 적용된 확정치
-            "news_score": _news_sc,  # 30점 상한 적용된 확정치
-            "risk_score": _risk_sc,  # 10점 상한 적용된 확정치
-            "total":      _total,    # 100점 상한 적용된 확정치
-            "rank_score": rank_score,
-            "signal":     pb["signal"],
-            "rsi":        pb["rsi"],
-            # ── 스텔스 모드 전용 필드 ──────────────────────────────────────
-            "ma5":        pb.get("ma5",  0),   # 5일선 (눌림목 이격도 계산용)
-            "ma20":       pb.get("ma20", 0),   # 20일선 (눌림목 이격도 계산용)
-            "is_ssankkl": "쌍끌이" in inv.get("detail", ""),  # 기관+외인 당일 쌍끌이 플래그
+            "ticker":        ticker,
+            "name":          name,
+            "market":        market,
+            "price":         price_data.get("현재가", 0),
+            "change":        float(price_data.get("등락률", 0)),
+            "cap":           _cap_억,
+            "pb_score":      _pb_sc,    # 20점 상한 적용된 확정치
+            "inv_score":     _inv_sc,   # 40점 상한 적용된 확정치 (소형주 가산 포함)
+            "news_score":    _news_sc,  # 30점 상한 적용된 확정치
+            "risk_score":    _risk_sc,  # 10점 상한 적용된 확정치
+            "total":         _total,    # 100점 상한 적용된 확정치
+            "rank_score":    rank_score,
+            "signal":        pb["signal"],
+            "rsi":           pb["rsi"],
+            # ── 스텔스 모드 전용 필드 ──────────────────────────────────────────
+            "ma5":           pb.get("ma5",  0),
+            "ma20":          pb.get("ma20", 0),
+            "is_ssankkl":    "쌍끌이" in inv.get("detail", ""),
+            # ── Volume Anomaly 필드 (UI 표기·스텔스 필터링용) ─────────────────
+            "vol_ratio":     vol_ratio,          # 당일 / 20일 평균 거래량 배수
+            "turnover_pct":  round(turnover_pct, 2),  # 시총 대비 회전율 (%)
+            "cap_label":     _cap_label,         # 대형/중형/소형
         }
     except Exception:
         return None
@@ -1966,7 +2058,11 @@ def scan_top_stocks(candidates: list[dict]) -> list[dict]:
     """후보 종목 병렬 스코어링 → FDR Marcap 병합 → 점수 내림차순 정렬."""
     with ThreadPoolExecutor(max_workers=24) as ex:
         futs = {
-            ex.submit(quick_score, c["code"], c["name"], c["market"]): c
+            ex.submit(
+                quick_score,
+                c["code"], c["name"], c["market"],
+                c.get("turnover_pct", 0.0),
+            ): c
             for c in candidates
         }
         results = []
@@ -1984,6 +2080,12 @@ def scan_top_stocks(candidates: list[dict]) -> list[dict]:
         code = r["ticker"]
         if r.get("cap", 0) < 100 and code in cap_lookup:
             r["cap"] = round(cap_lookup[code], 0)
+        # cap_label을 병합 후 최종 시총 기준으로 재계산 (Naver API 0 반환 오류 보정)
+        cap_억 = r.get("cap", 0)
+        r["cap_label"] = (
+            "대형" if cap_억 >= 10_000
+            else ("중형" if cap_억 >= 3_000 else "소형")
+        )
 
     # ── 정렬: 1순위 차트신호(HIGH→MID→LOW→진입불가), 2순위 총점 ─────────────
     _SIG_PRI = {"즉시 매수": 3, "매수 준비": 2, "관망": 1}
@@ -2000,8 +2102,12 @@ def scan_top_stocks(candidates: list[dict]) -> list[dict]:
 def _scan_top_cached(candidate_tuples: tuple) -> list[dict]:
     """scan_top_stocks의 캐시 래퍼 — tuple 입력으로 hashable 처리 (TTL 60s).
     TTL을 60s로 단축 → 코드 변경 후 최대 1분 내 새 로직 자동 반영 보장.
+    tuple 형식: (code, name, market, turnover_pct) — 4-tuple
     """
-    candidates = [{"code": c[0], "name": c[1], "market": c[2]} for c in candidate_tuples]
+    candidates = [
+        {"code": c[0], "name": c[1], "market": c[2], "turnover_pct": c[3] if len(c) > 3 else 0.0}
+        for c in candidate_tuples
+    ]
     return scan_top_stocks(candidates)
 
 
@@ -2144,14 +2250,17 @@ def ui_top15_tabs(scored: list[dict]):
             return pd.DataFrame()
         rows = []
         for i, s in enumerate(items[:15], 1):
+            vr  = s.get("vol_ratio", 1.0)
+            vr_str = f"{vr:.1f}x" if vr >= 1.0 else "—"
             rows.append({
                 "순위":           i,
                 "종목명":         s["name"],
                 "코드":           s["ticker"],
                 "시장":           s["market"],
+                "규모":           s.get("cap_label", "—"),
                 "현재가":         f"{s['price']:,}원" if s["price"] else "—",
                 "등락률":         f"{s['change']:+.2f}%" if s["price"] else "—",
-                "시가총액":       f"{s['cap']:,.0f}억" if s.get("cap") else "—",
+                "거래량급증":     vr_str,
                 "숨비 점수":      s["total"],
                 "수급 점수":      s["inv_score"],
                 "차트 점수":      s["pb_score"],
@@ -2359,13 +2468,19 @@ def ui_stealth_mode(scored: list[dict]):
             else ("💪 수급강" if s["inv_score"] >= 30 else "📈 수급+")
         )
 
+        vr      = s.get("vol_ratio", 1.0)
+        vr_str  = f"{vr:.1f}x" if vr >= 1.0 else "—"
+        tr_pct  = s.get("turnover_pct", 0.0)
+        tr_str  = f"{tr_pct:.1f}%" if tr_pct > 0 else "—"
         rows.append({
             "순위":           i,
             "종목명":         s["name"],
             "코드":           s["ticker"],
-            "시장":           s["market"],
+            "규모":           s.get("cap_label", "—"),
             "현재가":         f"{price:,}원" if price else "—",
             "등락률":         f"{chg:+.2f}%",
+            "거래량급증":     vr_str,
+            "회전율":         tr_str,
             "세력 매집 강도": s["inv_score"],
             "RSI":            round(rsi, 1),
             "눌림목 이격도":  dev_str,
@@ -2395,7 +2510,9 @@ def ui_stealth_mode(scored: list[dict]):
         '<p style="color:#6b7c93;font-size:0.75rem;margin:8px 0 0;">'
         "🔥 쌍끌이 = 기관·외인 당일 동시 순매수 &nbsp;·&nbsp; "
         "💪 수급강 = 수급 25~39점 &nbsp;·&nbsp; "
-        "눌림목 이격도 음수 = MA20 아래 눌림 = 최적 진입 타이밍 &nbsp;·&nbsp; "
+        "거래량급증 = 당일/20일평균 배수 (3x+ 세력 입질 경보) &nbsp;·&nbsp; "
+        "회전율 = 시총 대비 거래대금 % (10%+ 소형주 폭발 경보) &nbsp;·&nbsp; "
+        "규모 소형 + 거래량급증 + 수급+ = 숨은 진주 &nbsp;·&nbsp; "
         "표의 행 클릭 → 하단 정밀 해부 즉시 실행</p>",
         unsafe_allow_html=True,
     )
@@ -3862,7 +3979,7 @@ button[data-baseweb="tab"][aria-selected="true"] p { color: #D4AF37 !important; 
         '<h2 style="color:#D4AF37;font-size:22px;font-weight:700;'
         'letter-spacing:.05em;margin:4px 0 2px;">투자 지표 정밀 분석 Top 15</h2>'
         '<p style="color:#A0AEC0;font-size:0.82rem;margin:2px 0 8px;">'
-        "거래대금 상위 200종목 자동 스캔 &nbsp;|&nbsp; "
+        "Volume Anomaly 상위 200종목 자동 스캔 (거래량 급증·시총 대비 회전율 이상 포착) &nbsp;|&nbsp; "
         "<strong style='color:#FF5050;'>🔥 주도주/돌파</strong> → 총점 최강 종목 &nbsp;|&nbsp; "
         "<strong style='color:#D4AF37;'>💎 눌림목/스텔스</strong> → 세력 매집 중 + 아직 안 오른 바닥 종목</p>",
         unsafe_allow_html=True,
@@ -3871,7 +3988,10 @@ button[data-baseweb="tab"][aria-selected="true"] p { color: #D4AF37 !important; 
     with st.spinner("데이터 동기화 중 — 전종목 세력 수급 역추적 파이프라인 가동 중 (최대 60초)…"):
         candidates = get_top_volume_tickers()
         if candidates:
-            candidate_tuples = tuple((c["code"], c["name"], c["market"]) for c in candidates)
+            candidate_tuples = tuple(
+                (c["code"], c["name"], c["market"], c.get("turnover_pct", 0.0))
+                for c in candidates
+            )
             scored = _scan_top_cached(candidate_tuples)
         else:
             scored = []
