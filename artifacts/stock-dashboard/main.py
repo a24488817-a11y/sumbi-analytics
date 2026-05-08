@@ -631,7 +631,7 @@ def calc_pullback_score(close: pd.Series, vol: pd.Series) -> dict:
 # 10. 42대 필살기 점수 계산
 # ─────────────────────────────────────────────────────────────────────────────
 def score_investor(inv: list[dict]) -> dict:
-    """수급 점수 30점 — 기관 연속 매수 + 외국인 누적."""
+    """수급 점수 30점 — 기관 연속 매수 + 외국인 누적 + 당일 쌍끌이 가중치."""
     if not inv:
         return {"score": 0, "detail": "수급 데이터 없음",
                 "inst_5d": 0, "frgn_5d": 0, "streak": 0}
@@ -655,11 +655,17 @@ def score_investor(inv: list[dict]) -> dict:
     elif inst_5d > 300_000:   score += 3
     elif inst_5d > 0:         score += 1
 
+    details = []
+
+    # 🔥 [핵심 필살기] 당일 쌍끌이 매수 확인 (inv[0]이 가장 최근 날짜)
+    if inst_vals[0] > 0 and frgn_vals[0] > 0:
+        score += 15  # 쌍끌이 발생 시 누적 음수여도 강력한 보정치 부여
+        details.append("🔥당일 쌍끌이 대량 매집 (+15점)🔥")
+
     score = max(0, min(score, 30))
 
-    details = []
     if streak >= 2:           details.append(f"기관 {streak}일 연속 매수")
-    if frgn_5d > 100_000:    details.append(f"외국인 순매수 {frgn_5d:+,}")
+    if frgn_5d > 100_000:     details.append(f"외국인 순매수 {frgn_5d:+,}")
     if not details:           details.append(f"기관 {inst_5d:+,} / 외국인 {frgn_5d:+,}")
 
     return {"score": score, "detail": " | ".join(details),
@@ -1084,45 +1090,34 @@ def ui_top15_tabs(scored: list[dict]):
     )
 
     def _show(df: pd.DataFrame, tab_key: str):
-        """데이터프레임 행 선택(on_select) → 단일 종목 정밀 해부 자동 연동."""
+        """데이터프레임 행 선택(on_select) → 단일 종목 정밀 해부 100% 동기화."""
         if df.empty:
             st.info("데이터 동기화 중 — 잠시 후 재시도하세요.")
             return
 
-        # ── 즉시 매수 최우선 강제 정렬 (사용자 지정 로직) ──────────────────
-        df = df.copy()
-        df["Sort_Score"] = df["차트 신호"].apply(
+        # ── 즉시 매수 최우선 강제 정렬 ──────────────────
+        display_df = df.copy()
+        display_df["Sort_Score"] = display_df["차트 신호"].apply(
             lambda x: 3 if "HIGH" in str(x) else (2 if "MID" in str(x) else 1)
         )
-        df = df.sort_values(by=["Sort_Score", "숨비 점수"], ascending=[False, False])
-        df = df.drop(columns=["Sort_Score"])
-        df["순위"] = range(1, len(df) + 1)
-        df = df.reset_index(drop=True)
-        # ────────────────────────────────────────────────────────────────────
+        display_df = display_df.sort_values(by=["Sort_Score", "숨비 점수"], ascending=[False, False]).drop(columns=["Sort_Score"])
 
+        # 데이터프레임 출력 및 선택 이벤트 감지
         event = st.dataframe(
-            df, use_container_width=True, hide_index=True,
-            on_select="rerun", selection_mode="single-row",
+            display_df,
+            use_container_width=True,
+            hide_index=True,
             column_config={"숨비 점수": _prog_col},
-            key=f"df_{tab_key}",
+            selection_mode="single-row",
+            on_select="rerun",
+            key=f"df_select_{tab_key}"
         )
-        sel = getattr(event, "selection", None)
-        if sel and sel.rows:
-            idx          = sel.rows[0]
-            clicked_code = df.iloc[idx]["코드"]
-            clicked_name = df.iloc[idx]["종목명"]
-            # 무한루프 방지: 동일 종목 연속 rerun 차단
-            if st.session_state.get("_sel_code") != clicked_code:
-                st.session_state["_sel_code"]    = clicked_code
-                st.session_state["search_query"] = clicked_code
-                st.session_state["auto_analyze"] = True
-                st.rerun()
-            else:
-                st.markdown(
-                    f'<p style="color:#D4AF37;font-size:0.82rem;margin:4px 0;">'
-                    f'⚡ <strong>{clicked_name}</strong> ({clicked_code}) 선택됨 — 하단 정밀 해부 확인 ▼</p>',
-                    unsafe_allow_html=True,
-                )
+
+        # 1% 오차 없는 세션 동기화 (선택한 행의 '코드'를 추출하여 세션에 강제 저장)
+        if event and len(event.selection.rows) > 0:
+            selected_idx = event.selection.rows[0]
+            # 화면에 정렬된 순서 그대로 종목 코드를 정확히 짚어냄
+            st.session_state.selected_stock_code = display_df.iloc[selected_idx]["코드"]
 
     # ── 대형주: FDR Marcap 기준 시총 5,000억+ (200종목 풀에서 필터) ──────
     large = sorted(
@@ -2072,6 +2067,23 @@ button[data-baseweb="tab"][aria-selected="true"] p { color: #D4AF37 !important; 
         else:
             mkt_label = "🔴 장 마감"
         st.markdown(f"**KRX 시장**: {mkt_label}")
+        if is_holiday:
+            _KOR_WEEKDAY = ["월", "화", "수", "목", "금", "토", "일"]
+            _candidate = now_kst.date() + timedelta(days=1)
+            _next_yr_hols: dict[str, str] = {}
+            while True:
+                _c_str = _candidate.strftime("%Y-%m-%d")
+                if _candidate.year != now_kst.year:
+                    if not _next_yr_hols:
+                        _next_yr_hols, _ = _get_krx_holidays(_candidate.year)
+                    _all_hols = _next_yr_hols
+                else:
+                    _all_hols = holidays
+                if _candidate.weekday() < 5 and _c_str not in _all_hols:
+                    break
+                _candidate += timedelta(days=1)
+            _next_day_label = f"{_candidate.strftime('%Y-%m-%d')} ({_KOR_WEEKDAY[_candidate.weekday()]})"
+            st.markdown(f"**다음 거래일**: {_next_day_label}")
         if hol_fallback:
             if not holidays:
                 st.warning(
@@ -2210,6 +2222,12 @@ button[data-baseweb="tab"][aria-selected="true"] p { color: #D4AF37 !important; 
 
     # 클릭-투-애널라이즈: Top15 행 클릭 시 자동 트리거
     auto_go = bool(st.session_state.pop("auto_analyze", False))
+
+    # 새 _show 방식: selected_stock_code → search_query 자동 주입
+    _clicked_code = st.session_state.pop("selected_stock_code", None)
+    if _clicked_code:
+        query   = _clicked_code
+        auto_go = True
 
     # ── 검색 → 선택 → 분석 ───────────────────────────────────────────────────
     if query:
