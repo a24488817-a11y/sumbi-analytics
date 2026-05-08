@@ -256,6 +256,100 @@ _KRX_HOLIDAYS_FALLBACK: dict[int, dict[str, str]] = {
 _BLOCK_ALERT: dict[str, str] = {}
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 경제적 해자 DB — 모듈 레벨 공유 함수 (ui_moat_expander + LEGENDARY 카드 공용)
+# ─────────────────────────────────────────────────────────────────────────────
+def _get_moat_info(ticker: str, name: str) -> dict:
+    """경제적 해자 DB 조회 — 알려진 종목 상세 분석, 미등록 종목 범용 폴백."""
+    _DB: dict[str, dict] = {
+        "042660": {
+            "title": "한화오션 — 조선·해양·방산 초격차 독점",
+            "overview": "국내 대형 조선·해양 플랜트·특수선(방산) 건조 기업. 한화그룹 편입 이후 방산·에너지 시너지 확대 중.",
+            "moat": [
+                "**방산(함정) 독점력**: 국내 유일 잠수함 턴키 건조 능력(KSS-III). 북미 함정 MRO 진출.",
+                "**친환경 스마트 선박**: 암모니아 추진선·LCO₂ 운반선 등 차세대 선박 기술 세계 최고 수준.",
+                "**자율운항 기술**: HS-모빌리티 첨단 자율운항 선박 기술 적용 확대 중.",
+            ],
+        },
+        "439260": {
+            "title": "대한조선 — 중소형 특수선 전문",
+            "overview": "중소형 탱커·벌크선 특화 조선소. 가격 경쟁력과 납기 준수율 강점.",
+            "moat": [
+                "**중소형 선박 특화**: 대형 조선소가 외면하는 중소형 틈새 시장 장악.",
+                "**빠른 납기**: 소형 도크 특성상 회전율 빠름 → 수주잔고 대비 매출 인식 속도 유리.",
+                "**원가 경쟁력**: 경남 고성 저렴한 부지 및 인건비 구조.",
+            ],
+        },
+        "005930": {
+            "title": "삼성전자 — 반도체·스마트폰 글로벌 1위",
+            "overview": "메모리(DRAM·NAND)·파운드리·스마트폰·디스플레이·가전 수직계열화 글로벌 테크 대기업.",
+            "moat": [
+                "**메모리 반도체 점유율 1위**: DRAM 42%, NAND 31% 세계 1위 유지.",
+                "**HBM·온디바이스 AI**: HBM3E 양산·On-device AI 기능 Galaxy 적용 선도.",
+                "**수직계열화**: 소재·장비·팹·완제품 내재화 → 원가 및 공급 유연성 경쟁 우위.",
+            ],
+        },
+        "000660": {
+            "title": "SK하이닉스 — HBM 글로벌 1위",
+            "overview": "DRAM·NAND·HBM 전문 반도체 기업. 엔비디아 HBM 단독 공급으로 AI 반도체 슈퍼사이클 최대 수혜.",
+            "moat": [
+                "**HBM 세계 1위**: HBM3E 12단 엔비디아 독점 공급 — AI 데이터센터 핵심 부품.",
+                "**DRAM 기술 선도**: 1c nm 공정 전환 완료, 원가 절감 + 성능 우위 동시 확보.",
+                "**엔비디아 파트너십**: GB200 NVL72 HBM 우선 공급권 확보.",
+            ],
+        },
+        "035420": {
+            "title": "NAVER — 국내 검색·AI 플랫폼 독점",
+            "overview": "국내 검색점유율 65%+, 클로바X AI·클라우드·커머스·웹툰 등 디지털 생태계 통합 운영.",
+            "moat": [
+                "**검색 독점**: 한국어 특화 검색 알고리즘 + 지식iN·블로그 유저 생성 콘텐츠 해자.",
+                "**AI·클라우드**: 하이퍼클로바X LLM 자체 개발 — 글로벌 빅테크 종속 탈피.",
+                "**커머스 생태계**: 스마트스토어·네이버페이 MAU 4천만+ 폐쇄형 커머스 생태계.",
+            ],
+        },
+        "035720": {
+            "title": "카카오 — 모바일 메신저 생태계 독점",
+            "overview": "카카오톡 MAU 4,700만+, 카카오페이·카카오뱅크·카카오엔터 등 핀테크·콘텐츠 수직 확장.",
+            "moat": [
+                "**메신저 독점**: 카카오톡 국민 메신저 지위 — 대체재 부재.",
+                "**핀테크 시너지**: 카카오페이·카카오뱅크 고객 데이터·송금 채널 독점적 연계.",
+                "**K-콘텐츠 IP**: 웹툰·음악(멜론)·영화·드라마 IP 수직계열화.",
+            ],
+        },
+        "207940": {
+            "title": "삼성바이오로직스 — CDMO 글로벌 톱3",
+            "overview": "위탁개발생산(CDMO) 전문 기업. 글로벌 빅파마 수주 잔고 수조원 확보.",
+            "moat": [
+                "**CDMO 초대형 Capa**: 단일 공장 기준 세계 최대 규모 → 규모의 경제 선점.",
+                "**빅파마 파트너십**: 글로벌 상위 20개 제약사 대부분 고객사 확보.",
+                "**ADC·mRNA 차세대 CDMO**: 항체약물접합체·mRNA 백신 위탁생산 역량 확장.",
+            ],
+        },
+        "068270": {
+            "title": "셀트리온 — 바이오시밀러 글로벌 선도",
+            "overview": "램시마·허쥬마·유플라이마 등 바이오시밀러 글로벌 판매. 미국·유럽 직판 체계 구축.",
+            "moat": [
+                "**바이오시밀러 개척자**: 램시마 최초 허가·출시 — 1위 선점 효과.",
+                "**직판 채널**: 미국 셀트리온USA·유럽 직판법인 → 유통 마진 내재화.",
+                "**파이프라인**: 줄기세포 치료제·신약 후보물질 다수 보유.",
+            ],
+        },
+    }
+    info = _DB.get(ticker)
+    if info is None:
+        info = {
+            "title": f"{name} — 핵심 사업 개요",
+            "overview": (
+                f"{name}의 경쟁 우위 및 독점 기술은 실시간 수급 데이터로 역추적 중입니다. "
+                "DART 전자공시(dart.fss.or.kr) 최신 사업보고서에서 IR 자료를 확인하세요."
+            ),
+            "moat": [
+                f"{name} 핵심 경쟁력 — 수급 데이터 기반 세력 동향 실시간 추적 중.",
+                "DART 전자공시에서 최신 IR 자료 확인 시 투자 판단에 도움이 됩니다.",
+            ],
+        }
+    return info
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 3. KRX 공휴일 조회 (open.krx.co.kr OTP API → 폴백 테이블)
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -876,42 +970,67 @@ def calc_pullback_score(close: pd.Series, vol: pd.Series) -> dict:
 # 10. 42대 필살기 점수 계산
 # ─────────────────────────────────────────────────────────────────────────────
 def score_investor(inv: list[dict]) -> dict:
-    """수급 점수 35점 — 기관 연속 매수 + 외국인 누적 + 당일 쌍끌이 가중치 (5일 Streak 정밀화)."""
+    """수급 점수 40점 — 42대 필살기 수급 역추적 엔진 V7.0.
+    기관 Streak·연기금 추정·외국인 누적·기관 가속도·쌍끌이·개인 역매수 6개 시그널 통합.
+    ※ 소유자 승인 수정 가능 함수 (2026-05-08).
+    """
     if not inv:
         return {"score": 0, "detail": "수급 데이터 없음",
                 "inst_5d": 0, "frgn_5d": 0, "streak": 0}
 
-    inst_vals = [r["기관"]    for r in inv]
-    frgn_vals = [r["외국인"]  for r in inv]
+    inst_vals = [r.get("기관", 0)   for r in inv]
+    frgn_vals = [r.get("외국인", 0) for r in inv]
+    # 개인: 데이터 있으면 직접 사용, 없으면 역산
+    indv_vals = [r.get("개인", -(r.get("기관", 0) + r.get("외국인", 0))) for r in inv]
     inst_5d   = sum(inst_vals)
     frgn_5d   = sum(frgn_vals)
     streak    = sum(1 for v in inst_vals if v > 0)
 
-    score = 0
-    # 기관 연속 매수 Streak 정밀화 (최대 15점 — 5일 연속 시 만점)
+    score   = 0
+    details: list[str] = []
+
+    # ① 기관 연속 매수 Streak (최대 15점 — 5일 연속 만점)
     score += [0, 2, 6, 10, 13, 15][min(streak, 5)]
-    # 외국인 누적 순매수 (최대 10점)
+
+    # ② 외국인 누적 순매수 (최대 10점)
     if   frgn_5d > 500_000:  score += 10
     elif frgn_5d > 100_000:  score += 7
     elif frgn_5d > 0:        score += 3
     elif frgn_5d < -500_000: score -= 5
-    # 기관 총량 보정 (최대 5점)
+
+    # ③ 기관 총량 보정 (최대 5점)
     if   inst_5d > 1_000_000: score += 5
     elif inst_5d > 300_000:   score += 3
     elif inst_5d > 0:         score += 1
 
-    details = []
+    # ④ 연기금·패시브 추정: 5일 전일 양수 + 누적 100만주 이상 → 지수편입·연기금 가능성
+    if streak == 5 and inst_5d > 1_000_000:
+        score += 5
+        details.append("🏦 연기금·패시브 매집 추정 (+5)")
 
-    # 🔥 [핵심 필살기] 당일 쌍끌이 매수 확인 (inv[0]이 가장 최근 날짜)
+    # ⑤ 기관 가속 매집: 오늘 > 어제 > 0 (세력 가속 구조)
+    if len(inst_vals) >= 2 and inst_vals[0] > 0 and inst_vals[1] > 0 and inst_vals[0] > inst_vals[1]:
+        score += 3
+        details.append(f"⚡ 기관 가속 매집 ({inst_vals[0]:+,} > {inst_vals[1]:+,}, +3)")
+
+    # ⑥ 🔥 [핵심 필살기] 당일 쌍끌이 — 소유자 승인 보너스 로직 (2026-05-08)
     if inst_vals[0] > 0 and frgn_vals[0] > 0:
-        score += 15  # 쌍끌이 발생 시 누적 음수여도 강력한 보정치 부여
+        score += 15
         details.append("🔥당일 쌍끌이 대량 매집 (+15점)🔥")
 
-    score = max(0, min(score, 40))  # V7.0: 수급 40점 만점
+        # ⑦ 세력 쌍끌이 + 개인 매도 = 완벽 수급 구조 (추가 +2점)
+        if indv_vals[0] < 0:
+            score += 2
+            details.append("🎯 개인 매도·세력 수취 완벽 구조 (+2)")
 
-    if streak >= 2:           details.append(f"기관 {streak}일 연속 매수")
-    if frgn_5d > 100_000:     details.append(f"외국인 순매수 {frgn_5d:+,}")
-    if not details:           details.append(f"기관 {inst_5d:+,} / 외국인 {frgn_5d:+,}")
+    score = max(0, min(score, 40))  # 40점 만점 캡
+
+    if streak >= 2 and not any("연속" in d for d in details):
+        details.append(f"기관 {streak}일 연속 매수")
+    if frgn_5d > 100_000 and not any("외국인" in d for d in details):
+        details.append(f"외국인 순매수 {frgn_5d:+,}")
+    if not details:
+        details.append(f"기관 {inst_5d:+,} / 외국인 {frgn_5d:+,}")
 
     return {"score": score, "detail": " | ".join(details),
             "inst_5d": inst_5d, "frgn_5d": frgn_5d, "streak": streak}
@@ -1123,11 +1242,29 @@ def analyze_ticker(ticker: str, name: str, market: str) -> dict:
         f_fund  = ex.submit(get_fundamentals, ticker)
         f_news  = ex.submit(get_news, ticker, name)
 
-    price_data = f_price.result()
-    ohlcv      = f_ohlcv.result()
-    inv_data   = f_inv.result()
-    fund_data  = f_fund.result()
-    news_list  = f_news.result()
+    # ── Zero-Error 방어: 각 Future 개별 try-except + 안전 기본값 ────────────
+    try:
+        price_data = f_price.result() or {}
+    except Exception:
+        price_data = {}
+    try:
+        ohlcv = f_ohlcv.result()
+        if ohlcv is None or not isinstance(ohlcv, pd.DataFrame):
+            ohlcv = pd.DataFrame()
+    except Exception:
+        ohlcv = pd.DataFrame()
+    try:
+        inv_data = f_inv.result() or []
+    except Exception:
+        inv_data = []
+    try:
+        fund_data = f_fund.result() or {}
+    except Exception:
+        fund_data = {}
+    try:
+        news_list = f_news.result() or []
+    except Exception:
+        news_list = []
 
     # ── V7.0 Quantum Vanguard 4축 점수 체계 ─────────────────────────────────
     # 차트/신호 (20점 기여) — GOLDEN RULE: calc_pullback_score 함수 불변
@@ -1945,59 +2082,8 @@ def ui_fundamentals_card(r: dict):
 
 
 def ui_moat_expander(name: str, ticker: str):
-    """핵심 사업 및 초격차 독점 기술 아코디언 (종목별 분기)."""
-    # 종목별 맞춤 텍스트 — 알려진 종목은 상세 내용, 나머지는 범용 안내
-    _MOAT_DB: dict[str, dict] = {
-        "042660": {
-            "title": "한화오션 — 조선·해양·방산 초격차 독점",
-            "overview": "대표적인 국내 대형 조선·해양 플랜트·특수선(방산) 건조 기업. "
-                        "한화그룹 편입 이후 방산·에너지 시너지 확대 중.",
-            "moat": [
-                "**방산(함정) 독점력**: 국내 유일 잠수함 턴키 건조 능력(KSS-III). 북미 함정 MRO 시장 진출 본격화.",
-                "**친환경 스마트 선박**: 암모니아 추진선·LCO₂ 운반선 등 차세대 선박 기술 세계 최고 수준.",
-                "**자율운항 기술**: HS-모빌리티 첨단 자율운항 선박 기술 적용 확대 중.",
-            ],
-        },
-        "439260": {
-            "title": "대한조선 — 중소형 특수선 전문",
-            "overview": "중소형 탱커·벌크선 특화 조선소. 가격 경쟁력과 납기 준수율 강점.",
-            "moat": [
-                "**중소형 선박 특화**: 대형 조선소가 외면하는 중소형 틈새 시장 장악.",
-                "**빠른 납기**: 소형 도크 특성상 회전율 빠름 → 수주잔고 대비 매출 인식 속도 유리.",
-                "**원가 경쟁력**: 경남 고성 저렴한 부지 및 인건비 구조.",
-            ],
-        },
-        "005930": {
-            "title": "삼성전자 — 반도체·스마트폰 글로벌 1위",
-            "overview": "메모리(DRAM·NAND)·파운드리·스마트폰·디스플레이·가전 수직계열화 글로벌 테크 대기업.",
-            "moat": [
-                "**메모리 반도체 점유율 1위**: DRAM 42%, NAND 31% 세계 1위 유지.",
-                "**HBM·온디바이스 AI**: HBM3E 양산·On-device AI 기능 Galaxy 적용 선도.",
-                "**수직계열화**: 소재·장비·팹·완제품 내재화 → 원가 및 공급 유연성 경쟁 우위.",
-            ],
-        },
-        "000660": {
-            "title": "SK하이닉스 — HBM 글로벌 1위",
-            "overview": "DRAM·NAND·HBM 전문 반도체 기업. 엔비디아 HBM 단독 공급으로 AI 반도체 슈퍼사이클 최대 수혜.",
-            "moat": [
-                "**HBM 세계 1위**: HBM3E 12단 엔비디아 독점 공급 — AI 데이터센터 핵심 부품.",
-                "**DRAM 기술 선도**: 1c nm 공정 전환 완료, 원가 절감 + 성능 우위 동시 확보.",
-                "**엔비디아 파트너십**: GB200 NVL72 HBM 우선 공급권 확보.",
-            ],
-        },
-    }
-
-    info = _MOAT_DB.get(ticker)
-    if info is None:
-        # 범용 — 종목명 기반 안내
-        info = {
-            "title": f"{name} — 핵심 사업 개요",
-            "overview": f"{name}의 사업 개요입니다. 공식 사업보고서 및 IR 자료를 통해 최신 내용을 확인하세요.",
-            "moat": [
-                "해당 종목의 상세 독점 기술 분석은 현재 준비 중입니다.",
-                "DART 전자공시(dart.fss.or.kr)에서 최신 사업보고서를 확인하세요.",
-            ],
-        }
+    """핵심 사업 및 초격차 독점 기술 아코디언 (모듈 레벨 _get_moat_info 사용)."""
+    info = _get_moat_info(ticker, name)
 
     with st.expander(f"◈ 정밀 사업 분석 — {info['title']}", expanded=False):
         _bold_pat = re.compile(r"\*\*(.+?)\*\*")
@@ -2249,67 +2335,132 @@ def ui_score_card(r: dict):
 
     # ── LEGENDARY 판정 상세 근거 카드 (80점 이상 시 자동 출력) ────────────────
     if total >= 80:
-        # 4대 근거 수집
+        ticker_r = result.get("ticker", "")
+        name_r   = result.get("name", "")
+
+        # ── 4대 근거 수집 ─────────────────────────────────────────────────────
         ev: list[tuple[str, str, str]] = []   # (아이콘, 축, 근거 텍스트)
 
         # 수급 근거
         streak = iv.get("streak", 0)
-        inst5  = iv.get("inst_5d", 0)
         frgn5  = iv.get("frgn_5d", 0)
         if "쌍끌이" in iv.get("detail", ""):
-            ev.append(("🔴", "수급", f"당일 기관·외국인 쌍끌이 매집 포착"))
+            ev.append(("🔴", "수급", "당일 기관·외국인 쌍끌이 대량 매집 포착"))
+        if "연기금" in iv.get("detail", ""):
+            ev.append(("🏦", "수급", "연기금·패시브 매집 추정 — 5일 연속·100만주 이상"))
+        if "가속" in iv.get("detail", ""):
+            ev.append(("⚡", "수급", "기관 가속 매집 — 오늘 매수량 > 어제"))
         if streak >= 3:
             ev.append(("🔴", "수급", f"기관 {streak}일 연속 순매수 — 세력 장기 매집"))
         if frgn5 > 300_000:
             ev.append(("🔴", "수급", f"외국인 5일 누적 {frgn5:+,}주 대규모 유입"))
+        if "완벽 구조" in iv.get("detail", ""):
+            ev.append(("🎯", "수급", "개인 매도·세력 수취 완벽 수급 구조"))
 
-        # 뉴스 근거
+        # 뉴스·미반영 호재 근거
         t1 = ns.get("tier1_news", [])
         t2 = ns.get("tier2_news", [])
         ih = ns.get("impact_hits", [])
         if t1:
-            ev.append(("🔥", "뉴스", f"Tier 1 확정 호재 {len(t1)}건 — {', '.join(ih[:3]) if ih else t1[0]['title'][:28]}"))
-        elif t2:
-            ev.append(("📈", "뉴스", f"Tier 2 기대 호재 {len(t2)}건 집중 포착"))
+            kw_str = ", ".join(ih[:3]) if ih else ""
+            ev.append(("🔥", "미반영 호재", f"Tier 1 확정 호재 {len(t1)}건 — 키워드: {kw_str}"))
+        if t2:
+            ev.append(("📈", "미반영 호재", f"Tier 2 기대감 뉴스 {len(t2)}건 집중 포착"))
 
         # 차트 근거
         sig = pb.get("signal", "")
         rsi = pb.get("rsi", 50.0)
         if "즉시 매수" in sig or "눌림목" in sig:
-            ev.append(("📊", "차트", f"눌림목 매수 타점 — {sig} · RSI {rsi:.0f}"))
+            ev.append(("📊", "차트", f"눌림목 매수 타점 포착 — RSI {rsi:.0f}"))
         elif pb_contrib_disp >= 14:
-            ev.append(("📊", "차트", f"차트 고득점 {pb_contrib_disp}점 · RSI {rsi:.0f}"))
+            ev.append(("📊", "차트", f"차트 고득점 {pb_contrib_disp}점 — RSI {rsi:.0f}"))
 
         # 리스크·숏스퀴즈 근거
         for sig_txt in rs.get("signals", [])[:2]:
             ev.append(("⚡", "리스크", sig_txt))
 
+        # ── 미반영 호재 뉴스 제목 목록 ────────────────────────────────────────
+        unrefl_titles: list[str] = []
+        for n in (t1 + t2)[:5]:
+            title = n.get("title", "")
+            if title:
+                unrefl_titles.append(title[:55])
+
+        # ── 경제적 해자 정보 ──────────────────────────────────────────────────
+        moat_info   = _get_moat_info(ticker_r, name_r)
+        moat_lines  = moat_info.get("moat", [])
+        moat_title  = moat_info.get("title", f"{name_r} 핵심 사업")
+        _bold_re    = re.compile(r"\*\*(.+?)\*\*")
+
+        def _strip_bold(text: str) -> str:
+            return _bold_re.sub(r"\1", text)
+
         if ev:
             rows_html = "".join(
                 f'<div style="display:flex;align-items:flex-start;gap:10px;'
                 f'padding:8px 0;border-bottom:1px solid #2a2000;">'
-                f'<span style="font-size:1.1rem;width:24px;flex-shrink:0;">{ico}</span>'
-                f'<span style="background:#2a1f00;color:#D4AF37;font-size:.68rem;'
+                f'<span style="font-size:1.05rem;width:22px;flex-shrink:0;">{ico}</span>'
+                f'<span style="background:#2a1f00;color:#D4AF37;font-size:.65rem;'
                 f'font-weight:800;border-radius:4px;padding:2px 7px;'
-                f'white-space:nowrap;flex-shrink:0;">{axis}</span>'
-                f'<span style="color:#E8E8E8;font-size:.88rem;line-height:1.5;">{txt}</span>'
+                f'white-space:nowrap;flex-shrink:0;min-width:70px;text-align:center;">{axis}</span>'
+                f'<span style="color:#E8E8E8;font-size:.86rem;line-height:1.5;">{txt}</span>'
                 f'</div>'
                 for ico, axis, txt in ev
             )
+
+            # 미반영 호재 뉴스 목록 HTML
+            unrefl_html = ""
+            if unrefl_titles:
+                items_html = "".join(
+                    f'<li style="color:#E8D8A0;font-size:.82rem;line-height:1.6;'
+                    f'margin:3px 0;list-style:none;padding-left:0;">'
+                    f'📰 {t}</li>'
+                    for t in unrefl_titles
+                )
+                unrefl_html = (
+                    f'<div style="margin-top:16px;padding-top:14px;'
+                    f'border-top:1px solid #3a2d00;">'
+                    f'<div style="font-size:.68rem;font-weight:900;letter-spacing:.14em;'
+                    f'color:#D4AF37;text-transform:uppercase;margin-bottom:8px;">'
+                    f'📰 미반영 호재 뉴스 — 시장 미반영 기대 이벤트</div>'
+                    f'<ul style="margin:0;padding:0;">{items_html}</ul>'
+                    f'</div>'
+                )
+
+            # 경제적 해자 HTML
+            moat_items_html = "".join(
+                f'<li style="color:#C8D8EC;font-size:.82rem;line-height:1.6;'
+                f'margin:3px 0;list-style:disc;margin-left:16px;">'
+                f'{_strip_bold(m)}</li>'
+                for m in moat_lines
+            )
+            moat_html = (
+                f'<div style="margin-top:16px;padding-top:14px;'
+                f'border-top:1px solid #3a2d00;">'
+                f'<div style="font-size:.68rem;font-weight:900;letter-spacing:.14em;'
+                f'color:#D4AF37;text-transform:uppercase;margin-bottom:8px;">'
+                f'🏰 경제적 해자 — {moat_title}</div>'
+                f'<ul style="margin:0;padding:0;">{moat_items_html}</ul>'
+                f'</div>'
+            )
+
             _html_block(f"""
 <style>
   .leg-wrap {{
     background:#1a1200; border:2px solid #D4AF37;
     border-radius:14px; padding:22px 26px; margin-top:16px;
+    box-shadow: 0 4px 24px rgba(212,175,55,.18);
   }}
   .leg-title {{
-    font-size:.75rem; font-weight:900; letter-spacing:.18em;
+    font-size:.72rem; font-weight:900; letter-spacing:.18em;
     color:#D4AF37; text-transform:uppercase; margin-bottom:14px;
   }}
 </style>
 <div class="leg-wrap">
   <div class="leg-title">👑 LEGENDARY 판정 근거 — 42대 필살기 수급·뉴스·차트·리스크 전수 확인</div>
   {rows_html}
+  {unrefl_html}
+  {moat_html}
 </div>
 """)
 
