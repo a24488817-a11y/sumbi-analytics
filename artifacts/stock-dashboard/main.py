@@ -1850,7 +1850,7 @@ _ETF_ETN_KW = (
 @st.cache_data(ttl=300, show_spinner=False)
 def get_top_volume_tickers() -> list[dict]:
     """
-    Volume Anomaly 상위 200종목 — Naver sise_quant 3페이지 확장 수집.
+    Volume Anomaly 상위 500종목 — Naver sise_quant 5페이지 확장 수집.
 
     [이상 거래 징후 Composite Score]
     기준 A (회전율): 거래대금(백만) / 시가총액(억) → % (시총 대비 얼마나 돌았나)
@@ -1864,7 +1864,7 @@ def get_top_volume_tickers() -> list[dict]:
         pool: list[dict] = []
         seen: set[str] = set()
 
-        for page in range(1, 4):   # 3페이지 ≈ 시장당 150~300 후보 수집
+        for page in range(1, 6):   # 5페이지 ≈ 시장당 400~500 후보 수집
             try:
                 url  = (f"https://finance.naver.com/sise/sise_quant.naver"
                         f"?sosok={sosok}&page={page}")
@@ -1937,7 +1937,7 @@ def get_top_volume_tickers() -> list[dict]:
             r["anomaly_score"] = norm_tr * 0.6 + norm_tv * 0.4   # 회전율 가중
 
         pool.sort(key=lambda x: x["anomaly_score"], reverse=True)
-        candidates.extend(pool[:100])   # 시장별 상위 100종목 = 전체 200종목
+        candidates.extend(pool[:250])   # 시장별 상위 250종목 = 전체 500종목
 
     return candidates
 
@@ -2273,18 +2273,26 @@ def ui_top15_tabs(scored: list[dict]):
         "숨비 점수", min_value=0, max_value=100, format="%d점"
     )
 
-    def _show(df: pd.DataFrame, tab_key: str):
-        """데이터프레임 행 선택(on_select) → 단일 종목 정밀 해부 100% 동기화."""
+    def _show(df: pd.DataFrame, tab_key: str, sort_mode: str = "total"):
+        """데이터프레임 행 선택(on_select) → 단일 종목 정밀 해부 100% 동기화.
+        sort_mode:
+          'total'  — 주도주 모드: 숨비 점수(총점) 내림차순
+          'ma_dev' — 스텔스 모드: MA20 이격도 오름차순 (이격도 컬럼이 없으면 total로 fallback)
+        """
         if df.empty:
             st.info("데이터 동기화 중 — 잠시 후 재시도하세요.")
             return
 
-        # ── 즉시 매수 최우선 강제 정렬 ──────────────────
         display_df = df.copy()
-        display_df["Sort_Score"] = display_df["차트 신호"].apply(
-            lambda x: 3 if "HIGH" in str(x) else (2 if "MID" in str(x) else 1)
-        )
-        display_df = display_df.sort_values(by=["Sort_Score", "숨비 점수"], ascending=[False, False]).drop(columns=["Sort_Score"])
+
+        if sort_mode == "total":
+            # 주도주 모드: 숨비 점수 내림차순 정렬
+            display_df = display_df.sort_values(by="숨비 점수", ascending=False)
+        # (스텔스 모드는 _to_df 호출 전 이미 정렬 완료 → 현 순서 유지)
+
+        # 정렬 후 순위 1, 2, 3… 재부여 (핵심)
+        display_df = display_df.reset_index(drop=True)
+        display_df["순위"] = range(1, len(display_df) + 1)
 
         # 데이터프레임 출력 및 선택 이벤트 감지
         event = st.dataframe(
@@ -2300,23 +2308,16 @@ def ui_top15_tabs(scored: list[dict]):
         # 1% 오차 없는 세션 동기화 (선택한 행의 '코드'를 추출하여 세션에 강제 저장)
         if event and len(event.selection.rows) > 0:
             selected_idx = event.selection.rows[0]
-            # 화면에 정렬된 순서 그대로 종목 코드를 정확히 짚어냄
             st.session_state.selected_stock_code = display_df.iloc[selected_idx]["코드"]
 
-    # ── 대형주: FDR Marcap 기준 시총 5,000억+ (200종목 풀에서 필터) ──────
+    # ── 대형주: 시가총액 5,000억+ 엄격 적용 (주가 기준 혼용 금지) ───────────
     large = sorted(
         [s for s in scored if s.get("cap", 0) >= 5_000],
-        key=lambda x: x.get("cap", 0), reverse=True,
+        key=lambda x: x["total"], reverse=True,   # 총점 내림차순 정렬
     )
-    if len(large) < 5:
-        large = sorted(
-            [s for s in scored if s.get("cap", 0) > 0],
-            key=lambda x: x.get("cap", 0), reverse=True,
-        )
-    if not large:
-        large = [s for s in scored if s["market"] == "KOSPI"] or list(scored)
+    # fallback 없음 — 필터 누수 방지: 5,000억 미만은 대형주 탭 진입 불가
 
-    # ── 우량주: 숨비 45점+ AND (수급 15+ OR 차트 15+) ────────────────────
+    # ── 우량주: 숨비 45점+ AND (수급 12+ OR 차트 12+) ────────────────────
     qual = sorted(
         [s for s in scored if s["total"] >= 45
          and (s["pb_score"] >= 12 or s["inv_score"] >= 12)],
@@ -2330,38 +2331,35 @@ def ui_top15_tabs(scored: list[dict]):
     if not qual:
         qual = sorted(scored, key=lambda x: x["pb_score"] + x["inv_score"], reverse=True)
 
-    # ── 소형주: 현재가 10,000원 이하, 대형주 탭과 중복 배제 ──────────────
-    large_codes = {s["ticker"] for s in large[:15]}
-    penny = sorted(
-        [s for s in scored if 0 < s["price"] < 10_000 and s["ticker"] not in large_codes],
+    # ── 소형/중형주: 시가총액 5,000억 미만 엄격 적용 (주가 기준 혼용 금지) ──
+    small_mid = sorted(
+        [s for s in scored if 0 < s.get("cap", 0) < 5_000],
         key=lambda x: x["total"], reverse=True,
     )
-    if len(penny) < 5:
-        penny = sorted(
-            [s for s in scored if s["price"] > 0 and s["ticker"] not in large_codes],
-            key=lambda x: x["price"],
+    if not small_mid:
+        small_mid = sorted(
+            [s for s in scored if s["total"] > 0],
+            key=lambda x: x["total"], reverse=True,
         )
-    if not penny:
-        penny = sorted([s for s in scored if s["price"] > 0], key=lambda x: x["price"])
 
     tab1, tab2, tab3, tab4 = st.tabs([
         "🏆 전체 Top 15",
         "🏢 대형주 (시총 5,000억+)",
         "💎 우량주 (숨비 45점+)",
-        "🪙 소형주 (~10,000원)",
+        "🪙 소형/중형주 (시총 5,000억 미만)",
     ])
-    with tab1: _show(_to_df(scored),  "all")
-    with tab2: _show(_to_df(large),   "large")
-    with tab3: _show(_to_df(qual),    "qual")
-    with tab4: _show(_to_df(penny),   "penny")
+    with tab1: _show(_to_df(scored),    "all",   sort_mode="total")
+    with tab2: _show(_to_df(large),     "large", sort_mode="total")
+    with tab3: _show(_to_df(qual),      "qual",  sort_mode="total")
+    with tab4: _show(_to_df(small_mid), "penny", sort_mode="total")
 
 
 def ui_stealth_mode(scored: list[dict]):
     """💎 눌림목/스텔스 모드 — Rule 2 Kill Switch 하드 필터링.
 
     [3 AND 조건 동시 충족 — 단 하나라도 미충족 시 drop()]
-    ① 가격 억제 : 등락률 ≤ +1.5%  (급등주 물리적 차단)
-    ② 과열 방지 : RSI ≤ 60        (정상 눌림목까지 포착, 과매수 구간만 배제)
+    ① 가격 억제 : 등락률 ≤ +3.0%  (양봉 턴어라운드 허용, 급등주만 차단)
+    ② 과열 방지 : RSI ≤ 65        (눌림목 + 초기 반등 포착, 과매수 구간만 배제)
     ③ 수급 다이버전스: 수급 15점 이상 OR 기관+외인 쌍끌이
        (주가↓·보합이지만 세력은 매수 = 진짜 바닥 매집 포착)
     정렬: MA20 이격도 음수 우선, 0에 가장 가까운 순 (최적 눌림목 진입 타이밍 순)
@@ -2374,8 +2372,8 @@ def ui_stealth_mode(scored: list[dict]):
         rsi    = float(s.get("rsi", 50.0))
         inv_ok = s.get("is_ssankkl") or s["inv_score"] >= 15
 
-        if chg > 1.5:   continue   # ① 급등주 차단 (등락률 +1.5% 초과 즉시 drop) — 절대 유지
-        if rsi > 60:    continue   # ② 과열 배제 (RSI 60 초과 즉시 drop) — 정상 눌림목까지 포착
+        if chg > 3.0:   continue   # ① 급등주 차단 (등락률 +3.0% 초과 즉시 drop) — 양봉 턴어라운드 허용
+        if rsi > 65:    continue   # ② 과열 배제 (RSI 65 초과 즉시 drop) — 초기 반등 포착
         if not inv_ok:  continue   # ③ 수급 다이버전스 없음 즉시 drop
 
         passed.append(s)
@@ -2421,7 +2419,7 @@ def ui_stealth_mode(scored: list[dict]):
     → 상위 <strong>{min(n_passed, 15)}</strong>종목 표출
   </div>
   <div class="sm-rule">
-    Kill Switch: ① 등락률 ≤ +1.5% &amp; ② RSI ≤ 60 &amp;
+    Kill Switch: ① 등락률 ≤ +3.0% &amp; ② RSI ≤ 65 &amp;
     ③ 수급 15점+ 또는 쌍끌이 (3개 AND 충족 필수) &nbsp;|&nbsp;
     정렬: MA20 이격도 음수 우선·0 근접 순
   </div>
@@ -2512,7 +2510,7 @@ def ui_stealth_mode(scored: list[dict]):
         "💪 수급강 = 수급 25~39점 &nbsp;·&nbsp; "
         "거래량급증 = 당일/20일평균 배수 (3x+ 세력 입질 경보) &nbsp;·&nbsp; "
         "회전율 = 시총 대비 거래대금 % (10%+ 소형주 폭발 경보) &nbsp;·&nbsp; "
-        "규모 소형 + 거래량급증 + 수급+ = 숨은 진주 &nbsp;·&nbsp; "
+        "Kill Switch: 등락률 ≤+3% &amp; RSI ≤65 &amp; 수급15+ (3개 AND) &nbsp;·&nbsp; "
         "표의 행 클릭 → 하단 정밀 해부 즉시 실행</p>",
         unsafe_allow_html=True,
     )
@@ -3979,7 +3977,7 @@ button[data-baseweb="tab"][aria-selected="true"] p { color: #D4AF37 !important; 
         '<h2 style="color:#D4AF37;font-size:22px;font-weight:700;'
         'letter-spacing:.05em;margin:4px 0 2px;">투자 지표 정밀 분석 Top 15</h2>'
         '<p style="color:#A0AEC0;font-size:0.82rem;margin:2px 0 8px;">'
-        "Volume Anomaly 상위 200종목 자동 스캔 (거래량 급증·시총 대비 회전율 이상 포착) &nbsp;|&nbsp; "
+        "Volume Anomaly 상위 500종목 자동 스캔 (KOSPI·KOSDAQ 거래량 급증·시총 대비 회전율 이상 포착) &nbsp;|&nbsp; "
         "<strong style='color:#FF5050;'>🔥 주도주/돌파</strong> → 총점 최강 종목 &nbsp;|&nbsp; "
         "<strong style='color:#D4AF37;'>💎 눌림목/스텔스</strong> → 세력 매집 중 + 아직 안 오른 바닥 종목</p>",
         unsafe_allow_html=True,
