@@ -130,10 +130,15 @@ _GOOD_KW = [
     "수주", "흑자전환", "영업이익", "매출 증가", "실적 개선", "수출", "계약 체결",
     "신약", "허가", "목표주가 상향", "매수", "배당", "자사주 매입",
     "HBM", "LNG", "방산", "K방산", "수주 잔고", "기술 수출", "흑자",
+    # 배거차숏: 배당/밸류업 + 거시쇼크 반전 + 차트심리 + 숏스퀴즈
+    "밸류업", "숏스퀴즈", "주주환원", "자사주 소각", "분기배당", "특별배당",
+    "공매도 환매", "숏커버링", "거시 반등", "금리 인하", "피벗", "저점 돌파",
+    "52주 신고가", "골든크로스", "데드캣 반등", "바닥 확인", "반등 시작",
 ]
 _BAD_KW = [
     "손실", "적자", "하향", "매도", "소송", "검찰", "횡령", "배임",
     "유상증자", "주가 하락", "블록딜", "오버행", "공매도 증가", "실적 악화",
+    "금리 인상", "경기 침체", "파산", "상장폐지", "관리종목",
 ]
 
 
@@ -613,10 +618,10 @@ def calc_pullback_score(close: pd.Series, vol: pd.Series) -> dict:
         if avg10 > 0 and float(vol.iloc[-1]) / avg10 >= 2.0:
             score += 4
 
-    score = min(score, 30)
-    if   score >= 24: sig = "🔴 즉시 매수 (HIGH)"
-    elif score >= 16: sig = "🟡 매수 준비 (MID)"
-    elif score >= 8:  sig = "⚪ 관망 (LOW)"
+    score = min(score, 25)  # V5.0: 차트 25점 만점
+    if   score >= 20: sig = "🔴 즉시 매수 (HIGH)"
+    elif score >= 13: sig = "🟡 매수 준비 (MID)"
+    elif score >= 7:  sig = "⚪ 관망 (LOW)"
     else:             sig = "❌ 진입 불가"
 
     return {
@@ -631,7 +636,7 @@ def calc_pullback_score(close: pd.Series, vol: pd.Series) -> dict:
 # 10. 42대 필살기 점수 계산
 # ─────────────────────────────────────────────────────────────────────────────
 def score_investor(inv: list[dict]) -> dict:
-    """수급 점수 30점 — 기관 연속 매수 + 외국인 누적 + 당일 쌍끌이 가중치."""
+    """수급 점수 35점 — 기관 연속 매수 + 외국인 누적 + 당일 쌍끌이 가중치 (5일 Streak 정밀화)."""
     if not inv:
         return {"score": 0, "detail": "수급 데이터 없음",
                 "inst_5d": 0, "frgn_5d": 0, "streak": 0}
@@ -643,14 +648,14 @@ def score_investor(inv: list[dict]) -> dict:
     streak    = sum(1 for v in inst_vals if v > 0)
 
     score = 0
-    # 기관 연속 매수 (15점)
+    # 기관 연속 매수 Streak 정밀화 (최대 15점 — 5일 연속 시 만점)
     score += [0, 2, 6, 10, 13, 15][min(streak, 5)]
-    # 외국인 누적 (10점)
+    # 외국인 누적 순매수 (최대 10점)
     if   frgn_5d > 500_000:  score += 10
     elif frgn_5d > 100_000:  score += 7
     elif frgn_5d > 0:        score += 3
     elif frgn_5d < -500_000: score -= 5
-    # 기관 총량 보정 (5점)
+    # 기관 총량 보정 (최대 5점)
     if   inst_5d > 1_000_000: score += 5
     elif inst_5d > 300_000:   score += 3
     elif inst_5d > 0:         score += 1
@@ -662,7 +667,7 @@ def score_investor(inv: list[dict]) -> dict:
         score += 15  # 쌍끌이 발생 시 누적 음수여도 강력한 보정치 부여
         details.append("🔥당일 쌍끌이 대량 매집 (+15점)🔥")
 
-    score = max(0, min(score, 30))
+    score = max(0, min(score, 35))  # V5.0: 수급 35점 만점
 
     if streak >= 2:           details.append(f"기관 {streak}일 연속 매수")
     if frgn_5d > 100_000:     details.append(f"외국인 순매수 {frgn_5d:+,}")
@@ -672,8 +677,44 @@ def score_investor(inv: list[dict]) -> dict:
             "inst_5d": inst_5d, "frgn_5d": frgn_5d, "streak": streak}
 
 
+def score_fundamentals(fund: dict) -> dict:
+    """가치/재무 점수 20점 — ROE 수익성 + PBR 저평가 + PER 업종비교."""
+    if not fund:
+        return {"score": 0, "detail": "재무 데이터 없음"}
+
+    score   = 0
+    details = []
+
+    roe = fund.get("ROE")
+    pbr = fund.get("PBR")
+    per = fund.get("PER")
+
+    # ROE 수익성 (최대 8점)
+    if roe is not None:
+        if   roe >= 15: score += 8; details.append(f"ROE {roe:.1f}% ★우량")
+        elif roe >= 10: score += 5; details.append(f"ROE {roe:.1f}%")
+        elif roe >= 5:  score += 3; details.append(f"ROE {roe:.1f}%")
+        elif roe < 0:   score -= 3; details.append(f"ROE {roe:.1f}% (적자)")
+
+    # PBR 저평가 (최대 7점)
+    if pbr is not None and pbr > 0:
+        if   pbr <= 0.8: score += 7; details.append(f"PBR {pbr:.2f} 극저평가")
+        elif pbr <= 1.0: score += 5; details.append(f"PBR {pbr:.2f} 저평가")
+        elif pbr <= 1.5: score += 3; details.append(f"PBR {pbr:.2f} 적정")
+
+    # PER 상대 저평가 (최대 5점)
+    if per is not None and per > 0:
+        if   per <= 10: score += 5; details.append(f"PER {per:.1f} 저평가")
+        elif per <= 15: score += 3; details.append(f"PER {per:.1f}")
+        elif per <= 25: score += 1; details.append(f"PER {per:.1f} 적정")
+
+    score  = max(0, min(score, 20))
+    detail = " | ".join(details) if details else "재무 데이터 수집 중"
+    return {"score": score, "detail": detail}
+
+
 def score_news(news: list[dict]) -> dict:
-    """뉴스 호재 점수 20점."""
+    """뉴스/공매도 점수 20점 — 배거차숏(배당·밸류업·거시쇼크·차트심리·숏스퀴즈) 키워드 매칭."""
     if not news:
         return {"score": 0, "good": [], "bad": [], "neutral": []}
     good = [n for n in news if classify_news(n["title"]) == "호재"]
@@ -716,27 +757,33 @@ def analyze_ticker(ticker: str, name: str, market: str) -> dict:
     fund_data  = f_fund.result()
     news_list  = f_news.result()
 
-    # 눌림목 점수 (30점)
+    # ── V5.0 4축 점수 체계 ────────────────────────────────────────────────────
+    # 차트/기술 점수 (25점)
     pb_result = calc_pullback_score(
         ohlcv["Close"],
         ohlcv["Volume"] if "Volume" in ohlcv.columns else pd.Series(dtype=float),
     ) if not ohlcv.empty and len(ohlcv) >= 22 else \
         {"score": 0, "signal": "데이터 부족", "rsi": 50.0, "ma5": 0, "ma20": 0, "ma60": 0}
 
-    # 수급 점수 (30점)
+    # 수급 점수 (35점) — 쌍끌이 포함
     inv_result = score_investor(inv_data)
 
-    # 뉴스 점수 (20점)
+    # 가치/재무 점수 (20점) — ROE·PBR·PER 저평가 분석
+    fund_result = score_fundamentals(fund_data)
+
+    # 뉴스/공매도 점수 (20점) — 배거차숏 키워드 매칭
     news_result = score_news(news_list)
 
-    # 공매도 점수 (20점) — frgn.naver 외국인 잔고율 변화로 대리 추정
-    short_score = 10  # 기본값 (데이터 없을 시 중립)
+    total = min(
+        inv_result["score"] + pb_result["score"] +
+        fund_result["score"] + news_result["score"],
+        100
+    )
 
-    total = min(pb_result["score"] + inv_result["score"] + news_result["score"] + short_score, 100)
-
-    if   total >= 75: verdict = "🔴 즉시 진입 가능 (HIGH CONFIDENCE)"
-    elif total >= 55: verdict = "🟡 진입 검토 (MID)"
-    elif total >= 35: verdict = "⚪ 관망 권고 (LOW)"
+    if   total >= 80: verdict = "👑 전 세계 1등 매수 적기 (LEGENDARY)"
+    elif total >= 65: verdict = "🔴 즉시 진입 가능 (HIGH CONFIDENCE)"
+    elif total >= 45: verdict = "🟡 진입 검토 (MID)"
+    elif total >= 30: verdict = "⚪ 관망 권고 (LOW)"
     else:             verdict = "❌ 진입 불가"
 
     block_alert = check_block_deal(ticker, inv_data)
@@ -746,7 +793,8 @@ def analyze_ticker(ticker: str, name: str, market: str) -> dict:
         "price": price_data, "ohlcv": ohlcv,
         "inv_data": inv_data, "fund": fund_data, "news": news_list,
         "pb": pb_result, "inv_score": inv_result,
-        "news_score": news_result, "short_score": short_score,
+        "fund_score": fund_result, "news_score": news_result,
+        "short_score": news_result["score"],  # 하위 호환 유지
         "total": total, "verdict": verdict,
         "block_alert": block_alert, "collected_at": now_kst,
     }
@@ -859,8 +907,8 @@ def quick_score(ticker: str, name: str, market: str) -> dict | None:
         inv   = score_investor(inv_data)
         short = 10  # 공매도 기본 중립
 
-        # analyze_ticker 와 동일 공식 적용 (뉴스 미수집분 0점, 상하단 점수 일치)
-        total = min(pb["score"] + inv["score"] + short, 100)
+        # V5.0: 4축 공식과 동일 (가치/재무 기본 10점, 뉴스 미수집분 0점 — 상하단 점수 근사 일치)
+        total = min(inv["score"] + pb["score"] + 10, 100)
 
         # ── rank_score: 신호 강도 가중치 적용 (정렬 전용, 표시 점수와 별도) ──
         # "즉시 매수" 신호가 최상위 독식하도록 pb_score에 시그널 멀티플라이어 적용
@@ -1610,15 +1658,19 @@ def ui_score_card(r: dict):
     ss      = r["short_score"]
     verdict = r["verdict"]
 
-    if total >= 75:
+    if total >= 80:
+        vd_col = "#D4AF37"; vd_bg = "#1a1600"; vd_border = "#D4AF37"
+        badge  = "전 세계 1등 매수 적기 (LEGENDARY)"; sc = "#D4AF37"
+        emoji  = "👑"
+    elif total >= 65:
         vd_col = "#FF5050"; vd_bg = "#1e0a0a"; vd_border = "#FF5050"
-        badge  = "즉시 매수 (HIGH)"; sc = "#FF5050"
+        badge  = "즉시 진입 가능 (HIGH)"; sc = "#FF5050"
         emoji  = "🔴"
-    elif total >= 55:
+    elif total >= 45:
         vd_col = "#FFB300"; vd_bg = "#1e1600"; vd_border = "#FFB300"
         badge  = "분할 매수 (MID)";  sc = "#FFB300"
         emoji  = "🟡"
-    elif total >= 35:
+    elif total >= 30:
         vd_col = "#f39c12"; vd_bg = "#221600"; vd_border = "#f39c12"
         badge  = "관망 (LOW)";        sc = "#f39c12"
         emoji  = "⚪"
@@ -1669,23 +1721,24 @@ def ui_score_card(r: dict):
                 "range": [0, 100],
                 "tickwidth": 1,
                 "tickcolor": "#4a5568",
-                "tickvals": [0, 35, 55, 75, 100],
-                "ticktext": ["0", "35", "55", "75", "100"],
+                "tickvals": [0, 30, 45, 65, 80, 100],
+                "ticktext": ["0", "30", "45", "65", "80", "100"],
                 "tickfont": {"color": "#8fa3b8", "size": 11},
             },
             "bar":  {"color": sc, "thickness": 0.30},
             "bgcolor": "#12192b",
             "borderwidth": 0,
             "steps": [
-                {"range": [0,   35],  "color": "#200d0d"},
-                {"range": [35,  55],  "color": "#201700"},
-                {"range": [55,  75],  "color": "#1c1a00"},
-                {"range": [75, 100],  "color": "#0c1f10"},
+                {"range": [0,   30],  "color": "#200d0d"},
+                {"range": [30,  45],  "color": "#201700"},
+                {"range": [45,  65],  "color": "#1c1a00"},
+                {"range": [65,  80],  "color": "#0c1f10"},
+                {"range": [80, 100],  "color": "#1a1500"},
             ],
             "threshold": {
                 "line": {"color": "#D4AF37", "width": 3},
                 "thickness": 0.78,
-                "value": 75,
+                "value": 80,
             },
         },
         title={
@@ -1761,14 +1814,15 @@ def ui_score_card(r: dict):
 </div>
 """)
 
-    _mini_card(c1, "수급 분석",    iv["score"], 30,
+    fs = r.get("fund_score", {"score": 0, "detail": "—"})
+    _mini_card(c1, "수급 분석",    iv["score"], 35,
                f"기관·외국인 세력 역추적<br>{iv['detail']}")
-    _mini_card(c2, "공매도 분석",  ss, 20,
-               "공매도 잔고 역추적<br>외국인잔고율 변화 기반")
-    _mini_card(c3, "차트 패턴",    pb["score"], 30,
+    _mini_card(c2, "가치/재무",    fs["score"], 20,
+               f"ROE·PBR·PER 저평가 분석<br>{fs['detail']}")
+    _mini_card(c3, "차트 패턴",    pb["score"], 25,
                f"눌림목 패턴 분석<br>RSI {pb['rsi']} · MA5 {pb['ma5']:,}")
-    _mini_card(c4, "미반영 호재",  ns["score"], 20,
-               f"호재 {len(ns['good'])}건 감지<br>악재 {len(ns['bad'])}건 경보")
+    _mini_card(c4, "뉴스/공매도",  ns["score"], 20,
+               f"배거차숏 호재 {len(ns['good'])}건<br>악재 {len(ns['bad'])}건 경보")
 
 
 def ui_investor_table(inv_data: list[dict]):
@@ -2288,6 +2342,13 @@ button[data-baseweb="tab"][aria-selected="true"] p { color: #D4AF37 !important; 
             st.markdown(
                 '<h3 style="color:#D4AF37;font-size:16px;font-weight:600;margin:8px 0 2px;">'
                 '세력 수급 역추적 — 최근 5거래일 확정 데이터</h3>',
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                '<div style="color:#D4AF37;font-weight:700;font-size:13px;'
+                'letter-spacing:.08em;margin:0 0 8px;opacity:.9;">'
+                '💰 수천조 가치의 세력 역추적 중 — 기관 · 외국인 · 개인 · 기타법인 4주체 확정 매집/매도 데이터'
+                '</div>',
                 unsafe_allow_html=True,
             )
             ui_investor_table(result["inv_data"])
