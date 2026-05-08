@@ -806,65 +806,88 @@ def _fetch_mobile_naver(query: str, seen: set[str]) -> list[dict]:
 
 @st.cache_data(ttl=300, show_spinner=False)
 def get_news(ticker: str, name: str) -> list[dict]:
-    """3단계 폴백 뉴스 수집 엔진 — 실패 없음 보장.
-    수집 채널: finance.naver(코드) → 검색(8쿼리) → 모바일Naver → RSS.
+    """검색 기반 종목 전용 뉴스 수집 엔진 (V7.1 Hard Filter).
+
+    설계 원칙:
+    - 전체 뉴스 RSS 사용 금지 — 검색 쿼리 기반 수집만 허용
+    - Hard Filter: 제목에 종목명 토큰이 없는 뉴스는 즉시 drop()
+    - 필터 후 0건이면 빈 리스트 반환 (시장 잡음으로 채우지 않음)
+    - 최종 수집 제목을 콘솔에 print → 디버깅 확인 가능
     """
+    enc  = requests.utils.quote
     seen: set[str]   = set()
-    news: list[dict] = []
-    enc = requests.utils.quote
+    raw:  list[dict] = []
 
-    # ── 채널 A: Naver Finance 종목코드 기반 ──────────────────────────────────
-    news += _fetch_with_fallback(
-        f"https://finance.naver.com/news/news_list.naver?mode=RANK&code={ticker}",
-        seen,
-    )
-    # RSS 채널 (종목코드)
-    news += _fetch_with_fallback(
-        f"https://finance.naver.com/news/news_list.naver?mode=LSS2D&section_id=101&section_id2=258",
-        seen,
-    )
-
-    # ── 채널 B: 8가지 키워드 쿼리 확장 ─────────────────────────────────────
-    queries = [
-        name,
-        name + " 실적",
-        name + " 수주",
-        name + " 상장",
-        name + " IPO",
-        name + " 클라우드",
-        name + " 판결",
-        name + " 호재",
-    ]
-    for q in queries:
-        found = _fetch_with_fallback(
-            f"https://finance.naver.com/news/news_search.naver?q={enc(q)}&pd=1&sm=tab_jum",
-            seen,
-        )
-        news += found
-
-    # ── 채널 C: 모바일 Naver 뉴스 검색 (BS 막힐 때 독립 채널) ───────────────
-    if len(news) < 5:
-        for q in [name, name + " 수주", name + " 상장"]:
-            news += _fetch_mobile_naver(q, seen)
-
-    # ── Strict Filtering: 선택 종목 전용 뉴스만 유지 ─────────────────────────
-    # 종목명을 의미 단위(2자 이상)로 토큰화 후 제목 매칭 여부 판별
+    # ── 종목명 토큰화 (Hard Filter 기준) ─────────────────────────────────────
     _stopwords = {"주식회사", "(주)", "㈜", "홀딩스", "그룹", "코리아", "코퍼레이션", "인터내셔널"}
     name_clean = name
     for sw in _stopwords:
         name_clean = name_clean.replace(sw, "")
     name_tokens = [t.strip() for t in name_clean.split() if len(t.strip()) >= 2]
 
-    def _matches_stock(title: str) -> bool:
-        if ticker in title:                                    # 종목코드 직접 포함
+    def _is_stock_news(title: str) -> bool:
+        """제목에 종목코드 또는 종목명 토큰이 포함된 경우만 True."""
+        if ticker in title:
             return True
-        if any(tok in title for tok in name_tokens):           # 종목명 토큰 매칭
-            return True
-        return False
+        return any(tok in title for tok in name_tokens)
 
-    strict = [n for n in news if _matches_stock(n["title"])]
-    # 필터 후 3건 미만이면 원본 유지 (수집 자체가 실패한 상황 대비)
-    return (strict if len(strict) >= 3 else news)[:40]
+    # ── 검색 쿼리 목록 (종목명 직접 검색만 — 일반 RSS 완전 배제) ─────────────
+    search_queries = [
+        name,
+        name + " 실적",
+        name + " 수주",
+        name + " 계약",
+        name + " 영업이익",
+        name + " 호재",
+        name + " 상장",
+        name + " 급등",
+    ]
+
+    # ── 채널 1: Naver 뉴스 검색 (최신순 sort=1) — 가장 정확한 검색 소스 ─────
+    search_hdrs = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept-Language": "ko-KR,ko;q=0.9",
+        "Referer": "https://search.naver.com/",
+    }
+    for q in search_queries:
+        url = f"https://search.naver.com/search.naver?where=news&query={enc(q)}&sort=1&pd=1"
+        try:
+            resp = requests.get(url, headers=search_hdrs, timeout=8)
+            if resp.status_code == 200:
+                soup = BeautifulSoup(resp.text, "lxml")
+                for el in soup.select("a.news_tit, a.title, .news_area a[href*='news']"):
+                    title = el.get_text(strip=True)
+                    href  = el.get("href", "")
+                    if title and len(title) > 6 and title not in seen:
+                        seen.add(title)
+                        raw.append({"title": title, "url": href, "date": ""})
+        except Exception:
+            pass
+
+    # ── 채널 2: Naver Finance 뉴스 검색 (종목명 쿼리) — 2차 보완 ─────────────
+    for q in [name, name + " 실적", name + " 수주"]:
+        url = f"https://finance.naver.com/news/news_search.naver?q={enc(q)}&pd=1&sm=tab_jum"
+        raw += _fetch_with_fallback(url, seen)
+
+    # ── 채널 3: Naver Finance 종목코드 직접 뉴스 (코드 기반 — 종목 전용) ──────
+    url_code = f"https://finance.naver.com/item/news_news.naver?code={ticker}&page=1"
+    raw += _fetch_with_fallback(url_code, seen)
+
+    # ── Hard Filter: 종목명/코드 미포함 뉴스 즉시 drop() ──────────────────────
+    filtered = [n for n in raw if _is_stock_news(n["title"])]
+
+    # ── 디버깅 출력 (콘솔 확인용) ─────────────────────────────────────────────
+    print(f"\n[SOOMBI NEWS] {name}({ticker}) — 수집 {len(raw)}건 → 필터 후 {len(filtered)}건")
+    for i, n in enumerate(filtered[:20], 1):
+        print(f"  [{i:02d}] {n['title'][:70]}")
+    if not filtered:
+        print(f"  ※ 종목 전용 뉴스 0건 — 뉴스 점수 0점 처리")
+
+    return filtered[:40]
 
 
 def classify_news(title: str) -> str:
