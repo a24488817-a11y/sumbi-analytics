@@ -2248,60 +2248,96 @@ def ui_top15_tabs(scored: list[dict]):
 
 
 def ui_stealth_mode(scored: list[dict]):
-    """💎 눌림목/스텔스 모드 — 세력 매집 중이나 주가가 눌린 종목 최우선 랭킹.
+    """💎 눌림목/스텔스 모드 — Rule 2 Kill Switch 하드 필터링.
 
-    필터 조건: inv_score ≥ 30 OR 기관+외인 쌍끌이(is_ssankkl)
-    정렬 기준: 수급 강도 + 음봉/RSI 과매도 + MA20 근접 이격도 가중 합산 (스텔스 점수)
+    [3 AND 조건 동시 충족 — 단 하나라도 미충족 시 drop()]
+    ① 가격 억제 : 등락률 ≤ +1.5%  (급등주 물리적 차단)
+    ② 과열 방지 : RSI ≤ 50        (과매수 구간 완전 배제)
+    ③ 수급 다이버전스: 수급 25점 이상 OR 기관+외인 쌍끌이
+       (주가↓·보합이지만 세력은 매수 = 진짜 바닥 매집 포착)
+    정렬: MA20 이격도 음수 우선, 0에 가장 가까운 순 (최적 눌림목 진입 타이밍 순)
     """
 
-    def _stealth_score(s: dict) -> float:
-        """눌림목 스텔스 점수 — 클수록 '세력 매집 + 주가 눌림' 최적 구간."""
-        pts = float(s["inv_score"])   # ① 수급 강도 베이스 (최대 40)
+    # ── Rule 2 Kill Switch: 3 AND 조건 — 미충족 즉시 drop() ────────────────
+    passed: list[dict] = []
+    for s in scored:
+        chg    = s.get("change", 0.0)
+        rsi    = float(s.get("rsi", 50.0))
+        inv_ok = s.get("is_ssankkl") or s["inv_score"] >= 25
 
-        # ② 음봉·보합 보너스 — 당일 하락할수록 매집 기회
-        chg = s.get("change", 0.0)
-        if   chg <= -2.0: pts += 25   # 급락 = 매집 황금 타이밍
-        elif chg <   0.0: pts += 18   # 음봉
-        elif chg <   0.5: pts += 8    # 보합권
+        if chg > 1.5:   continue   # ① 급등주 차단 (등락률 +1.5% 초과 즉시 drop)
+        if rsi > 50:    continue   # ② 과열 배제 (RSI 50 초과 즉시 drop)
+        if not inv_ok:  continue   # ③ 수급 다이버전스 없음 즉시 drop
 
-        # ③ RSI 과매도 구간 보너스
-        rsi = float(s.get("rsi", 50.0))
-        if   rsi <= 30: pts += 20
-        elif rsi <= 40: pts += 15
-        elif rsi <= 45: pts += 10
-        elif rsi <= 50: pts += 5
+        passed.append(s)
 
-        # ④ MA20 근접도 — 이격도 낮을수록 눌림목 진입 최적 (최대 25)
+    # ── 정렬: 음수 이격도 우선 → 0 근접 순 ──────────────────────────────────
+    def _sort_key(s: dict) -> tuple[int, float]:
         ma20  = s.get("ma20", 0)
         price = s.get("price", 0)
-        if ma20 > 0 and price > 0:
-            dev = abs((price - ma20) / ma20 * 100)
-            if   dev <= 1.5: pts += 25
-            elif dev <= 3.0: pts += 18
-            elif dev <= 5.0: pts += 12
-            elif dev <= 8.0: pts += 6
+        dev   = (price - ma20) / ma20 * 100 if (ma20 > 0 and price > 0) else 999.0
+        # 음수(0) 먼저, 양수(1) 나중 → 각각 절댓값 오름차순 (0% 가장 가까운 순)
+        return (0 if dev < 0 else 1, abs(dev))
 
-        # ⑤ 쌍끌이 보너스 (이미 수급에 반영되나 별도 가산)
-        if s.get("is_ssankkl"):
-            pts += 10
+    ranked = sorted(passed, key=_sort_key)[:15]
 
-        return pts
+    # ── Kill Switch 통과 결과 배너 ──────────────────────────────────────────
+    n_total  = len(scored)
+    n_passed = len(passed)
+    n_drop   = n_total - n_passed
+    banner_color = "#D4AF37" if n_passed > 0 else "#e74c3c"
+    _html_block(f"""
+<style>
+  .sm-banner {{
+    background:linear-gradient(135deg,#0d1a2b,#0f2235);
+    border:1px solid #1a3a5c; border-radius:12px;
+    padding:14px 20px; margin:4px 0 12px;
+  }}
+  .sm-banner-title {{
+    font-size:.82rem; font-weight:800; color:{banner_color};
+    letter-spacing:.12em; text-transform:uppercase; margin-bottom:6px;
+  }}
+  .sm-banner-body {{ font-size:.82rem; color:#A0AEC0; line-height:1.65; }}
+  .sm-hl  {{ color:#FF5050; font-weight:700; }}
+  .sm-hl2 {{ color:#D4AF37; font-weight:700; }}
+  .sm-rule {{ color:#8fa3b8; font-size:.75rem; margin-top:6px; }}
+</style>
+<div class="sm-banner">
+  <div class="sm-banner-title">💎 Kill Switch 필터링 완료</div>
+  <div class="sm-banner-body">
+    전체 <strong>{n_total}</strong>종목 스캔 →
+    <span class="sm-hl">{n_drop}종목 탈락</span>
+    (급등·과열·수급부재) →
+    <span class="sm-hl2">{n_passed}종목 통과</span>
+    → 상위 <strong>{min(n_passed, 15)}</strong>종목 표출
+  </div>
+  <div class="sm-rule">
+    Kill Switch: ① 등락률 ≤ +1.5% &amp; ② RSI ≤ 50 &amp;
+    ③ 수급 25점+ 또는 쌍끌이 (3개 AND 충족 필수) &nbsp;|&nbsp;
+    정렬: MA20 이격도 음수 우선·0 근접 순
+  </div>
+</div>
+""")
 
-    # ── 수급 조건 필터: 쌍끌이 OR 수급 30점 이상 ────────────────────────────
-    filtered = [s for s in scored if s.get("is_ssankkl") or s["inv_score"] >= 30]
-    if not filtered:
-        # 완화 fallback: inv_score 20점 이상
-        filtered = [s for s in scored if s["inv_score"] >= 20]
-    if not filtered:
-        filtered = list(scored)
-
-    # 스텔스 점수 계산 + 정렬
-    for s in filtered:
-        s["_stealth_pts"] = _stealth_score(s)
-    ranked = sorted(filtered, key=lambda x: x["_stealth_pts"], reverse=True)[:15]
-
+    # ── 통과 종목 없음 ────────────────────────────────────────────────────────
     if not ranked:
-        st.info("수급 조건(쌍끌이·30점+) 충족 종목 없음 — 전체 배치 재수집 후 재시도하세요.")
+        _html_block("""
+<style>
+  .sm-empty {{
+    background:#12192b; border:1px solid #2a3a50; border-radius:14px;
+    padding:28px 32px; text-align:center; margin:8px 0;
+  }}
+  .sm-empty-title {{ font-size:1.05rem; font-weight:800; color:#D4AF37; margin-bottom:10px; }}
+  .sm-empty-body  {{ font-size:.86rem; color:#8fa3b8; line-height:1.75; }}
+</style>
+<div class="sm-empty">
+  <div class="sm-empty-title">💎 현재 스텔스 조건 충족 종목 없음</div>
+  <div class="sm-empty-body">
+    시장이 전반적 과열 구간이거나 세력 매집이 미발생 상태입니다.<br>
+    ⚡ 즉시 갱신으로 재수집하거나, 조정 구간에서 다시 확인하세요.
+  </div>
+</div>
+""")
         return
 
     # ── 스텔스 데이터프레임 구성 ─────────────────────────────────────────────
@@ -2309,15 +2345,19 @@ def ui_stealth_mode(scored: list[dict]):
     for i, s in enumerate(ranked, 1):
         ma20  = s.get("ma20", 0)
         price = s.get("price", 0)
+        chg   = s.get("change", 0.0)
+        rsi   = float(s.get("rsi", 50.0))
+
         if ma20 > 0 and price > 0:
             dev_val = (price - ma20) / ma20 * 100
-            dev_str = f"{dev_val:+.1f}%"
-            dev_abs = abs(dev_val)
+            dev_str = f"{dev_val:+.2f}%"
         else:
             dev_str = "—"
-            dev_abs = 99.9
 
-        badge = "🔥 쌍끌이" if s.get("is_ssankkl") else ("💪 수급강" if s["inv_score"] >= 30 else "📈 수급")
+        badge = (
+            "🔥 쌍끌이" if s.get("is_ssankkl")
+            else ("💪 수급강" if s["inv_score"] >= 30 else "📈 수급+")
+        )
 
         rows.append({
             "순위":           i,
@@ -2325,54 +2365,38 @@ def ui_stealth_mode(scored: list[dict]):
             "코드":           s["ticker"],
             "시장":           s["market"],
             "현재가":         f"{price:,}원" if price else "—",
-            "등락률":         f"{s['change']:+.2f}%" if price else "—",
+            "등락률":         f"{chg:+.2f}%",
             "세력 매집 강도": s["inv_score"],
-            "RSI":            round(float(s.get("rsi", 50.0)), 1),
+            "RSI":            round(rsi, 1),
             "눌림목 이격도":  dev_str,
-            "이격도(abs)":    round(dev_abs, 2),
             "매집 유형":      badge,
-            "차트 신호":      s.get("signal", "—"),
         })
 
     df = pd.DataFrame(rows)
 
-    # 컬럼 설정
-    _inv_col  = st.column_config.ProgressColumn(
-        "세력 매집 강도", min_value=0, max_value=40, format="%d점"
-    )
-
-    # ── 안내 메시지 ────────────────────────────────────────────────────────
-    st.markdown(
-        '<p style="color:#A0AEC0;font-size:0.82rem;margin:4px 0 10px;">'
-        "⬇ 세력이 '매집 중'이나 주가가 '아직 안 오른' 바닥 종목 Top 15 &nbsp;|&nbsp; "
-        "<span style='color:#D4AF37;font-weight:700;'>눌림목 이격도</span> → MA20 대비 주가 위치 "
-        "(음수 = MA20 아래 눌림, 0% 근접 = 최적 매수 타이밍)</p>",
-        unsafe_allow_html=True,
-    )
-
-    # 표시용 df (이격도(abs) 컬럼 숨김)
-    display_df = df.drop(columns=["이격도(abs)"])
-
     event = st.dataframe(
-        display_df,
+        df,
         use_container_width=True,
         hide_index=True,
-        column_config={"세력 매집 강도": _inv_col},
+        column_config={
+            "세력 매집 강도": st.column_config.ProgressColumn(
+                "세력 매집 강도", min_value=0, max_value=40, format="%d점"
+            )
+        },
         selection_mode="single-row",
         on_select="rerun",
         key="df_stealth_main",
     )
 
     if event and len(event.selection.rows) > 0:
-        selected_idx = event.selection.rows[0]
-        st.session_state.selected_stock_code = display_df.iloc[selected_idx]["코드"]
+        st.session_state.selected_stock_code = df.iloc[event.selection.rows[0]]["코드"]
 
-    # ── 스텔스 범례 ──────────────────────────────────────────────────────────
     st.markdown(
-        '<p style="color:#6b7c93;font-size:0.75rem;margin:6px 0 0;">'
-        "🔥 쌍끌이 = 기관·외국인 당일 동시 순매수 &nbsp;|&nbsp; "
-        "💪 수급강 = 수급 점수 30점 이상 &nbsp;|&nbsp; "
-        "눌림목 이격도 0% 근접·음수 + RSI 45 이하 = 세력 바닥 매집 최적 타이밍</p>",
+        '<p style="color:#6b7c93;font-size:0.75rem;margin:8px 0 0;">'
+        "🔥 쌍끌이 = 기관·외인 당일 동시 순매수 &nbsp;·&nbsp; "
+        "💪 수급강 = 수급 25~39점 &nbsp;·&nbsp; "
+        "눌림목 이격도 음수 = MA20 아래 눌림 = 최적 진입 타이밍 &nbsp;·&nbsp; "
+        "표의 행 클릭 → 하단 정밀 해부 즉시 실행</p>",
         unsafe_allow_html=True,
     )
 
