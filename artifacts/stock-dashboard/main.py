@@ -141,15 +141,39 @@ _BAD_KW = [
     "금리 인상", "경기 침체", "파산", "상장폐지", "관리종목",
 ]
 
-# Impact Alpha — 초강력 미반영 호재: 감지 즉시 뉴스/공매도 점수 20점 만점
-_IMPACT_KW = [
-    "기각", "승소", "상한가", "독점", "사상 최대", "어닝 서프라이즈", "양산 성공",
-    "사상 최고", "세계 최초", "특허 등록", "독점 공급", "최대 수주",
-    "역대 최대", "어닝쇼크 반전", "FDA 승인", "임상 성공", "계약 체결 완료",
-    "전략적 투자", "지분 인수", "합병 완료", "인수 확정", "IPO 상장",
-    "골든크로스 돌파", "52주 신고가 돌파", "적자 탈출", "흑자 전환 확정",
-    "아틀라스", "KDDX", "로봇", "자율주행", "AI 반도체", "HBM 양산",
+# ── 뉴스 등급제 (News Tiering) ────────────────────────────────────────────────
+# Tier 1: 확정적 사실 — 주가 직접 영향 (20점 만점)
+_TIER1_KW = [
+    # 법원·판결
+    "기각", "승소", "판결", "가처분 기각", "특허 무효 기각",
+    # 계약·공급 확정
+    "공급계약", "단일판매", "계약 체결", "독점 공급", "독점 계약",
+    "최대 수주", "대규모 수주", "공급 확정",
+    # 실적 서프라이즈
+    "사상 최대", "역대 최대", "사상 최고", "어닝 서프라이즈", "어닝쇼크 반전",
+    "사상 최고 실적", "연간 최대 흑자",
+    # 기업 이벤트 확정
+    "M&A", "인수 완료", "합병 완료", "원천기술", "세계 최초",
+    "FDA 승인", "임상 성공", "양산 성공", "흑자 전환 확정", "적자 탈출",
+    "상한가", "특허 등록", "IPO 확정",
+    # 업종 특화 (KDDX·HBM·로봇 등)
+    "KDDX", "HBM 양산", "아틀라스", "AI 반도체 양산", "자율주행 계약",
 ]
+# Tier 2: 긍정적 기대감 — 미래 가치 (건당 5점, 최대 10점)
+_TIER2_KW = [
+    "목표주가 상향", "목표가 상향", "매수 추천", "신제품 출시", "박람회",
+    "해외 진출", "신규 계약", "추가 수주", "증설", "MOU", "업무협약",
+    "협력", "파트너십", "투자 유치", "신규 사업", "로드쇼", "호실적",
+    "수주 기대", "협의 중", "검토 중", "협상 진행",
+]
+# Tier 3: 소음/중립 — 점수 반영 제외
+_NOISE_KW = [
+    "장마감", "마감시황", "오전시황", "오후시황", "시황", "주간 요약",
+    "특징주", "기업 개요", "오늘의 주요", "증시 마감", "급등주 포착",
+    "코스피 현황", "코스닥 현황", "주요 일정", "주간 브리핑",
+]
+# 하위 호환 — 기존 _IMPACT_KW 참조 코드가 있는 경우를 위해 별칭 유지
+_IMPACT_KW = _TIER1_KW
 
 
 # KRX 휴장일 내장 폴백 테이블 (open.krx.co.kr API 불가 시 사용)
@@ -593,13 +617,38 @@ def get_news(ticker: str, name: str) -> list[dict]:
 
 
 def classify_news(title: str) -> str:
-    """뉴스 제목 → 호재/악재/중립."""
+    """뉴스 제목 → 호재(T1·T2)/악재/중립 — Tier 등급제 적용."""
     t = title
+    # 소음 필터 → 무조건 중립
+    if any(kw in t for kw in _NOISE_KW):
+        return "중립"
+    # Tier 1 확정 호재
+    if any(kw in t for kw in _TIER1_KW):
+        return "호재"
+    # Tier 2 기대감 호재
+    if any(kw in t for kw in _TIER2_KW):
+        return "호재"
+    # 악재·호재 키워드 비교
     g = sum(1 for kw in _GOOD_KW if kw in t)
     b = sum(1 for kw in _BAD_KW  if kw in t)
-    if g > b:  return "호재"
     if b > g:  return "악재"
+    if g > 0:  return "호재"
     return "중립"
+
+
+def _news_tier(title: str) -> int:
+    """뉴스 제목 → Tier 번호 반환 (1/2/3). 3 = 소음·중립."""
+    if any(kw in title for kw in _NOISE_KW):
+        return 3
+    if any(kw in title for kw in _TIER1_KW):
+        return 1
+    if any(kw in title for kw in _TIER2_KW):
+        return 2
+    b = sum(1 for kw in _BAD_KW if kw in title)
+    g = sum(1 for kw in _GOOD_KW if kw in title)
+    if b > g: return 3   # 악재는 별도 처리, 여기선 소음으로 처리
+    if g > 0: return 2
+    return 3
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -748,31 +797,63 @@ def score_fundamentals(fund: dict) -> dict:
 
 
 def score_news(news: list[dict]) -> dict:
-    """뉴스/공매도 점수 20점 — 배거차숏 + Impact Alpha 초강력 키워드 즉시 만점."""
+    """뉴스 등급제 점수 20점 — Tier1(20점) / Tier2(건당 5점·최대 10점) / 소음 제외."""
+    empty = {"score": 0, "good": [], "bad": [], "neutral": [],
+             "impact_hits": [], "tier1_news": [], "tier2_news": []}
     if not news:
-        return {"score": 0, "good": [], "bad": [], "neutral": [], "impact_hits": []}
+        return empty
 
-    good = [n for n in news if classify_news(n["title"]) == "호재"]
-    bad  = [n for n in news if classify_news(n["title"]) == "악재"]
-    neu  = [n for n in news if classify_news(n["title"]) == "중립"]
+    tier1_news:  list[dict] = []
+    tier2_news:  list[dict] = []
+    bad_news:    list[dict] = []
+    neutral:     list[dict] = []
+    impact_hits: list[str]  = []
 
-    # Impact Alpha: 초강력 키워드 감지 → 즉시 20점 만점
-    impact_hits: list[str] = []
-    all_titles = " ".join(n["title"] for n in news)
-    for kw in _IMPACT_KW:
-        if kw in all_titles:
-            impact_hits.append(kw)
+    for n in news:
+        t = n["title"]
+        # ① 소음 필터 — Tier 3 즉시 제외
+        if any(kw in t for kw in _NOISE_KW):
+            neutral.append(n)
+            continue
+        # ② Tier 1 확정 호재 감지
+        t1_hits = [kw for kw in _TIER1_KW if kw in t]
+        if t1_hits:
+            tier1_news.append(n)
+            for kw in t1_hits:
+                if kw not in impact_hits:
+                    impact_hits.append(kw)
+            continue
+        # ③ 악재 감지 (Tier 1보다 먼저 확정된 악재는 없으므로 순서 유지)
+        b = sum(1 for kw in _BAD_KW if kw in t)
+        g = (sum(1 for kw in _GOOD_KW if kw in t)
+             + sum(1 for kw in _TIER2_KW if kw in t))
+        if b > 0 and b >= g:
+            bad_news.append(n)
+            continue
+        # ④ Tier 2 기대감 호재
+        if any(kw in t for kw in _TIER2_KW) or g > 0:
+            tier2_news.append(n)
+            continue
+        neutral.append(n)
 
-    if impact_hits:
-        score = 20  # 만점 강제
+    # ── 점수 산출 ──────────────────────────────────────────────────────────────
+    if tier1_news:
+        score = 20                                          # Tier 1: 즉시 만점
+    elif tier2_news:
+        raw = min(len(tier2_news) * 5, 10)                 # Tier 2: 건당 5점·최대 10점
+        score = max(0, raw - len(bad_news) * 2)
     else:
-        score = min([0, 8, 14, 17, 20][min(len(good), 4)], 20)
-        score = max(0, score - min(len(bad) * 3, 10))
+        score = 0
 
+    good_all = tier1_news + tier2_news
     return {
         "score": score,
-        "good": good[:5], "bad": bad[:3], "neutral": neu,
-        "impact_hits": impact_hits,
+        "good":       good_all[:5],
+        "bad":        bad_news[:3],
+        "neutral":    neutral,
+        "impact_hits":impact_hits,
+        "tier1_news": tier1_news[:5],
+        "tier2_news": tier2_news[:5],
     }
 
 
@@ -1963,39 +2044,85 @@ border-radius:12px;overflow:hidden;'>
 
 
 def ui_news(news_result: dict, all_news: list[dict]):
-    """뉴스 — 호재·악재·전체."""
-    good = news_result.get("good", [])
-    bad  = news_result.get("bad",  [])
+    """뉴스 등급제 — Tier1 🔥(score≥15) / Tier2 / 악재 / 전체."""
+    score      = news_result.get("score", 0)
+    tier1_news = news_result.get("tier1_news", [])
+    tier2_news = news_result.get("tier2_news", [])
+    bad        = news_result.get("bad", [])
+    impact_hits= news_result.get("impact_hits", [])
 
     if not all_news:
         st.info("뉴스 데이터를 수집할 수 없습니다.")
         return
 
-    if good:
-        st.markdown("**📈 미반영 호재 뉴스**")
-        for n in good:
+    # ── Tier 1 🔥 미반영 호재 (score ≥ 15일 때만 표시) ─────────────────────
+    if score >= 15 and tier1_news:
+        kw_str = " · ".join(impact_hits[:5]) if impact_hits else "핵심 이벤트"
+        st.markdown(
+            f'<div style="background:#1a1600;border:2px solid #D4AF37;border-radius:10px;'
+            f'padding:12px 16px;margin:6px 0 10px;">'
+            f'<span style="color:#D4AF37;font-weight:800;font-size:.85rem;">'
+            f'🔥 미반영 호재 (Tier 1) — {kw_str}</span></div>',
+            unsafe_allow_html=True,
+        )
+        for n in tier1_news:
             href  = n.get("url", "")
             title = n["title"]
-            date  = n.get("date", "")
+            tier_badge = (
+                '<span style="background:#D4AF37;color:#000;font-size:.68rem;'
+                'font-weight:800;border-radius:4px;padding:1px 6px;margin-right:5px;">T1</span>'
+            )
             if href:
-                st.markdown(f"- 🟢 [{title}]({href}) `{date}`")
+                st.markdown(
+                    f'{tier_badge} 🔴 [{title}]({href})',
+                    unsafe_allow_html=True,
+                )
             else:
-                st.markdown(f"- 🟢 {title} `{date}`")
+                st.markdown(
+                    f'{tier_badge} 🔴 {title}',
+                    unsafe_allow_html=True,
+                )
 
+    # ── Tier 2 일반 호재 ────────────────────────────────────────────────────
+    elif tier2_news:
+        st.markdown("**📈 미반영 호재 뉴스 (Tier 2)**")
+        for n in tier2_news:
+            href  = n.get("url", "")
+            title = n["title"]
+            tier_badge = (
+                '<span style="background:#2a3550;color:#8fa3b8;font-size:.68rem;'
+                'font-weight:700;border-radius:4px;padding:1px 6px;margin-right:5px;">T2</span>'
+            )
+            if href:
+                st.markdown(f'{tier_badge} 🟢 [{title}]({href})', unsafe_allow_html=True)
+            else:
+                st.markdown(f'{tier_badge} 🟢 {title}', unsafe_allow_html=True)
+
+    # ── 악재 경보 ────────────────────────────────────────────────────────────
     if bad:
         st.markdown("**📉 악재 주의**")
         for n in bad:
             st.markdown(f"- 🔴 {n['title']} `{n.get('date', '')}`")
 
-    with st.expander(f"전체 뉴스 {len(all_news)}건 펼치기"):
-        for n in all_news:
+    # ── 전체 뉴스 (소음 제외, Tier 표시) ────────────────────────────────────
+    noise_filtered = [n for n in all_news if not any(kw in n["title"] for kw in _NOISE_KW)]
+    with st.expander(f"전체 뉴스 {len(noise_filtered)}건 (소음 제외) 펼치기"):
+        for n in noise_filtered:
+            tier = _news_tier(n["title"])
             cls  = classify_news(n["title"])
-            icon = {"호재": "🟢", "악재": "🔴", "중립": "⬜"}.get(cls, "⬜")
+            if tier == 1:
+                badge = "🔴 **[T1]**"
+            elif cls == "호재":
+                badge = "🟢 [T2]"
+            elif cls == "악재":
+                badge = "🔻 [악재]"
+            else:
+                badge = "⬜"
             href = n.get("url", "")
             if href:
-                st.markdown(f"{icon} [{n['title']}]({href}) `{n.get('date', '')}`")
+                st.markdown(f"{badge} [{n['title']}]({href})", unsafe_allow_html=True)
             else:
-                st.markdown(f"{icon} {n['title']}")
+                st.markdown(f"{badge} {n['title']}")
 
 
 def ui_ma_strip(pb: dict):
