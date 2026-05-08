@@ -1393,6 +1393,7 @@ def score_news(news: list[dict]) -> dict:
     elif positive_cnt >= 1: velocity = 0; vel_label = "📰 단발성 호재 — 모멘텀 지속 확인 필요"
     else:                   velocity = 0; vel_label = "— 종목 전용 호재 뉴스 없음"
 
+    score    = min(score, 30)   # Hard Cap: 뉴스 최대 30점 전역 보장
     good_all = tier0_news + tier1_news + tier2_news
     return {
         "score":        score,
@@ -1763,12 +1764,13 @@ def analyze_ticker(ticker: str, name: str, market: str) -> dict:
     # 리스크/숏스퀴즈 (10점) — 공매도·신용잔고·프로그램매매
     risk_result = score_risk_squeeze(price_data, inv_data, pb_result)
 
+    # ── Hard Cap 전역 적용 — 각 축 상한 강제 후 총점 산출 ───────────────────
+    _inv_sc  = min(inv_result["score"],    40)   # 수급  최대 40점
+    _news_sc = min(news_result["score"],   30)   # 뉴스  최대 30점
+    _pb_sc   = pb_contrib                        # 이미 min(pb_result["score"], 20) 적용
+    _risk_sc = min(risk_result["score"],   10)   # 리스크 최대 10점
     # V7.0 총점: 수급40 + 뉴스30 + 차트20 + 리스크10 = 100
-    total = min(
-        inv_result["score"] + news_result["score"] +
-        pb_contrib          + risk_result["score"],
-        100
-    )
+    total = min(_inv_sc + _news_sc + _pb_sc + _risk_sc, 100)
 
     if   total >= 80: verdict = "👑 전 세계 1등 매수 적기 (LEGENDARY)"
     elif total >= 65: verdict = "🔴 즉시 진입 가능 (HIGH CONFIDENCE)"
@@ -1785,7 +1787,8 @@ def analyze_ticker(ticker: str, name: str, market: str) -> dict:
         "pb": pb_result, "inv_score": inv_result,
         "fund_score": fund_result, "news_score": news_result,
         "risk_score": risk_result,
-        "short_score": news_result["score"],  # 하위 호환 유지
+        "short_score": _news_sc,     # 하위 호환 — Hard Cap 적용 값
+        "pb_contrib":  _pb_sc,       # SSOT: 20-cap 확정치 (배치·상세 일치 보장)
         "total": total, "verdict": verdict,
         "block_alert": block_alert, "collected_at": now_kst,
         # V8.0 God Mode
@@ -1928,6 +1931,13 @@ def quick_score(ticker: str, name: str, market: str) -> dict | None:
         rank_raw   = pb["score"] * sig_mult + inv["score"] * 2.0 + news_result["score"]
         rank_score = int(min(rank_raw / _RANK_DENOM * 100, 100))
 
+        # ── Hard Cap 전역 적용 — 렌더링 전 각 축 상한 강제 ────────────────────
+        _inv_sc  = min(inv["score"],          40)   # 수급  최대 40점
+        _news_sc = min(news_result["score"],  30)   # 뉴스  최대 30점
+        _pb_sc   = min(pb["score"],           20)   # 차트  최대 20점 (raw 최대 25 → 20-cap)
+        _risk_sc = min(risk_result["score"],  10)   # 리스크 최대 10점
+        _total   = min(_inv_sc + _news_sc + _pb_sc + _risk_sc, 100)
+
         return {
             "ticker":     ticker,
             "name":       name,
@@ -1935,11 +1945,11 @@ def quick_score(ticker: str, name: str, market: str) -> dict | None:
             "price":      price_data.get("현재가", 0),
             "change":     float(price_data.get("등락률", 0)),
             "cap":        price_data.get("시가총액", 0),
-            "pb_score":   pb["score"],
-            "inv_score":  inv["score"],
-            "news_score": news_result["score"],
-            "risk_score": risk_result["score"],
-            "total":      total,
+            "pb_score":   _pb_sc,    # 20점 상한 적용된 확정치
+            "inv_score":  _inv_sc,   # 40점 상한 적용된 확정치
+            "news_score": _news_sc,  # 30점 상한 적용된 확정치
+            "risk_score": _risk_sc,  # 10점 상한 적용된 확정치
+            "total":      _total,    # 100점 상한 적용된 확정치
             "rank_score": rank_score,
             "signal":     pb["signal"],
             "rsi":        pb["rsi"],
@@ -1982,9 +1992,11 @@ def scan_top_stocks(candidates: list[dict]) -> list[dict]:
     return sorted(results, key=_sig_key, reverse=True)
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=60, show_spinner=False)
 def _scan_top_cached(candidate_tuples: tuple) -> list[dict]:
-    """scan_top_stocks의 캐시 래퍼 — tuple 입력으로 hashable 처리 (TTL 300s)."""
+    """scan_top_stocks의 캐시 래퍼 — tuple 입력으로 hashable 처리 (TTL 60s).
+    TTL을 60s로 단축 → 코드 변경 후 최대 1분 내 새 로직 자동 반영 보장.
+    """
     candidates = [{"code": c[0], "name": c[1], "market": c[2]} for c in candidate_tuples]
     return scan_top_stocks(candidates)
 
