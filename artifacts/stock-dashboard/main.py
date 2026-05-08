@@ -203,6 +203,48 @@ _DART_KW = [
     "분기보고서", "반기보고서", "DART", "금감원", "공시 접수",
 ]
 
+# V8.0 Flexible Match — 종목코드별 영문 약칭 하드코딩 맵
+_KNOWN_ENG_ALIAS: dict[str, list[str]] = {
+    "035760": ["LG CNS", "LGCNS"],
+    "000660": ["SK Hynix", "SKHynix", "하이닉스"],
+    "005930": ["Samsung Electronics", "Samsung", "삼성전자"],
+    "005380": ["Hyundai Motor", "현대차"],
+    "000270": ["Kia", "KIA"],
+    "051910": ["LG Chem", "LGChem"],
+    "035420": ["NAVER"],
+    "035720": ["Kakao"],
+    "066570": ["LG Electronics", "LG전자"],
+    "015760": ["KEPCO", "한국전력"],
+    "055550": ["Shinhan", "신한"],
+    "105560": ["KB Financial", "KB금융"],
+    "086790": ["Hana Financial", "하나금융"],
+    "207940": ["Samsung Biologics", "삼성바이오"],
+    "096770": ["SK Innovation", "SK이노"],
+    "012330": ["Hyundai Mobis", "현대모비스"],
+    "011070": ["LG Innotek", "LG이노텍"],
+    "042700": ["Hanmi Semi", "한미반도체"],
+    "009830": ["Hanwha Ocean", "한화오션"],
+    "329180": ["Hyundai Heavy", "현대중공업"],
+    "373220": ["LG Energy", "LG에너지솔루션", "LGES"],
+}
+
+
+def _build_eng_aliases(name: str, ticker: str) -> tuple[str, ...]:
+    """종목명·코드로부터 영문 약칭 후보를 생성 — get_news() Flexible Match용 tuple."""
+    aliases: list[str] = []
+    # ① 하드코딩 맵 우선
+    aliases.extend(_KNOWN_ENG_ALIAS.get(ticker, []))
+    # ② 이름 앞 영문 prefix (예: "LG씨엔에스"→"LG", "SK하이닉스"→"SK")
+    m = re.match(r"^([A-Za-z][A-Za-z0-9&]{0,9})", name)
+    if m:
+        prefix = m.group(1).strip()
+        if prefix and prefix not in aliases:
+            aliases.append(prefix)
+    # ③ 이름 자체가 영문인 경우 (NAVER, Kakao 등)
+    if re.match(r"^[A-Za-z]", name) and name not in aliases:
+        aliases.append(name)
+    return tuple(dict.fromkeys(aliases))   # 순서 보존·중복 제거
+
 
 # KRX 휴장일 내장 폴백 테이블 (open.krx.co.kr API 불가 시 사용)
 _KRX_HOLIDAYS_FALLBACK: dict[int, dict[str, str]] = {
@@ -828,45 +870,50 @@ def _fetch_mobile_naver(query: str, seen: set[str]) -> list[dict]:
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def get_news(ticker: str, name: str) -> list[dict]:
-    """검색 기반 종목 전용 뉴스 수집 엔진 (V7.1 Hard Filter).
+def get_news(ticker: str, name: str, aliases: tuple[str, ...] = ()) -> dict:
+    """검색 기반 종목 전용 뉴스 수집 엔진 (V8.0 Flexible Match).
 
-    설계 원칙:
-    - 전체 뉴스 RSS 사용 금지 — 검색 쿼리 기반 수집만 허용
-    - Hard Filter: 제목에 종목명 토큰이 없는 뉴스는 즉시 drop()
-    - 필터 후 0건이면 빈 리스트 반환 (시장 잡음으로 채우지 않음)
-    - 최종 수집 제목을 콘솔에 print → 디버깅 확인 가능
+    반환값: {"items": [...], "status": "ok"|"empty"|"error", "fetch_count": n}
+    ┌──────────┬────────────────────────────────────────────────────────────┐
+    │ "ok"     │ 수집 성공 + Flexible Match 통과 뉴스 1건 이상             │
+    │ "empty"  │ 수집 성공 + 종목 전용 뉴스 0건 (시장 잡음으로 채우지 않음)│
+    │ "error"  │ 모든 채널 네트워크 오류 — 재시도 필요                     │
+    └──────────┴────────────────────────────────────────────────────────────┘
+    Flexible Match: 한글 종목명 + 영문 alias + 종목코드 중 하나라도 포함 → 유효
     """
-    enc  = requests.utils.quote
-    seen: set[str]   = set()
-    raw:  list[dict] = []
+    enc          = requests.utils.quote
+    seen:         set[str]   = set()
+    raw:          list[dict] = []
+    any_fetch_ok: bool       = False
 
-    # ── 종목명 토큰화 (Hard Filter 기준) ─────────────────────────────────────
+    # ── 종목명 토큰화 ─────────────────────────────────────────────────────────
     _stopwords = {"주식회사", "(주)", "㈜", "홀딩스", "그룹", "코리아", "코퍼레이션", "인터내셔널"}
     name_clean = name
     for sw in _stopwords:
         name_clean = name_clean.replace(sw, "")
     name_tokens = [t.strip() for t in name_clean.split() if len(t.strip()) >= 2]
 
-    def _is_stock_news(title: str) -> bool:
-        """제목에 종목코드 또는 종목명 토큰이 포함된 경우만 True."""
+    # Flexible Match 토큰 풀: 한글 토큰 + 영문 alias
+    all_tokens = name_tokens + [a for a in aliases if a and len(a) >= 2]
+
+    def _is_stock_news(title: str) -> tuple[bool, str]:
+        """(유효 여부, 매칭 토큰). 종목코드 또는 any(all_tokens) 포함 시 True."""
         if ticker in title:
-            return True
-        return any(tok in title for tok in name_tokens)
+            return True, ticker
+        for tok in all_tokens:
+            if tok in title:
+                return True, tok
+        return False, ""
 
-    # ── 검색 쿼리 목록 (종목명 직접 검색만 — 일반 RSS 완전 배제) ─────────────
-    search_queries = [
-        name,
-        name + " 실적",
-        name + " 수주",
-        name + " 계약",
-        name + " 영업이익",
-        name + " 호재",
-        name + " 상장",
-        name + " 급등",
+    # ── 검색 쿼리 (한글 종목명 + 영문 alias 쿼리 병행) ───────────────────────
+    search_queries: list[str] = [
+        name, name + " 실적", name + " 수주",
+        name + " 계약", name + " 영업이익",
+        name + " 호재", name + " 상장", name + " 급등",
     ]
+    for alias in list(aliases)[:2]:         # alias 쿼리 최대 2개 (과부하 방지)
+        search_queries += [alias, alias + " 실적"]
 
-    # ── 채널 1: Naver 뉴스 검색 (최신순 sort=1) — 가장 정확한 검색 소스 ─────
     search_hdrs = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -876,11 +923,14 @@ def get_news(ticker: str, name: str) -> list[dict]:
         "Accept-Language": "ko-KR,ko;q=0.9",
         "Referer": "https://search.naver.com/",
     }
+
+    # ── 채널 1: Naver 뉴스 검색 (최신순 sort=1) ──────────────────────────────
     for q in search_queries:
         url = f"https://search.naver.com/search.naver?where=news&query={enc(q)}&sort=1&pd=1"
         try:
             resp = requests.get(url, headers=search_hdrs, timeout=8)
             if resp.status_code == 200:
+                any_fetch_ok = True
                 soup = BeautifulSoup(resp.text, "lxml")
                 for el in soup.select("a.news_tit, a.title, .news_area a[href*='news']"):
                     title = el.get_text(strip=True)
@@ -891,26 +941,54 @@ def get_news(ticker: str, name: str) -> list[dict]:
         except Exception:
             pass
 
-    # ── 채널 2: Naver Finance 뉴스 검색 (종목명 쿼리) — 2차 보완 ─────────────
+    # ── 채널 2: Naver Finance 뉴스 검색 ───────────────────────────────────────
     for q in [name, name + " 실적", name + " 수주"]:
         url = f"https://finance.naver.com/news/news_search.naver?q={enc(q)}&pd=1&sm=tab_jum"
-        raw += _fetch_with_fallback(url, seen)
+        items = _fetch_with_fallback(url, seen)
+        if items:
+            any_fetch_ok = True
+        raw += items
 
-    # ── 채널 3: Naver Finance 종목코드 직접 뉴스 (코드 기반 — 종목 전용) ──────
+    # ── 채널 3: Naver Finance 종목코드 직접 뉴스 ─────────────────────────────
     url_code = f"https://finance.naver.com/item/news_news.naver?code={ticker}&page=1"
-    raw += _fetch_with_fallback(url_code, seen)
+    code_items = _fetch_with_fallback(url_code, seen)
+    if code_items:
+        any_fetch_ok = True
+    raw += code_items
 
-    # ── Hard Filter: 종목명/코드 미포함 뉴스 즉시 drop() ──────────────────────
-    filtered = [n for n in raw if _is_stock_news(n["title"])]
+    # ── Flexible Match Filter ─────────────────────────────────────────────────
+    filtered: list[dict] = []
+    dropped:  list[str]  = []
+    for n in raw:
+        ok, matched = _is_stock_news(n["title"])
+        if ok:
+            filtered.append(n)
+        else:
+            dropped.append(n["title"][:70])
 
-    # ── 디버깅 출력 (콘솔 확인용) ─────────────────────────────────────────────
-    print(f"\n[SOOMBI NEWS] {name}({ticker}) — 수집 {len(raw)}건 → 필터 후 {len(filtered)}건")
+    # ── 디버깅 로그 — 사장님 필터 탈락 원인 확인용 ───────────────────────────
+    alias_str = ", ".join(aliases) if aliases else "없음"
+    print(f"\n[SOOMBI NEWS] {name}({ticker}) | aliases=[{alias_str}]")
+    print(f"  매칭 토큰: {all_tokens}")
+    print(f"  수집 {len(raw)}건 → Flexible Match 통과 {len(filtered)}건 (탈락 {len(dropped)}건)")
     for i, n in enumerate(filtered[:20], 1):
-        print(f"  [{i:02d}] {n['title'][:70]}")
-    if not filtered:
-        print(f"  ※ 종목 전용 뉴스 0건 — 뉴스 점수 0점 처리")
+        print(f"  ✅ [{i:02d}] {n['title'][:70]}")
+    if dropped:
+        print(f"  ── 탈락 뉴스 (필터 미통과, 상위 {min(len(dropped),15)}건) ──")
+        for t in dropped[:15]:
+            print(f"  ❌ {t}")
+    if not any_fetch_ok:
+        print(f"  ⚠ 모든 수집 채널 실패 — Network Error")
 
-    return filtered[:40]
+    # ── 상태 판정 ─────────────────────────────────────────────────────────────
+    if not any_fetch_ok:
+        status = "error"
+    elif filtered:
+        status = "ok"
+    else:
+        status = "empty"
+
+    return {"items": filtered[:40], "status": status, "fetch_count": len(raw)}
 
 
 def classify_news(title: str) -> str:
@@ -1587,12 +1665,13 @@ def analyze_ticker(ticker: str, name: str, market: str) -> dict:
     """42대 필살기 전수조사 — 병렬 수집 후 종합 점수 산출."""
     now_kst = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S KST")
 
+    _news_aliases = _build_eng_aliases(name, ticker)   # Flexible Match 영문 약칭
     with ThreadPoolExecutor(max_workers=6) as ex:
         f_price = ex.submit(get_realtime_price, ticker)
         f_ohlcv = ex.submit(get_ohlcv, ticker, 90)
         f_inv   = ex.submit(get_investor_flow, ticker)
         f_fund  = ex.submit(get_fundamentals, ticker)
-        f_news  = ex.submit(get_news, ticker, name)
+        f_news  = ex.submit(get_news, ticker, name, _news_aliases)
         f_macro = ex.submit(get_macro_data)
 
     # ── Zero-Error 방어: 각 Future 개별 try-except + 안전 기본값 ────────────
@@ -1615,9 +1694,12 @@ def analyze_ticker(ticker: str, name: str, market: str) -> dict:
     except Exception:
         fund_data = {}
     try:
-        news_list = f_news.result() or []
+        _news_raw     = f_news.result() or {}
+        news_list     = _news_raw.get("items", [])
+        news_status   = _news_raw.get("status", "error")   # "ok"|"empty"|"error"
     except Exception:
-        news_list = []
+        news_list   = []
+        news_status = "error"
     try:
         macro_data = f_macro.result() or {}
     except Exception:
@@ -1645,6 +1727,7 @@ def analyze_ticker(ticker: str, name: str, market: str) -> dict:
 
     # 뉴스/미반영호재 (30점) — Tier 1 즉시 만점
     news_result = score_news(news_list)
+    news_result["news_status"] = news_status   # 수집 상태 주입 → ui_news() 표시용
 
     # 리스크/숏스퀴즈 (10점) — 공매도·신용잔고·프로그램매매
     risk_result = score_risk_squeeze(price_data, inv_data, pb_result)
@@ -2933,8 +3016,18 @@ def ui_news(news_result: dict, all_news: list[dict]):
     impact_hits  = news_result.get("impact_hits",  [])
     vel_label    = news_result.get("velocity_label", "")
 
+    news_status = news_result.get("news_status", "ok" if all_news else "empty")
     if not all_news:
-        st.info("뉴스 데이터를 수집할 수 없습니다.")
+        if news_status == "error":
+            st.error(
+                "⚠ 뉴스 수집 중 네트워크 오류가 발생했습니다. "
+                "⚡ 버튼으로 캐시를 초기화한 후 다시 조회해 주세요."
+            )
+        else:
+            st.info(
+                "현재 이 종목에 대한 실시간 호재 뉴스가 없습니다. "
+                "(뉴스 점수 0점 적용 — 시장 잡음으로 채우지 않는 0점 원칙)"
+            )
         return
 
     # ── 점수 레이블 헤더 ─────────────────────────────────────────────────────
