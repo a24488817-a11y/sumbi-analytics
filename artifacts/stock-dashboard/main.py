@@ -16,6 +16,7 @@ from io import StringIO
 import pytz
 import re
 import math
+import os
 import plotly.graph_objects as go
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -537,16 +538,28 @@ def search_ticker(query: str, tdf: pd.DataFrame) -> list[dict]:
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=30, show_spinner=False)
 def get_realtime_price(ticker: str) -> dict:
-    """Naver m.stock API → 현재가·등락률·시가총액."""
+    """Naver m.stock API → 현재가·등락률·시가총액.
+
+    방어 처리: marketValue가 None/null로 반환되는 경우 0.0으로 안전 처리.
+    시총 0 반환 시 scan_top_stocks()의 FDR Marcap 폴백이 자동 보완.
+    """
     try:
         url  = f"https://m.stock.naver.com/api/stock/{ticker}/basic"
-        resp = requests.get(url, headers=NAVER_HDRS, timeout=8)
+        resp = requests.get(url, headers=NAVER_HDRS, timeout=5)
         d    = resp.json()
-        cur  = int(str(d.get("closePrice", "0")).replace(",", "") or 0)
-        chg  = float(d.get("fluctuationsRatio", 0))
-        diff = str(d.get("compareToPreviousClosePrice", "0")).replace(",", "")
-        cap_raw = d.get("marketValue", d.get("totalInfos", {}).get("marketValue", "0"))
-        cap = float(str(cap_raw).replace(",", "") or 0) / 1e8
+        cur  = int(str(d.get("closePrice", "0") or "0").replace(",", "") or 0)
+        chg  = float(d.get("fluctuationsRatio", 0) or 0)
+        diff = str(d.get("compareToPreviousClosePrice", "0") or "0").replace(",", "")
+        # marketValue가 null/None으로 반환될 수 있음 → 방어적 파싱
+        cap_raw = (
+            d.get("marketValue")
+            or (d.get("totalInfos") or {}).get("marketValue")
+            or "0"
+        )
+        try:
+            cap = float(str(cap_raw).replace(",", "")) / 1e8
+        except (ValueError, TypeError):
+            cap = 0.0
         return {
             "현재가": cur, "등락률": chg, "전일대비": int(diff or 0),
             "시가총액": round(cap, 1), "이름": d.get("stockName", ""),
@@ -915,6 +928,38 @@ def get_naver_news_api(query: str, display: int = 100) -> list[dict]:
         return items
     except Exception:
         return []
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def get_news_batch(ticker: str, name: str) -> list[dict]:
+    """배치 스캐너 전용 경량 뉴스 수집 — 단일 API 쿼리 (quick_score 전용).
+
+    V9.0 전체 get_news() 대비 API 콜 수: 5~7개 → 1개.
+    500종목 배치 스캔 시 API 과부하·타임아웃 방지용 경량 버전.
+    Flexible Match(한글 토큰) 동일 적용. aliases 없음.
+    """
+    _stopwords = {"주식회사", "(주)", "㈜", "홀딩스", "그룹", "코리아", "코퍼레이션", "인터내셔널"}
+    name_clean = name
+    for sw in _stopwords:
+        name_clean = name_clean.replace(sw, "")
+    name_tokens = [t.strip() for t in name_clean.split() if len(t.strip()) >= 2]
+
+    def _match(title: str) -> bool:
+        if ticker in title:
+            return True
+        return any(tok in title for tok in name_tokens)
+
+    items = get_naver_news_api(name, display=30)
+    filtered = [n for n in items if _match(n["title"])]
+
+    # 폴백: 종목명 단독으로 0건이면 "종목명 주가" 쿼리 1회 추가
+    if not filtered:
+        items2 = get_naver_news_api(f"{name} 주가", display=20)
+        for n in items2:
+            if _match(n["title"]) and n["title"] not in {x["title"] for x in filtered}:
+                filtered.append(n)
+
+    return filtered[:20]
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -1941,25 +1986,24 @@ def get_top_volume_tickers() -> list[dict]:
                     if any(kw in name for kw in _ETF_ETN_KW):
                         continue
 
-                    # ── 시가총액·거래대금 파싱 (td[5]=거래대금 백만, td[6]=시총 억) ──
+                    # ── 거래대금 파싱 (실측 컬럼 순서 기반) ─────────────────────────
+                    # sise_quant 실제 컬럼: td[5]=거래량(주수) td[6]=거래대금(백만원)
+                    # → 시총 컬럼 없음: cap_억=0, FDR Marcap 폴백이 scan_top_stocks()에서 보완
                     tds = tr.select("td")
                     tvol_백만 = 0.0   # 거래대금 (백만원)
-                    cap_억    = 0.0   # 시가총액 (억원)
+                    cap_억    = 0.0   # 시가총액 — sise_quant에 없음, FDR 폴백
                     try:
                         def _td_num(idx: int) -> float:
                             txt = tds[idx].get_text(strip=True).replace(",", "")
-                            return float(txt) if txt.lstrip("-").isdigit() else 0.0
-                        v5, v6 = _td_num(5), _td_num(6)
-                        # sise_quant 열 순서: 거래대금(5) → 시가총액(6)
-                        # 두 값 모두 양수일 때만 사용
-                        if v5 > 0 and v6 > 0:
-                            tvol_백만, cap_억 = v5, v6
+                            return float(txt) if txt.lstrip("-").replace(".","").isdigit() else 0.0
+                        v6 = _td_num(6)   # td[6] = 거래대금(백만원)
+                        if v6 > 0:
+                            tvol_백만 = v6
                     except Exception:
                         pass
 
-                    # turnover_pct (%) = 거래대금(백만) / 시가총액(억)
-                    # [단위 검증] 1억=100백만 → tvol(백만)/cap(억) = tvol(백만)/(cap(백만)/100) *1/100*100 = tvol/cap
-                    turnover_pct = (tvol_백만 / cap_억) if cap_억 > 0 else 0.0
+                    # turnover_pct = 0 (cap 없음), composite score는 tvol 기반으로만 작동
+                    turnover_pct = 0.0
 
                     pool.append({
                         "code":         code,
@@ -1993,7 +2037,6 @@ def get_top_volume_tickers() -> list[dict]:
     return candidates
 
 
-@st.cache_data(ttl=180, show_spinner=False)
 def quick_score(ticker: str, name: str, market: str, turnover_pct: float = 0.0) -> dict | None:
     """
     배치 스캐너용 점수 산출 — analyze_ticker()와 100% 동일한 42대 필살기 4축 공식.
@@ -2004,7 +2047,9 @@ def quick_score(ticker: str, name: str, market: str, turnover_pct: float = 0.0) 
     │ 차트     │ 20점│ calc_pullback_score()  GOLDEN RULE│
     │ 리스크   │ 10점│ score_risk_squeeze()              │
     └──────────┴─────┴──────────────────────────────────┘
-    get_news()는 @st.cache_data(ttl=300)이므로 배치 성능에 최소 영향.
+    주의: @st.cache_data 제거 — ThreadPoolExecutor 워커 스레드에서 Streamlit
+    ScriptRunContext 없이 호출 시 예외 발생을 방지.
+    _scan_top_cached() (ttl=60) 가 집계 결과를 캐시하므로 개별 캐시 불필요.
     """
     try:
         price_data = get_realtime_price(ticker)
@@ -2014,10 +2059,8 @@ def quick_score(ticker: str, name: str, market: str, turnover_pct: float = 0.0) 
         ohlcv    = get_ohlcv(ticker, 90)
         inv_data = get_investor_flow(ticker)
 
-        # 뉴스 수집 — get_news()는 캐시됨(ttl=300), 단일 분석과 동일 Flexible Match 적용
-        _news_aliases = _build_eng_aliases(name, ticker)
-        _news_raw     = get_news(ticker, name, _news_aliases)
-        news_list     = _news_raw.get("items", []) if isinstance(_news_raw, dict) else []
+        # 뉴스 수집 — 배치 경량 버전(1 API콜) → 500종목 타임아웃 방지
+        news_list = get_news_batch(ticker, name)
 
         pb = (
             calc_pullback_score(
@@ -2117,13 +2160,21 @@ def scan_top_stocks(candidates: list[dict]) -> list[dict]:
             for c in candidates
         }
         results = []
+        err_count = 0
         for f in futs:
             try:
-                r = f.result(timeout=20)
+                r = f.result(timeout=40)
                 if r:
                     results.append(r)
-            except Exception:
-                pass
+            except Exception as _scan_exc:
+                err_count += 1
+                if err_count == 1:   # 첫 번째 오류만 로깅
+                    try:
+                        import traceback as _tb
+                        with open("/tmp/scan_errors.log", "a") as _lf:
+                            _lf.write(f"[scan_top_stocks] {_tb.format_exc()}\n")
+                    except Exception:
+                        pass
 
     # ── FDR Marcap 병합: Naver API cap이 0/소액인 경우 보완 ──────────────────
     cap_lookup = _get_marcap_lookup()
@@ -2149,10 +2200,9 @@ def scan_top_stocks(candidates: list[dict]) -> list[dict]:
     return sorted(results, key=_sig_key, reverse=True)
 
 
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def _scan_top_cached(candidate_tuples: tuple) -> list[dict]:
-    """scan_top_stocks의 캐시 래퍼 — tuple 입력으로 hashable 처리 (TTL 60s).
-    TTL을 60s로 단축 → 코드 변경 후 최대 1분 내 새 로직 자동 반영 보장.
+    """scan_top_stocks의 캐시 래퍼 — tuple 입력으로 hashable 처리 (TTL 300s).
     tuple 형식: (code, name, market, turnover_pct) — 4-tuple
     """
     candidates = [
@@ -4069,7 +4119,11 @@ button[data-baseweb="tab"][aria-selected="true"] p { color: #D4AF37 !important; 
             )
             ui_stealth_mode(scored)
     else:
-        st.warning("실시간 데이터 수급 대기 중 (KRX / Yahoo Finance) — ⚡ 즉시 갱신 버튼으로 재시도하세요.")
+        st.info(
+            "📡 데이터 점검 중 — 종목 수급 파이프라인 초기 동기화 완료 대기 중입니다.\n\n"
+            "첫 로드 시 최대 60~90초 소요될 수 있습니다. "
+            "**⚡ 즉시 갱신** 버튼을 눌러 캐시를 초기화하거나 잠시 후 새로고침하세요."
+        )
     st.divider()
 
     # ── 검색 영역 ─────────────────────────────────────────────────────────────
