@@ -1276,7 +1276,7 @@ def quick_score(ticker: str, name: str, market: str) -> dict | None:
         pb_sig = pb.get("signal", "관망")
         sig_mult = next((v for k, v in _SIG_MULT.items() if k in pb_sig), 0.3)
         _RANK_DENOM = 30 * 2.5 + 30 * 2.0 + 20   # 최대 가중 합산 = 155
-        rank_raw   = pb["score"] * sig_mult + inv["score"] * 2.0 + short
+        rank_raw   = pb["score"] * sig_mult + inv["score"] * 2.0 + 0
         rank_score = int(min(rank_raw / _RANK_DENOM * 100, 100))
 
         return {
