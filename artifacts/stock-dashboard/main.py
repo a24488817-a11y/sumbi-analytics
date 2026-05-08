@@ -2252,8 +2252,8 @@ def ui_stealth_mode(scored: list[dict]):
 
     [3 AND 조건 동시 충족 — 단 하나라도 미충족 시 drop()]
     ① 가격 억제 : 등락률 ≤ +1.5%  (급등주 물리적 차단)
-    ② 과열 방지 : RSI ≤ 50        (과매수 구간 완전 배제)
-    ③ 수급 다이버전스: 수급 25점 이상 OR 기관+외인 쌍끌이
+    ② 과열 방지 : RSI ≤ 60        (정상 눌림목까지 포착, 과매수 구간만 배제)
+    ③ 수급 다이버전스: 수급 15점 이상 OR 기관+외인 쌍끌이
        (주가↓·보합이지만 세력은 매수 = 진짜 바닥 매집 포착)
     정렬: MA20 이격도 음수 우선, 0에 가장 가까운 순 (최적 눌림목 진입 타이밍 순)
     """
@@ -2263,10 +2263,10 @@ def ui_stealth_mode(scored: list[dict]):
     for s in scored:
         chg    = s.get("change", 0.0)
         rsi    = float(s.get("rsi", 50.0))
-        inv_ok = s.get("is_ssankkl") or s["inv_score"] >= 25
+        inv_ok = s.get("is_ssankkl") or s["inv_score"] >= 15
 
-        if chg > 1.5:   continue   # ① 급등주 차단 (등락률 +1.5% 초과 즉시 drop)
-        if rsi > 50:    continue   # ② 과열 배제 (RSI 50 초과 즉시 drop)
+        if chg > 1.5:   continue   # ① 급등주 차단 (등락률 +1.5% 초과 즉시 drop) — 절대 유지
+        if rsi > 60:    continue   # ② 과열 배제 (RSI 60 초과 즉시 drop) — 정상 눌림목까지 포착
         if not inv_ok:  continue   # ③ 수급 다이버전스 없음 즉시 drop
 
         passed.append(s)
@@ -2312,8 +2312,8 @@ def ui_stealth_mode(scored: list[dict]):
     → 상위 <strong>{min(n_passed, 15)}</strong>종목 표출
   </div>
   <div class="sm-rule">
-    Kill Switch: ① 등락률 ≤ +1.5% &amp; ② RSI ≤ 50 &amp;
-    ③ 수급 25점+ 또는 쌍끌이 (3개 AND 충족 필수) &nbsp;|&nbsp;
+    Kill Switch: ① 등락률 ≤ +1.5% &amp; ② RSI ≤ 60 &amp;
+    ③ 수급 15점+ 또는 쌍끌이 (3개 AND 충족 필수) &nbsp;|&nbsp;
     정렬: MA20 이격도 음수 우선·0 근접 순
   </div>
 </div>
