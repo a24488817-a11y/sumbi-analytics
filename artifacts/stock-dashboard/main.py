@@ -2335,8 +2335,8 @@ def ui_score_card(r: dict):
 
     # ── LEGENDARY 판정 상세 근거 카드 (80점 이상 시 자동 출력) ────────────────
     if total >= 80:
-        ticker_r = result.get("ticker", "")
-        name_r   = result.get("name", "")
+        ticker_r = r.get("ticker", "")
+        name_r   = r.get("name", "")
 
         # ── 4대 근거 수집 ─────────────────────────────────────────────────────
         ev: list[tuple[str, str, str]] = []   # (아이콘, 축, 근거 텍스트)
