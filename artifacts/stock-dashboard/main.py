@@ -1880,8 +1880,15 @@ def get_top_volume_tickers() -> list[dict]:
 @st.cache_data(ttl=180, show_spinner=False)
 def quick_score(ticker: str, name: str, market: str) -> dict | None:
     """
-    배치 스캐너용 빠른 점수 산출 (펀더멘털·뉴스 제외).
-    기존 score_investor() + calc_pullback_score() GOLDEN RULE 그대로 사용.
+    배치 스캐너용 점수 산출 — analyze_ticker()와 100% 동일한 42대 필살기 4축 공식.
+
+    ┌──────────┬─────┬──────────────────────────────────┐
+    │ 수급     │ 40점│ score_investor()  GOLDEN RULE    │
+    │ 뉴스     │ 30점│ score_news()  ← V8.1 Tier2 포함  │
+    │ 차트     │ 20점│ calc_pullback_score()  GOLDEN RULE│
+    │ 리스크   │ 10점│ score_risk_squeeze()              │
+    └──────────┴─────┴──────────────────────────────────┘
+    get_news()는 @st.cache_data(ttl=300)이므로 배치 성능에 최소 영향.
     """
     try:
         price_data = get_realtime_price(ticker)
@@ -1890,6 +1897,11 @@ def quick_score(ticker: str, name: str, market: str) -> dict | None:
 
         ohlcv    = get_ohlcv(ticker, 90)
         inv_data = get_investor_flow(ticker)
+
+        # 뉴스 수집 — get_news()는 캐시됨(ttl=300), 단일 분석과 동일 Flexible Match 적용
+        _news_aliases = _build_eng_aliases(name, ticker)
+        _news_raw     = get_news(ticker, name, _news_aliases)
+        news_list     = _news_raw.get("items", []) if isinstance(_news_raw, dict) else []
 
         pb = (
             calc_pullback_score(
@@ -1900,20 +1912,20 @@ def quick_score(ticker: str, name: str, market: str) -> dict | None:
             else {"score": 0, "signal": "데이터 부족", "rsi": 50.0,
                   "ma5": 0, "ma20": 0, "ma60": 0}
         )
-        inv   = score_investor(inv_data)
-        # V7.0: 4축 공식 근사 (뉴스·리스크 미수집 — 기본값 적용)
-        pb_cap = min(pb["score"], 20)   # 차트 최대 20점
-        total  = min(inv["score"] + pb_cap + 10, 100)
-        # news 기본 0점 + risk 기본 중립 10점 합산
-        total  = min(total + 10, 100)
+        inv         = score_investor(inv_data)
+        news_result = score_news(news_list)         # V8.1 Tier2 모멘텀 키워드 완전 동일
+        risk_result = score_risk_squeeze(price_data, inv_data, pb)
+
+        pb_cap = min(pb["score"], 20)   # 차트 기여 최대 20점 캡
+        # analyze_ticker()와 100% 동일한 공식: 수급40 + 뉴스30 + 차트20 + 리스크10
+        total  = min(inv["score"] + news_result["score"] + pb_cap + risk_result["score"], 100)
 
         # ── rank_score: 신호 강도 가중치 적용 (정렬 전용, 표시 점수와 별도) ──
-        # "즉시 매수" 신호가 최상위 독식하도록 pb_score에 시그널 멀티플라이어 적용
         _SIG_MULT = {"즉시 매수": 2.5, "매수 준비": 1.2, "관망": 0.3, "데이터 부족": 0.2}
-        pb_sig = pb.get("signal", "관망")
+        pb_sig   = pb.get("signal", "관망")
         sig_mult = next((v for k, v in _SIG_MULT.items() if k in pb_sig), 0.3)
         _RANK_DENOM = 30 * 2.5 + 30 * 2.0 + 20   # 최대 가중 합산 = 155
-        rank_raw   = pb["score"] * sig_mult + inv["score"] * 2.0 + 0
+        rank_raw   = pb["score"] * sig_mult + inv["score"] * 2.0 + news_result["score"]
         rank_score = int(min(rank_raw / _RANK_DENOM * 100, 100))
 
         return {
@@ -1925,6 +1937,8 @@ def quick_score(ticker: str, name: str, market: str) -> dict | None:
             "cap":        price_data.get("시가총액", 0),
             "pb_score":   pb["score"],
             "inv_score":  inv["score"],
+            "news_score": news_result["score"],
+            "risk_score": risk_result["score"],
             "total":      total,
             "rank_score": rank_score,
             "signal":     pb["signal"],
