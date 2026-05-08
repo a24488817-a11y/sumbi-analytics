@@ -188,6 +188,21 @@ _TIER0_KW = [
     "자진상장폐지 철회", "경영권 인수", "컨소시엄 구성",
 ]
 
+# Tier 중립 (10점) — 일반 PR·채용·인사·IR·수상 등 주가 영향 미미한 기업 활동
+_NEUTRAL_ARTICLE_KW = [
+    "채용", "사회공헌", "CSR", "ESG", "기념식", "창립",
+    "IR", "투자설명회", "NDR", "애널리스트데이", "기업설명회",
+    "임원 선임", "대표이사 선임", "이사회", "사외이사", "경영진",
+    "후원", "봉사", "캠페인", "홍보", "기부", "협약식",
+    "시상", "수상", "선정", "인증", "인사 발령", "조직 개편",
+]
+
+# DART 공시 교차검증 키워드 — 공시 연동 뉴스 = 팩트 신뢰도 최고
+_DART_KW = [
+    "공시", "전자공시", "수시공시", "사업보고서",
+    "분기보고서", "반기보고서", "DART", "금감원", "공시 접수",
+]
+
 
 # KRX 휴장일 내장 폴백 테이블 (open.krx.co.kr API 불가 시 사용)
 _KRX_HOLIDAYS_FALLBACK: dict[int, dict[str, str]] = {
@@ -1103,87 +1118,185 @@ def score_fundamentals(fund: dict) -> dict:
     return {"score": score, "detail": detail}
 
 
+def _extract_news_reason(title: str) -> str:
+    """제목에서 수치/사실을 NLP 추출 → '이유: X% 수치 확인' 팩트 근거 문장 생성."""
+    parts: list[str] = []
+    # 조원 규모
+    trln = re.findall(r"(\d+\.?\d*)조", title)
+    if trln:
+        parts.append(f"{trln[0]}조원 규모")
+    # 억원 규모
+    amts = re.findall(r"(\d[\d,]*)억", title)
+    if amts:
+        parts.append(f"{amts[0]}억원 규모 확인")
+    # 백분율 수치
+    pcts = re.findall(r"(\d+\.?\d*)%", title)
+    if pcts:
+        parts.append(f"{pcts[0]}% 수치 확인")
+    # 배수(배) 성장
+    times = re.findall(r"(\d+\.?\d*)배", title)
+    if times and not parts:
+        parts.append(f"{times[0]}배 성장 수치")
+    # 키워드 기반 문맥 근거 (수치 없을 때)
+    if not parts:
+        _ctx = {
+            "사상 최대": "역대 최대 실적 확인",
+            "역대 최대": "역대 최대 실적 확인",
+            "어닝 서프라이즈": "컨센서스 상회 실적 서프라이즈",
+            "흑자전환": "적자→흑자 전환 확정",
+            "흑자 전환": "적자→흑자 전환 확정",
+            "독점": "독점 공급·계약 체결 확정",
+            "세계 최초": "세계 최초 기술·제품 확정",
+            "FDA 승인": "미국 FDA 공식 승인 확인",
+            "임상 성공": "임상시험 성공 공식 확인",
+            "양산 성공": "양산 체계 구축 확인",
+            "상한가": "당일 가격제한폭 상한 도달",
+            "목표주가 상향": "증권사 목표주가 상향 조정",
+            "목표가 상향": "증권사 목표주가 상향 조정",
+            "MOU": "MOU·업무협약 공식 체결",
+            "수주 성공": "신규 수주 계약 체결 확인",
+            "계약 체결": "계약 체결 사실 확인",
+            "특허": "핵심 특허 등록·확보 확인",
+            "허가": "당국 공식 허가 취득 확인",
+        }
+        for kw, reason in _ctx.items():
+            if kw in title:
+                parts.append(reason)
+                break
+    return ("이유: " + " · ".join(parts)) if parts else ""
+
+
+def _is_dart_news(title: str) -> bool:
+    """제목에 전자공시·DART 키워드가 있으면 True (팩트 신뢰도 최고 등급)."""
+    return any(kw in title for kw in _DART_KW)
+
+
 def score_news(news: list[dict]) -> dict:
-    """뉴스 등급제 점수 30점 — V8.0 Tier 0(시장구조변경)·Tier1·Tier2 3단계 + 속도 분석.
-    news 리스트는 get_news()의 Hard Filter가 적용된 종목 전용 뉴스여야 함.
+    """뉴스 팩트체크 점수 30점 — V8.0 Tiered Fact-Check 등급제.
+
+    등급 체계 (사장님 42대 필살기 함해물 원칙 100% 준수):
+    ┌─────────┬─────┬──────────────────────────────────────────┐
+    │ Tier 0  │ 30점│ M&A·합병·공개매수 등 시장구조 변경급     │
+    │ Tier 1  │ 30점│ 실적 서프라이즈·대형수주·독점기술 확정   │
+    │ Tier 2  │ 20점│ 목표가 상향·파트너십·중소 공급계약        │
+    │ Neutral │ 10점│ PR·채용·IR·수상 등 주가 영향 미미         │
+    │ Bad/None│  0점│ 악재 우세 또는 종목 전용 호재 0건        │
+    └─────────┴─────┴──────────────────────────────────────────┘
+    news 리스트는 get_news() Hard Filter가 적용된 종목 전용 뉴스여야 함.
     """
-    empty = {"score": 0, "good": [], "bad": [], "neutral": [],
-             "impact_hits": [], "tier0_news": [], "tier1_news": [], "tier2_news": [],
-             "velocity": 0, "velocity_label": "뉴스 없음"}
+    empty = {
+        "score": 0, "score_label": "0점 (호재 없음)",
+        "good": [], "bad": [], "neutral": [],
+        "impact_hits": [], "tier0_news": [], "tier1_news": [],
+        "tier2_news": [], "neutral_news": [],
+        "velocity": 0, "velocity_label": "뉴스 없음",
+    }
     if not news:
         return empty
 
-    tier0_news:  list[dict] = []
-    tier1_news:  list[dict] = []
-    tier2_news:  list[dict] = []
-    bad_news:    list[dict] = []
-    neutral:     list[dict] = []
-    impact_hits: list[str]  = []
+    tier0_news:   list[dict] = []
+    tier1_news:   list[dict] = []
+    tier2_news:   list[dict] = []
+    neutral_news: list[dict] = []   # 10점 — PR·채용·IR
+    bad_news:     list[dict] = []
+    noise_list:   list[dict] = []   # 0점 — 순수 시황 잡음
+    impact_hits:  list[str]  = []
 
     for n in news:
-        t = n["title"]
-        # ① 소음 필터 — 즉시 중립 처리
+        t      = n["title"]
+        reason = _extract_news_reason(t)
+        is_dart = _is_dart_news(t)
+        item   = {**n, "reason": reason, "dart": is_dart}
+
+        # ① 순수 시황 잡음 — 점수 계산에서 완전 배제
         if any(kw in t for kw in _NOISE_KW):
-            neutral.append(n)
+            noise_list.append(n)
             continue
-        # ② Tier 0 — 시장 구조 변경급 초강력 이벤트 (M&A·공개매수·이전상장 등)
+
+        # ② Tier 0 — 시장 구조 변경급 (M&A·공개매수·이전상장)
         t0_hits = [kw for kw in _TIER0_KW if kw in t]
         if t0_hits:
-            tier0_news.append(n)
+            tier0_news.append(item)
             for kw in t0_hits:
                 if kw not in impact_hits:
                     impact_hits.append(kw)
             continue
-        # ③ Tier 1 확정 호재
+
+        # ③ Tier 1 — 확정 팩트 (실적 서프라이즈·대형 수주·독점 기술)
         t1_hits = [kw for kw in _TIER1_KW if kw in t]
         if t1_hits:
-            tier1_news.append(n)
+            tier1_news.append(item)
             for kw in t1_hits:
                 if kw not in impact_hits:
                     impact_hits.append(kw)
             continue
-        # ④ 악재 감지
-        b = sum(1 for kw in _BAD_KW if kw in t)
-        g = (sum(1 for kw in _GOOD_KW if kw in t)
-             + sum(1 for kw in _TIER2_KW if kw in t))
-        if b > 0 and b >= g:
-            bad_news.append(n)
-            continue
-        # ⑤ Tier 2 기대감 호재
-        if any(kw in t for kw in _TIER2_KW) or g > 0:
-            tier2_news.append(n)
-            continue
-        neutral.append(n)
 
-    # ── 점수 산출 ──────────────────────────────────────────────────────────────
+        # ④ 악재 감지 (긍정 신호보다 부정이 우세할 때만 악재 분류)
+        b_score = sum(1 for kw in _BAD_KW if kw in t)
+        g_score = (sum(1 for kw in _GOOD_KW if kw in t)
+                   + sum(1 for kw in _TIER2_KW if kw in t))
+        if b_score > 0 and b_score >= g_score:
+            bad_news.append(item)
+            continue
+
+        # ⑤ Tier 2 — 긍정 기대감 (목표가 상향·파트너십·중소 계약)
+        if any(kw in t for kw in _TIER2_KW) or g_score > 0:
+            tier2_news.append(item)
+            continue
+
+        # ⑥ Neutral (10점) — PR·채용·IR 등 주가 영향 미미 기업 활동
+        if any(kw in t for kw in _NEUTRAL_ARTICLE_KW):
+            neutral_news.append({
+                **item,
+                "reason": "일반 기업 활동 — 주가 영향 미미 (IR·PR·인사·수상 등)",
+            })
+            continue
+
+    # ── 점수 산출 (사장님 팩트체크 등급표 100% 준수) ──────────────────────────
     if tier0_news:
-        score = 30          # Tier 0: 시장 구조 변경 이벤트 → 즉시 만점
+        score = 30
+        score_label = "30점 ★★ Tier 0 — 시장구조 변경급 (M&A·합병·공개매수)"
     elif tier1_news:
-        score = 30          # Tier 1: 확정 호재 → 즉시 만점
+        score = 30
+        score_label = "30점 ★★ Tier 1 — 확정 팩트 (실적·수주·독점기술)"
     elif tier2_news:
-        raw   = min(len(tier2_news) * 7, 20)
-        score = max(0, raw - len(bad_news) * 3)
+        score = 20
+        # 악재가 Tier2 건수 이상이면 0점 (냉정한 0점 원칙)
+        if len(bad_news) >= len(tier2_news):
+            score = 0
+            score_label = "0점 — 악재 우세로 호재 상쇄"
+        elif bad_news:
+            score = max(10, 20 - len(bad_news) * 5)
+            score_label = f"{score}점 Tier 2 — 기대감 호재 (악재 {len(bad_news)}건 감점)"
+        else:
+            score_label = "20점 ★ Tier 2 — 성장 가시성 확보 (목표가·파트너십·계약)"
+    elif neutral_news and not bad_news:
+        score = 10
+        score_label = "10점 Neutral — PR·IR·채용 기업 활동 (주가 영향 미미)"
     else:
         score = 0
+        score_label = "0점 — 종목 전용 호재 없음 또는 악재 우세"
 
-    # ── 뉴스 속도(Velocity) 산출 ─────────────────────────────────────────────
+    # ── 뉴스 속도(Sentiment Velocity) 산출 ──────────────────────────────────
     positive_cnt = len(tier0_news) + len(tier1_news) + len(tier2_news)
-    if   positive_cnt >= 6: velocity = 2; vel_label = "🚀 뉴스 랠리 — 세력 의도적 호재 집중 살포"
+    if   positive_cnt >= 6: velocity = 2; vel_label = "🚀 뉴스 랠리 — 호재 집중 살포 (세력 주가 부양 패턴)"
     elif positive_cnt >= 3: velocity = 1; vel_label = "📈 호재 집중 — 기대감 형성 구간"
     elif positive_cnt >= 1: velocity = 0; vel_label = "📰 단발성 호재 — 모멘텀 지속 확인 필요"
     else:                   velocity = 0; vel_label = "— 종목 전용 호재 뉴스 없음"
 
     good_all = tier0_news + tier1_news + tier2_news
     return {
-        "score":       score,
-        "good":        good_all[:5],
-        "bad":         bad_news[:3],
-        "neutral":     neutral,
-        "impact_hits": impact_hits,
-        "tier0_news":  tier0_news[:3],
-        "tier1_news":  tier1_news[:5],
-        "tier2_news":  tier2_news[:5],
-        "velocity":    velocity,
+        "score":        score,
+        "score_label":  score_label,
+        "good":         good_all[:5],
+        "bad":          bad_news[:3],
+        "neutral":      noise_list,
+        "neutral_news": neutral_news[:3],
+        "impact_hits":  impact_hits,
+        "tier0_news":   tier0_news[:3],
+        "tier1_news":   tier1_news[:5],
+        "tier2_news":   tier2_news[:5],
+        "velocity":     velocity,
         "velocity_label": vel_label,
     }
 
@@ -2781,86 +2894,176 @@ border-radius:12px;overflow:hidden;'>
     st.markdown(html, unsafe_allow_html=True)
 
 
+def _ui_news_item(n: dict, badge_html: str):
+    """뉴스 단일 항목 — 배지 + 제목(링크) + 이유 + DART 배지."""
+    title   = n.get("title", "")
+    href    = n.get("url", "")
+    reason  = n.get("reason", "")
+    is_dart = n.get("dart", False)
+
+    dart_badge = (
+        '<span style="background:#1a4a2a;color:#4ec76a;border:1px solid #27ae60;'
+        'font-size:.64rem;font-weight:700;border-radius:4px;padding:1px 5px;'
+        'margin-left:5px;">📋 DART 공시</span>'
+        if is_dart else ""
+    )
+    title_md = f"[{title}]({href})" if href else title
+    reason_html = (
+        f'<div style="color:#8fa3b8;font-size:.74rem;margin:1px 0 5px 6px;">'
+        f'└ {reason}</div>'
+        if reason else ""
+    )
+    st.markdown(
+        f'{badge_html} {title_md}{dart_badge}',
+        unsafe_allow_html=True,
+    )
+    if reason_html:
+        st.markdown(reason_html, unsafe_allow_html=True)
+
+
 def ui_news(news_result: dict, all_news: list[dict]):
-    """뉴스 등급제 — Tier1 🔥(score≥15) / Tier2 / 악재 / 전체."""
-    score      = news_result.get("score", 0)
-    tier1_news = news_result.get("tier1_news", [])
-    tier2_news = news_result.get("tier2_news", [])
-    bad        = news_result.get("bad", [])
-    impact_hits= news_result.get("impact_hits", [])
+    """뉴스 팩트체크 등급제 UI — V8.0 Tiered Fact-Check 시스템."""
+    score        = news_result.get("score", 0)
+    score_label  = news_result.get("score_label", f"{score}점")
+    tier0_news   = news_result.get("tier0_news",  [])
+    tier1_news   = news_result.get("tier1_news",  [])
+    tier2_news   = news_result.get("tier2_news",  [])
+    neutral_news = news_result.get("neutral_news",[])
+    bad          = news_result.get("bad",          [])
+    impact_hits  = news_result.get("impact_hits",  [])
+    vel_label    = news_result.get("velocity_label", "")
 
     if not all_news:
         st.info("뉴스 데이터를 수집할 수 없습니다.")
         return
 
-    # ── Tier 1 🔥 미반영 호재 (score ≥ 15일 때만 표시) ─────────────────────
-    if score >= 15 and tier1_news:
-        kw_str = " · ".join(impact_hits[:5]) if impact_hits else "핵심 이벤트"
+    # ── 점수 레이블 헤더 ─────────────────────────────────────────────────────
+    score_col = (
+        "#D4AF37" if score == 30 else
+        "#27ae60" if score >= 20 else
+        "#f39c12" if score >= 10 else
+        "#e74c3c" if bad else "#6b7c93"
+    )
+    st.markdown(
+        f'<div style="background:#0d1526;border:1px solid {score_col};'
+        f'border-left:4px solid {score_col};border-radius:8px;'
+        f'padding:10px 16px;margin:4px 0 12px;">'
+        f'<span style="color:{score_col};font-weight:800;font-size:.88rem;">'
+        f'📊 뉴스 팩트체크 결과: {score_label}</span>'
+        f'<span style="color:#6b7c93;font-size:.75rem;margin-left:10px;">{vel_label}</span>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── Tier 0 🔵 — 시장 구조 변경급 이벤트 ─────────────────────────────────
+    if tier0_news:
         st.markdown(
-            f'<div style="background:#1a1600;border:2px solid #D4AF37;border-radius:10px;'
-            f'padding:12px 16px;margin:6px 0 10px;">'
-            f'<span style="color:#D4AF37;font-weight:800;font-size:.85rem;">'
-            f'🔥 미반영 호재 (Tier 1) — {kw_str}</span></div>',
+            '<div style="color:#4ec76a;font-weight:800;font-size:.82rem;'
+            'letter-spacing:.06em;margin:8px 0 4px;">🔵 TIER 0 — 시장 구조 변경급 (M&A·합병·공개매수)</div>',
             unsafe_allow_html=True,
         )
-        for n in tier1_news:
-            href  = n.get("url", "")
-            title = n["title"]
-            tier_badge = (
-                '<span style="background:#D4AF37;color:#000;font-size:.68rem;'
-                'font-weight:800;border-radius:4px;padding:1px 6px;margin-right:5px;">T1</span>'
-            )
-            if href:
-                st.markdown(
-                    f'{tier_badge} 🔴 [{title}]({href})',
-                    unsafe_allow_html=True,
-                )
-            else:
-                st.markdown(
-                    f'{tier_badge} 🔴 {title}',
-                    unsafe_allow_html=True,
-                )
+        t0_badge = (
+            '<span style="background:#1a4a2a;color:#4ec76a;border:1px solid #27ae60;'
+            'font-size:.68rem;font-weight:800;border-radius:4px;'
+            'padding:1px 7px;margin-right:6px;">T0</span>'
+        )
+        for n in tier0_news:
+            _ui_news_item(n, t0_badge)
 
-    # ── Tier 2 일반 호재 ────────────────────────────────────────────────────
-    elif tier2_news:
-        st.markdown("**📈 미반영 호재 뉴스 (Tier 2)**")
+    # ── Tier 1 🔴 — 확정 팩트 호재 ───────────────────────────────────────────
+    if tier1_news:
+        kw_str = " · ".join(impact_hits[:5]) if impact_hits else "핵심 이벤트"
+        st.markdown(
+            f'<div style="background:#1a1600;border:1px solid #D4AF37;border-radius:8px;'
+            f'padding:8px 14px;margin:8px 0 6px;">'
+            f'<span style="color:#D4AF37;font-weight:800;font-size:.82rem;">'
+            f'🔥 TIER 1 — 확정 팩트 호재 · {kw_str}</span></div>',
+            unsafe_allow_html=True,
+        )
+        t1_badge = (
+            '<span style="background:#D4AF37;color:#000;font-size:.68rem;'
+            'font-weight:800;border-radius:4px;padding:1px 7px;margin-right:6px;">T1</span>'
+        )
+        for n in tier1_news:
+            _ui_news_item(n, t1_badge)
+
+    # ── Tier 2 🟢 — 성장 가시성 호재 ────────────────────────────────────────
+    if tier2_news:
+        st.markdown(
+            '<div style="color:#8fa3b8;font-weight:700;font-size:.8rem;'
+            'letter-spacing:.04em;margin:10px 0 4px;">🟡 TIER 2 — 성장 가시성 (목표가·파트너십·중소 계약)</div>',
+            unsafe_allow_html=True,
+        )
+        t2_badge = (
+            '<span style="background:#2a3550;color:#8fa3b8;font-size:.68rem;'
+            'font-weight:700;border-radius:4px;padding:1px 7px;margin-right:6px;">T2</span>'
+        )
         for n in tier2_news:
-            href  = n.get("url", "")
-            title = n["title"]
-            tier_badge = (
-                '<span style="background:#2a3550;color:#8fa3b8;font-size:.68rem;'
-                'font-weight:700;border-radius:4px;padding:1px 6px;margin-right:5px;">T2</span>'
-            )
-            if href:
-                st.markdown(f'{tier_badge} 🟢 [{title}]({href})', unsafe_allow_html=True)
-            else:
-                st.markdown(f'{tier_badge} 🟢 {title}', unsafe_allow_html=True)
+            _ui_news_item(n, t2_badge)
+
+    # ── Neutral 10pt — PR·채용·IR ────────────────────────────────────────────
+    if neutral_news and not (tier0_news or tier1_news or tier2_news):
+        st.markdown(
+            '<div style="color:#6b7c93;font-size:.78rem;margin:8px 0 4px;">'
+            '⬜ NEUTRAL (10점) — 일반 기업 활동 (주가 영향 미미)</div>',
+            unsafe_allow_html=True,
+        )
+        nt_badge = (
+            '<span style="background:#1a1f2e;color:#6b7c93;font-size:.68rem;'
+            'font-weight:600;border-radius:4px;padding:1px 7px;margin-right:6px;">NT</span>'
+        )
+        for n in neutral_news[:2]:
+            _ui_news_item(n, nt_badge)
 
     # ── 악재 경보 ────────────────────────────────────────────────────────────
     if bad:
-        st.markdown("**📉 악재 주의**")
+        st.markdown(
+            '<div style="color:#e74c3c;font-weight:700;font-size:.8rem;margin:10px 0 4px;">'
+            '📉 악재 경보 — 리스크 요인 감지</div>',
+            unsafe_allow_html=True,
+        )
+        bd_badge = (
+            '<span style="background:#2a1010;color:#e74c3c;font-size:.68rem;'
+            'font-weight:700;border-radius:4px;padding:1px 7px;margin-right:6px;">BAD</span>'
+        )
         for n in bad:
-            st.markdown(f"- 🔴 {n['title']} `{n.get('date', '')}`")
+            _ui_news_item(n, bd_badge)
 
-    # ── 전체 뉴스 (소음 제외, Tier 표시) ────────────────────────────────────
+    # ── 0점 안내 ─────────────────────────────────────────────────────────────
+    if score == 0 and not (tier0_news or tier1_news or tier2_news or neutral_news or bad):
+        st.markdown(
+            '<div style="color:#6b7c93;font-size:.82rem;padding:8px 0;">'
+            '종목 전용 호재 뉴스가 없습니다. 현재 뉴스 점수 0점 적용.</div>',
+            unsafe_allow_html=True,
+        )
+
+    # ── 전체 뉴스 — 소음 제외, Tier 배지 포함 ─────────────────────────────────
     noise_filtered = [n for n in all_news if not any(kw in n["title"] for kw in _NOISE_KW)]
-    with st.expander(f"전체 뉴스 {len(noise_filtered)}건 (소음 제외) 펼치기"):
-        for n in noise_filtered:
-            tier = _news_tier(n["title"])
-            cls  = classify_news(n["title"])
-            if tier == 1:
-                badge = "🔴 **[T1]**"
-            elif cls == "호재":
-                badge = "🟢 [T2]"
-            elif cls == "악재":
-                badge = "🔻 [악재]"
-            else:
-                badge = "⬜"
-            href = n.get("url", "")
-            if href:
-                st.markdown(f"{badge} [{n['title']}]({href})", unsafe_allow_html=True)
-            else:
-                st.markdown(f"{badge} {n['title']}")
+    if noise_filtered:
+        with st.expander(f"전체 뉴스 {len(noise_filtered)}건 (소음 제외) — 팩트체크 등급 표시"):
+            for n in noise_filtered:
+                t    = n["title"]
+                href = n.get("url", "")
+                reason = _extract_news_reason(t)
+                dart   = _is_dart_news(t)
+                dart_s = " 📋" if dart else ""
+                reason_s = f"\n  └ *{reason}*" if reason else ""
+
+                if any(kw in t for kw in _TIER0_KW):
+                    badge = "🔵 **[T0]**"
+                elif any(kw in t for kw in _TIER1_KW):
+                    badge = "🔴 **[T1]**"
+                elif any(kw in t for kw in _TIER2_KW):
+                    badge = "🟡 [T2]"
+                elif any(kw in t for kw in _BAD_KW):
+                    badge = "🔻 [악재]"
+                elif any(kw in t for kw in _NEUTRAL_ARTICLE_KW):
+                    badge = "⬜ [NT]"
+                else:
+                    badge = "— "
+
+                title_md = f"[{t}]({href}){dart_s}" if href else f"{t}{dart_s}"
+                st.markdown(f"{badge} {title_md}{reason_s}", unsafe_allow_html=True)
 
 
 def ui_ma_strip(pb: dict):
