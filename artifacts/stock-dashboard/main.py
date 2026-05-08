@@ -141,6 +141,16 @@ _BAD_KW = [
     "금리 인상", "경기 침체", "파산", "상장폐지", "관리종목",
 ]
 
+# Impact Alpha — 초강력 미반영 호재: 감지 즉시 뉴스/공매도 점수 20점 만점
+_IMPACT_KW = [
+    "기각", "승소", "상한가", "독점", "사상 최대", "어닝 서프라이즈", "양산 성공",
+    "사상 최고", "세계 최초", "특허 등록", "독점 공급", "최대 수주",
+    "역대 최대", "어닝쇼크 반전", "FDA 승인", "임상 성공", "계약 체결 완료",
+    "전략적 투자", "지분 인수", "합병 완료", "인수 확정", "IPO 상장",
+    "골든크로스 돌파", "52주 신고가 돌파", "적자 탈출", "흑자 전환 확정",
+    "아틀라스", "KDDX", "로봇", "자율주행", "AI 반도체", "HBM 양산",
+]
+
 
 # KRX 휴장일 내장 폴백 테이블 (open.krx.co.kr API 불가 시 사용)
 _KRX_HOLIDAYS_FALLBACK: dict[int, dict[str, str]] = {
@@ -527,35 +537,59 @@ def get_fundamentals(ticker: str) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=300, show_spinner=False)
 def get_news(ticker: str, name: str) -> list[dict]:
-    """Naver finance 종목 뉴스 파싱. 다중 URL 시도."""
-    news = []
-    urls_to_try = [
-        f"https://finance.naver.com/news/news_list.naver?mode=RANK&code={ticker}",
-        f"https://finance.naver.com/news/news_search.naver?q={requests.utils.quote(name)}&pd=1&sm=tab_jum",
-    ]
-    for url in urls_to_try:
+    """실시간 뉴스 크롤링 — 4가지 쿼리 확장으로 모든 종목 범용 호재 포착."""
+    seen:  set[str]   = set()
+    news:  list[dict] = []
+
+    def _fetch_url(url: str) -> list[dict]:
+        items_found: list[dict] = []
         try:
             resp = requests.get(url, headers=NAVER_HDRS, timeout=8)
             soup = BeautifulSoup(resp.text, "lxml")
-            # 다양한 셀렉터 시도
             for sel in [
                 ".news_dl dt a", ".articleSubject a", ".news_list li a",
                 "dl dt a", ".type01 li dt a", "li.newline a",
             ]:
-                items = soup.select(sel)
-                if items:
-                    for it in items[:15]:
-                        title = it.get_text(strip=True)
-                        href  = it.get("href", "")
-                        if title and len(title) > 5:
+                elems = soup.select(sel)
+                if elems:
+                    for el in elems[:15]:
+                        title = el.get_text(strip=True)
+                        href  = el.get("href", "")
+                        if title and len(title) > 5 and title not in seen:
                             if href and not href.startswith("http"):
                                 href = "https://finance.naver.com" + href
-                            news.append({"title": title, "url": href, "date": ""})
-                    if news:
-                        return news[:15]
+                            seen.add(title)
+                            items_found.append({"title": title, "url": href, "date": ""})
+                    break
         except Exception:
-            continue
-    return news
+            pass
+        return items_found
+
+    enc = requests.utils.quote
+    # ① 종목코드 기반 인기 뉴스
+    news += _fetch_url(
+        f"https://finance.naver.com/news/news_list.naver?mode=RANK&code={ticker}"
+    )
+    # ② 종목명 검색 (기본)
+    news += _fetch_url(
+        f"https://finance.naver.com/news/news_search.naver?q={enc(name)}&pd=1&sm=tab_jum"
+    )
+    # ③ 종목명 + 실적 / 수주 (Impact Alpha 핵심 쿼리)
+    news += _fetch_url(
+        f"https://finance.naver.com/news/news_search.naver?q={enc(name + ' 실적')}&pd=1&sm=tab_jum"
+    )
+    news += _fetch_url(
+        f"https://finance.naver.com/news/news_search.naver?q={enc(name + ' 수주')}&pd=1&sm=tab_jum"
+    )
+    # ④ 종목명 + 판결 / 호재 (법원 판결·초강력 이벤트)
+    news += _fetch_url(
+        f"https://finance.naver.com/news/news_search.naver?q={enc(name + ' 판결')}&pd=1&sm=tab_jum"
+    )
+    news += _fetch_url(
+        f"https://finance.naver.com/news/news_search.naver?q={enc(name + ' 호재')}&pd=1&sm=tab_jum"
+    )
+
+    return news[:30]
 
 
 def classify_news(title: str) -> str:
@@ -714,15 +748,32 @@ def score_fundamentals(fund: dict) -> dict:
 
 
 def score_news(news: list[dict]) -> dict:
-    """뉴스/공매도 점수 20점 — 배거차숏(배당·밸류업·거시쇼크·차트심리·숏스퀴즈) 키워드 매칭."""
+    """뉴스/공매도 점수 20점 — 배거차숏 + Impact Alpha 초강력 키워드 즉시 만점."""
     if not news:
-        return {"score": 0, "good": [], "bad": [], "neutral": []}
+        return {"score": 0, "good": [], "bad": [], "neutral": [], "impact_hits": []}
+
     good = [n for n in news if classify_news(n["title"]) == "호재"]
     bad  = [n for n in news if classify_news(n["title"]) == "악재"]
     neu  = [n for n in news if classify_news(n["title"]) == "중립"]
-    score = min([0, 8, 14, 17, 20][min(len(good), 4)], 20)
-    score = max(0, score - min(len(bad) * 3, 10))
-    return {"score": score, "good": good[:5], "bad": bad[:3], "neutral": neu}
+
+    # Impact Alpha: 초강력 키워드 감지 → 즉시 20점 만점
+    impact_hits: list[str] = []
+    all_titles = " ".join(n["title"] for n in news)
+    for kw in _IMPACT_KW:
+        if kw in all_titles:
+            impact_hits.append(kw)
+
+    if impact_hits:
+        score = 20  # 만점 강제
+    else:
+        score = min([0, 8, 14, 17, 20][min(len(good), 4)], 20)
+        score = max(0, score - min(len(bad) * 3, 10))
+
+    return {
+        "score": score,
+        "good": good[:5], "bad": bad[:3], "neutral": neu,
+        "impact_hits": impact_hits,
+    }
 
 
 def check_block_deal(ticker: str, inv: list[dict]) -> str | None:
@@ -1343,7 +1394,7 @@ def _momentum_lines(result: dict) -> list[str]:
 
 
 def ui_auto_briefing(result: dict, name: str, ticker: str):
-    """기업 정밀 브리핑 — ①섹터 요약 ②저평가 해설 ③모멘텀 3카드 자동 생성."""
+    """기업 정밀 브리핑 — ①실시간호재 ②섹터 ③저평가해설 ④모멘텀 자동 생성."""
     fund = result.get("fund", {})
     per  = fund.get("PER")
     pbr  = fund.get("PBR")
@@ -1355,6 +1406,29 @@ def ui_auto_briefing(result: dict, name: str, ticker: str):
     mom_html = "".join(
         f'<div class="ab-item">{ln}</div>' for ln in mom_lines
     )
+
+    # 실시간 호재 Impact Alpha 카드 생성
+    ns           = result.get("news_score", {})
+    impact_hits  = ns.get("impact_hits", [])
+    impact_block = ""
+    if impact_hits:
+        kw_tags = "".join(
+            f'<span style="background:#2a1f00;color:#D4AF37;border:1px solid #D4AF37;'
+            f'border-radius:6px;padding:3px 10px;font-size:.78rem;font-weight:800;'
+            f'margin:2px 3px;display:inline-block;">⚡ {kw}</span>'
+            for kw in impact_hits[:8]
+        )
+        impact_block = f"""
+  <!-- ⓪ 실시간 호재 감지 — Impact Alpha 카드 -->
+  <div class="ab-card" style="border:2px solid #D4AF37;background:#1a1600;">
+    <div class="ab-badge" style="color:#D4AF37;font-size:.8rem;">
+      ⚡ 실시간 호재 감지 — Impact Alpha (뉴스/공매도 점수 20점 만점 강제 적용)
+    </div>
+    <div style="margin-top:4px;">{kw_tags}</div>
+    <div class="ab-body" style="color:#FFD700;margin-top:6px;font-size:.9rem;">
+      시장 미반영 초강력 이벤트 포착 — 즉시 매집 주목 대상
+    </div>
+  </div>"""
 
     _html_block(f"""
 <style>
@@ -1374,6 +1448,7 @@ def ui_auto_briefing(result: dict, name: str, ticker: str):
   .ab-item:last-child {{ border-bottom:none; }}
 </style>
 <div class="ab-wrap">
+  {impact_block}
   <!-- ① 기업 핵심 요약 — 전체 폭 단독 카드 -->
   <div class="ab-card">
     <div class="ab-badge">① 기업 핵심 요약</div>
@@ -2310,13 +2385,13 @@ button[data-baseweb="tab"][aria-selected="true"] p { color: #D4AF37 !important; 
             with st.spinner(f"{name}({ticker}) — 세력 역추적 파이프라인 가동 중…"):
                 result = analyze_ticker(ticker, name, market)
 
-            # ── 상하단 점수 물리적 동기화: scored_cache 코드 역추적 ─────────────
+            # ── 데이터 동기화 검증: analyze_ticker 4축 총점이 권위적 소스 ────────
+            # (quick_score 캐시 총점 덮어쓰기 금지 — 뉴스/재무 완전 반영된 총점 보존)
             _cached_qs = st.session_state.get("scored_cache", {}).get(ticker)
             if _cached_qs is not None:
-                # top15에서 사용자가 본 점수를 detail 뷰에 그대로 고정
-                result["total"]     = _cached_qs["total"]
-                result["pb_cached"] = _cached_qs["pb_score"]
-                result["inv_cached"]= _cached_qs["inv_score"]
+                result["pb_cached"]  = _cached_qs["pb_score"]
+                result["inv_cached"] = _cached_qs["inv_score"]
+                # total은 analyze_ticker의 완전한 4축 점수 그대로 사용
 
             # ① 현재가 Gold·Dark 카드
             ui_price_header(result)
