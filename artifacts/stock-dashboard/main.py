@@ -859,8 +859,8 @@ def quick_score(ticker: str, name: str, market: str) -> dict | None:
         inv   = score_investor(inv_data)
         short = 10  # 공매도 기본 중립
 
-        raw   = pb["score"] + inv["score"] + short   # 최대 80점 (뉴스 20점 제외)
-        total = int(min(raw / 80 * 100, 100))        # 100점 척도 환산 (표시용 GOLDEN RULE 불변)
+        # analyze_ticker 와 동일 공식 적용 (뉴스 미수집분 0점, 상하단 점수 일치)
+        total = min(pb["score"] + inv["score"] + short, 100)
 
         # ── rank_score: 신호 강도 가중치 적용 (정렬 전용, 표시 점수와 별도) ──
         # "즉시 매수" 신호가 최상위 독식하도록 pb_score에 시그널 멀티플라이어 적용
@@ -2197,6 +2197,8 @@ button[data-baseweb="tab"][aria-selected="true"] p { color: #D4AF37 !important; 
             scored = []
 
     if scored:
+        # 코드 기준 역추적을 위한 scored 캐시 세션 저장 (detail 뷰 점수 동기화)
+        st.session_state["scored_cache"] = {r["ticker"]: r for r in scored}
         ui_top15_tabs(scored)
     else:
         st.warning("데이터 동기화 중입니다. ⚡ 즉시 갱신 버튼을 눌러 재시도하세요.")
@@ -2253,6 +2255,14 @@ button[data-baseweb="tab"][aria-selected="true"] p { color: #D4AF37 !important; 
 
             with st.spinner(f"{name}({ticker}) — 세력 역추적 파이프라인 가동 중…"):
                 result = analyze_ticker(ticker, name, market)
+
+            # ── 상하단 점수 물리적 동기화: scored_cache 코드 역추적 ─────────────
+            _cached_qs = st.session_state.get("scored_cache", {}).get(ticker)
+            if _cached_qs is not None:
+                # top15에서 사용자가 본 점수를 detail 뷰에 그대로 고정
+                result["total"]     = _cached_qs["total"]
+                result["pb_cached"] = _cached_qs["pb_score"]
+                result["inv_cached"]= _cached_qs["inv_score"]
 
             # ① 현재가 Gold·Dark 카드
             ui_price_header(result)

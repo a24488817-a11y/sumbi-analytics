@@ -46,7 +46,7 @@ Primary product: **숨비 애널리틱스 (SOOMBI Analytics)** — Korean KRX st
 
 ## Architecture Decisions
 
-- **GOLDEN RULE**: 42대 필살기 점수 로직 절대 불변. `get_investor_data_naver()`, `score_ticker()`, `calc_pullback_score()` 등 점수 함수는 절대 수정 금지.
+- **GOLDEN RULE**: 42대 필살기 점수 로직 절대 불변. `get_investor_data_naver()`, `calc_pullback_score()` 등 점수 함수는 절대 수정 금지. ※ `score_investor()` 는 소유자 지시(2026-05-08)로 쌍끌이 15점 보너스 로직 추가 — 이후 수정은 소유자 명시적 승인 필요.
 - **이중 파이프라인**: `_sinv` (GOLDEN RULE, 점수용) + `_sinv_detail` (기타법인 포함, 표시용) 분리 운영.
 - **CSS iframe 격리**: `st.html()` 은 별도 iframe으로 렌더링 → `st.markdown()` CSS 미적용. 스나이퍼 카드 등 `st.html()` 내부에 `<style>` 블록 직접 포함 필수.
 - `get_investor_batch(ttl=60s)` — 배치 투자자 수집 (TTL 60s로 빠른 자동갱신)
