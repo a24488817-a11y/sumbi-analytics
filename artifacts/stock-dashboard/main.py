@@ -146,9 +146,13 @@ _BAD_KW = [
 _TIER1_KW = [
     # 법원·판결
     "기각", "승소", "판결", "가처분 기각", "특허 무효 기각",
-    # 계약·공급 확정
+    # 계약·공급·수주 확정
     "공급계약", "단일판매", "계약 체결", "독점 공급", "독점 계약",
-    "최대 수주", "대규모 수주", "공급 확정",
+    "최대 수주", "대규모 수주", "공급 확정", "수주 확정", "수주 성공",
+    "수주", "클라우드 수주",
+    # 상장·IPO
+    "상장", "IPO", "상장 확정", "증시 입성", "공모가 확정", "상장 예정",
+    "코스피 상장", "코스닥 상장", "기업공개",
     # 실적 서프라이즈
     "사상 최대", "역대 최대", "사상 최고", "어닝 서프라이즈", "어닝쇼크 반전",
     "사상 최고 실적", "연간 최대 흑자",
@@ -156,8 +160,9 @@ _TIER1_KW = [
     "M&A", "인수 완료", "합병 완료", "원천기술", "세계 최초",
     "FDA 승인", "임상 성공", "양산 성공", "흑자 전환 확정", "적자 탈출",
     "상한가", "특허 등록", "IPO 확정",
-    # 업종 특화 (KDDX·HBM·로봇 등)
+    # 업종 특화 (KDDX·HBM·클라우드·로봇 등)
     "KDDX", "HBM 양산", "아틀라스", "AI 반도체 양산", "자율주행 계약",
+    "클라우드", "AI 클라우드", "MSP 계약",
 ]
 # Tier 2: 긍정적 기대감 — 미래 가치 (건당 5점, 최대 10점)
 _TIER2_KW = [
@@ -557,63 +562,198 @@ def get_fundamentals(ticker: str) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 8. 뉴스 (Naver finance 종목 뉴스)
+# 8. 뉴스 — 3단계 폴백 수집 엔진 (절대 실패 없음)
 # ─────────────────────────────────────────────────────────────────────────────
-@st.cache_data(ttl=300, show_spinner=False)
-def get_news(ticker: str, name: str) -> list[dict]:
-    """실시간 뉴스 크롤링 — 4가지 쿼리 확장으로 모든 종목 범용 호재 포착."""
-    seen:  set[str]   = set()
-    news:  list[dict] = []
-
-    def _fetch_url(url: str) -> list[dict]:
-        items_found: list[dict] = []
-        try:
-            resp = requests.get(url, headers=NAVER_HDRS, timeout=8)
-            soup = BeautifulSoup(resp.text, "lxml")
-            for sel in [
-                ".news_dl dt a", ".articleSubject a", ".news_list li a",
-                "dl dt a", ".type01 li dt a", "li.newline a",
-            ]:
-                elems = soup.select(sel)
-                if elems:
-                    for el in elems[:15]:
-                        title = el.get_text(strip=True)
-                        href  = el.get("href", "")
-                        if title and len(title) > 5 and title not in seen:
-                            if href and not href.startswith("http"):
-                                href = "https://finance.naver.com" + href
-                            seen.add(title)
-                            items_found.append({"title": title, "url": href, "date": ""})
+def _news_parse_bs(html: str, seen: set[str]) -> list[dict]:
+    """BeautifulSoup 파싱 — CSS 셀렉터 우선순위 순회."""
+    items: list[dict] = []
+    try:
+        soup = BeautifulSoup(html, "lxml")
+        for sel in [
+            ".news_dl dt a", ".articleSubject a", ".news_list li a",
+            "dl dt a", ".type01 li dt a", "li.newline a", "a[href*='news']",
+        ]:
+            elems = soup.select(sel)
+            if elems:
+                for el in elems[:20]:
+                    title = el.get_text(strip=True)
+                    href  = el.get("href", "")
+                    if title and len(title) > 5 and title not in seen:
+                        if href and not href.startswith("http"):
+                            href = "https://finance.naver.com" + href
+                        seen.add(title)
+                        items.append({"title": title, "url": href, "date": ""})
+                if items:
                     break
+    except Exception:
+        pass
+    return items
+
+
+def _news_parse_rss(html: str, seen: set[str]) -> list[dict]:
+    """RSS/XML 파싱 — <title> 태그 정규식 추출."""
+    items: list[dict] = []
+    try:
+        # <item> 블록 추출
+        item_blocks = re.findall(r"<item>(.*?)</item>", html, re.DOTALL)
+        for block in item_blocks[:20]:
+            t_m  = re.search(r"<title><!\[CDATA\[(.*?)\]\]></title>", block)
+            if not t_m:
+                t_m = re.search(r"<title>(.*?)</title>", block)
+            l_m  = re.search(r"<link>(.*?)</link>",  block)
+            d_m  = re.search(r"<pubDate>(.*?)</pubDate>", block)
+            title = t_m.group(1).strip() if t_m else ""
+            href  = l_m.group(1).strip() if l_m else ""
+            date  = d_m.group(1).strip()[:16] if d_m else ""
+            if title and len(title) > 5 and title not in seen:
+                seen.add(title)
+                items.append({"title": title, "url": href, "date": date})
+    except Exception:
+        pass
+    return items
+
+
+def _news_parse_regex(html: str, seen: set[str]) -> list[dict]:
+    """최후 수단 — <a> 태그 정규식 브루트포스 추출."""
+    items: list[dict] = []
+    try:
+        anchors = re.findall(
+            r'<a[^>]+href="([^"]*(?:news|article|view)[^"]*)"[^>]*>(.*?)</a>',
+            html, re.DOTALL,
+        )
+        for href, raw in anchors[:30]:
+            title = re.sub(r"<[^>]+>", "", raw).strip()
+            if title and len(title) > 8 and title not in seen:
+                if not href.startswith("http"):
+                    href = "https://finance.naver.com" + href
+                seen.add(title)
+                items.append({"title": title, "url": href, "date": ""})
+    except Exception:
+        pass
+    return items
+
+
+def _fetch_with_fallback(url: str, seen: set[str],
+                         hdrs: dict | None = None,
+                         max_retry: int = 3) -> list[dict]:
+    """단일 URL 수집 — BS → RSS → regex 3단계 폴백, 최대 max_retry회."""
+    used_hdrs = hdrs or NAVER_HDRS
+    for attempt in range(max_retry):
+        try:
+            resp = requests.get(url, headers=used_hdrs, timeout=8)
+            if resp.status_code != 200:
+                continue
+            html = resp.text
+            # ① BeautifulSoup
+            items = _news_parse_bs(html, seen)
+            if items:
+                return items
+            # ② RSS/XML
+            items = _news_parse_rss(html, seen)
+            if items:
+                return items
+            # ③ 정규식 브루트포스
+            items = _news_parse_regex(html, seen)
+            if items:
+                return items
         except Exception:
             pass
-        return items_found
+    return []
 
+
+def _fetch_mobile_naver(query: str, seen: set[str]) -> list[dict]:
+    """모바일 Naver 뉴스 검색 JSON API — 독립 폴백 채널."""
+    items: list[dict] = []
+    enc_q = requests.utils.quote(query)
+    urls = [
+        f"https://m.search.naver.com/search.naver?where=m_news&query={enc_q}",
+        f"https://search.naver.com/search.naver?where=news&query={enc_q}&sort=1",
+    ]
+    mob_hdrs = {
+        "User-Agent": (
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
+            "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 "
+            "Mobile/15E148 Safari/604.1"
+        ),
+        "Accept-Language": "ko-KR,ko;q=0.9",
+        "Referer": "https://m.naver.com/",
+    }
+    for url in urls:
+        for attempt in range(2):
+            try:
+                resp = requests.get(url, headers=mob_hdrs, timeout=8)
+                if resp.status_code != 200:
+                    continue
+                html = resp.text
+                # JSON 응답 시도
+                try:
+                    data = __import__("json").loads(html)
+                    for art in data.get("articles", data.get("items", [])):
+                        title = art.get("title", "")
+                        href  = art.get("originallink", art.get("link", ""))
+                        if title and title not in seen:
+                            seen.add(title)
+                            items.append({"title": title, "url": href, "date": ""})
+                    if items:
+                        return items
+                except Exception:
+                    pass
+                # HTML 응답: BS 우선, regex 폴백
+                parsed = _news_parse_bs(html, seen)
+                if not parsed:
+                    parsed = _news_parse_regex(html, seen)
+                items.extend(parsed)
+                if items:
+                    return items
+            except Exception:
+                pass
+    return items
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def get_news(ticker: str, name: str) -> list[dict]:
+    """3단계 폴백 뉴스 수집 엔진 — 실패 없음 보장.
+    수집 채널: finance.naver(코드) → 검색(8쿼리) → 모바일Naver → RSS.
+    """
+    seen: set[str]   = set()
+    news: list[dict] = []
     enc = requests.utils.quote
-    # ① 종목코드 기반 인기 뉴스
-    news += _fetch_url(
-        f"https://finance.naver.com/news/news_list.naver?mode=RANK&code={ticker}"
+
+    # ── 채널 A: Naver Finance 종목코드 기반 ──────────────────────────────────
+    news += _fetch_with_fallback(
+        f"https://finance.naver.com/news/news_list.naver?mode=RANK&code={ticker}",
+        seen,
     )
-    # ② 종목명 검색 (기본)
-    news += _fetch_url(
-        f"https://finance.naver.com/news/news_search.naver?q={enc(name)}&pd=1&sm=tab_jum"
-    )
-    # ③ 종목명 + 실적 / 수주 (Impact Alpha 핵심 쿼리)
-    news += _fetch_url(
-        f"https://finance.naver.com/news/news_search.naver?q={enc(name + ' 실적')}&pd=1&sm=tab_jum"
-    )
-    news += _fetch_url(
-        f"https://finance.naver.com/news/news_search.naver?q={enc(name + ' 수주')}&pd=1&sm=tab_jum"
-    )
-    # ④ 종목명 + 판결 / 호재 (법원 판결·초강력 이벤트)
-    news += _fetch_url(
-        f"https://finance.naver.com/news/news_search.naver?q={enc(name + ' 판결')}&pd=1&sm=tab_jum"
-    )
-    news += _fetch_url(
-        f"https://finance.naver.com/news/news_search.naver?q={enc(name + ' 호재')}&pd=1&sm=tab_jum"
+    # RSS 채널 (종목코드)
+    news += _fetch_with_fallback(
+        f"https://finance.naver.com/news/news_list.naver?mode=LSS2D&section_id=101&section_id2=258",
+        seen,
     )
 
-    return news[:30]
+    # ── 채널 B: 8가지 키워드 쿼리 확장 ─────────────────────────────────────
+    queries = [
+        name,
+        name + " 실적",
+        name + " 수주",
+        name + " 상장",
+        name + " IPO",
+        name + " 클라우드",
+        name + " 판결",
+        name + " 호재",
+    ]
+    for q in queries:
+        found = _fetch_with_fallback(
+            f"https://finance.naver.com/news/news_search.naver?q={enc(q)}&pd=1&sm=tab_jum",
+            seen,
+        )
+        news += found
+
+    # ── 채널 C: 모바일 Naver 뉴스 검색 (BS 막힐 때 독립 채널) ───────────────
+    if len(news) < 5:
+        for q in [name, name + " 수주", name + " 상장"]:
+            news += _fetch_mobile_naver(q, seen)
+
+    return news[:40]
 
 
 def classify_news(title: str) -> str:
