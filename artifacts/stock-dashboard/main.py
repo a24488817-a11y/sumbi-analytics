@@ -213,8 +213,9 @@ _NOISE_KW = [
 
 # 증권 섹터 전용 노이즈 키워드 — 타사 리포트·투자의견 발간은 해당 증권사 자체 호재 아님
 _SECURITIES_NOISE_KW = [
-    "매수 추천", "목표주가 유지", "투자의견", "종목 추천",
-    "매수의견", "목표가 유지", "투자 의견", "종목추천",
+    "매수 추천", "목표주가", "투자의견", "종목 추천",
+    "하향", "상향",
+    "매수의견", "투자 의견", "종목추천",
 ]
 # 하위 호환 — 기존 _IMPACT_KW 참조 코드가 있는 경우를 위해 별칭 유지
 _IMPACT_KW = _TIER1_KW
@@ -1434,7 +1435,7 @@ def score_news(news: list[dict], sector: str = "일반") -> dict:
 
         # ①-b 증권 섹터 전용 노이즈 — 타사 리포트·투자의견 발간은 해당 증권사 자체 호재 아님
         if sector == "금융" and any(kw in t for kw in _SECURITIES_NOISE_KW):
-            noise_list.append({**n, "reason": "노이즈 (타사 리포트 발간)"})
+            noise_list.append({**n, "reason": "⚠️ 노이즈 (타사 리포트 발간 - 호재 아님)"})
             continue
 
         # ② Tier 0 — 시장 구조 변경급 (M&A·공개매수·이전상장)
