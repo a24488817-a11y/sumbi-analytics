@@ -2094,8 +2094,8 @@ def quick_score(ticker: str, name: str, market: str, turnover_pct: float = 0.0) 
         _SIG_MULT = {"즉시 매수": 2.5, "매수 준비": 1.2, "관망": 0.3, "데이터 부족": 0.2}
         pb_sig   = pb.get("signal", "관망")
         sig_mult = next((v for k, v in _SIG_MULT.items() if k in pb_sig), 0.3)
-        _RANK_DENOM = 30 * 2.5 + 30 * 2.0 + 20   # 최대 가중 합산 = 155
-        rank_raw   = pb["score"] * sig_mult + inv["score"] * 2.0 + news_result["score"]
+        _RANK_DENOM = 30 * 2.5 + 30 * 2.0 + 20 + 10   # 최대 가중 합산 = 165 (리스크/숏스퀴즈 10점 포함)
+        rank_raw   = pb["score"] * sig_mult + inv["score"] * 2.0 + news_result["score"] + risk_result["score"]
         rank_score = int(min(rank_raw / _RANK_DENOM * 100, 100))
 
         # ── Hard Cap 전역 적용 — 렌더링 전 각 축 상한 강제 ────────────────────
@@ -2199,13 +2199,15 @@ def scan_top_stocks(candidates: list[dict]) -> list[dict]:
             else ("중형" if cap_억 >= 3_000 else "소형")
         )
 
-    # ── 정렬: 1순위 차트신호(HIGH→MID→LOW→진입불가), 2순위 총점 ─────────────
+    # ── 정렬: 1순위 차트신호(HIGH→MID→LOW→진입불가), 2순위 rank_score ────────
+    # rank_score = 가중치 적용 합산(차트신호강도×pb + 수급×2 + 뉴스 + 리스크/숏스퀴즈)
+    # 공매도/숏스퀴즈 10점이 반영된 정렬 전용 점수 — total(표시 점수)과 별도 운영
     _SIG_PRI = {"즉시 매수": 3, "매수 준비": 2, "관망": 1}
 
     def _sig_key(r: dict) -> tuple:
         sig = r.get("signal", "")
         pri = next((v for k, v in _SIG_PRI.items() if k in sig), 0)
-        return (pri, r.get("total", 0))
+        return (pri, r.get("rank_score", r.get("total", 0)))
 
     return sorted(results, key=_sig_key, reverse=True)
 
