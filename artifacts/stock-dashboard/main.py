@@ -3089,6 +3089,10 @@ def ui_score_card(r: dict):
     kill_switch = bool(_tp > 0 and _cur > 0 and _cur >= _tp)
     display_total = max(0, total - 30) if kill_switch else total
 
+    # Kill Switch 발동 → decision_text(verdict) 강제 덮어쓰기 (is_buy_recommended = False)
+    if kill_switch:
+        verdict = "🔴 관망/매도 (안전마진 소멸 및 고평가 구간 진입)"
+
     if kill_switch:
         _upside = round((_tp - _cur) / _cur * 100, 1)
         _html_block(f"""
@@ -3142,7 +3146,7 @@ def ui_score_card(r: dict):
     # Kill Switch 발동 시 분할 매수 이상 판정 강제 취소 → 관망/매도로 덮기
     if kill_switch and display_total >= 45:
         vd_col = "#e74c3c"; vd_bg = "#1a0800"; vd_border = "#e74c3c"
-        badge  = "관망/매도 (안전마진 부족 및 고평가 구간)"; sc = "#e74c3c"
+        badge  = "관망/매도 (안전마진 소멸 및 고평가 구간 진입)"; sc = "#e74c3c"
         emoji  = "🚨"
 
     # 확률 색상
