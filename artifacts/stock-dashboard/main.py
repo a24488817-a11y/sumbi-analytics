@@ -616,14 +616,17 @@ def _get_kis_token() -> str:
 def _get_kis_afterhours_price(ticker: str) -> dict:
     """KIS FHKST01010400 — 시간외 단일가 현재가.
 
-    장 마감(15:30 KST) 이후 호출. 가격 0 또는 오류 시 빈 dict 반환 → Naver 폴백.
+    엔드포인트: inquire-daily-price  (output = list, [0] = 최신 단일가 행)
+    TR_ID: FHKST01010400
+    가격 필드: output[0]["stck_prpr"]
+    장 마감(15:30 KST) 이후 호출. 가격 0 또는 오류 시 빈 dict → Naver 폴백.
     """
     token = _get_kis_token()
     if not token:
         return {}
     try:
         resp = requests.get(
-            f"{_KIS_BASE}/uapi/domestic-stock/v1/quotations/inquire-price",
+            f"{_KIS_BASE}/uapi/domestic-stock/v1/quotations/inquire-daily-price",
             headers={
                 "Content-Type": "application/json",
                 "authorization": f"Bearer {token}",
@@ -637,22 +640,15 @@ def _get_kis_afterhours_price(ticker: str) -> dict:
             },
             timeout=8,
         )
-        out = resp.json().get("output", {})
-        # 시간외단일가 필드 우선, 없으면 stck_prpr (API 버전 방어)
-        price = (
-            int(str(out.get("ovtm_untp_prpr",  "0") or "0").replace(",", ""))
-            or int(str(out.get("stck_prpr",     "0") or "0").replace(",", ""))
-        )
+        output_list = resp.json().get("output", [])
+        if not output_list:
+            return {}
+        out = output_list[0]  # 가장 최근 시간외 단일가 행
+        price = int(str(out.get("stck_prpr", "0") or "0").replace(",", ""))
         if price <= 0:
             return {}
-        rate = float(str(
-            out.get("ovtm_untp_prdy_clpr_vrss_prpr_rate") or
-            out.get("prdy_ctrt") or "0"
-        ).replace(",", ""))
-        diff = int(str(
-            out.get("ovtm_untp_prdy_clpr_vrss_prpr") or
-            out.get("prdy_vrss") or "0"
-        ).replace(",", ""))
+        rate = float(str(out.get("prdy_ctrt", "0") or "0").replace(",", ""))
+        diff = int(str(out.get("prdy_vrss",  "0") or "0").replace(",", ""))
         return {"현재가": price, "등락률": rate, "전일대비": diff, "_kis": True}
     except Exception:
         return {}
