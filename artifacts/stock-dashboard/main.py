@@ -4317,10 +4317,10 @@ button[data-baseweb="tab"][aria-selected="true"] p { color: #D4AF37 !important; 
         st.markdown("""
 | 분석 지표 | 배점 |
 |---|---|
-| 세력 수급 역추적 | 30점 |
-| 공매도 잔고 분석 | 20점 |
-| 정밀 눌림목 패턴 | 30점 |
-| 미반영 호재 뉴스 | 20점 |
+| 기관·외국인 수급 역추적 | 40점 |
+| 미반영 호재 뉴스 | 30점 |
+| 차트·눌림목 패턴 | 20점 |
+| 리스크·숏스퀴즈 | 10점 |
 | **총점** | **100점** |
 """)
         st.markdown("**75점 이상 → 강력 매수 판정**")
@@ -4646,10 +4646,10 @@ button[data-baseweb="tab"][aria-selected="true"] p { color: #D4AF37 !important; 
   <div class="start-algo">
     <div class="start-algo-title">⚙️ 숨비 종합 진단 점수 — 자동 산출 알고리즘</div>
     <div class="start-algo-body">
-      <span class="gold">세력 수급 역추적 (30점)</span> — 기관·외국인 5거래일 순매매 방향성 자동 감지<br>
-      <span class="gold">공매도 잔고 분석 (20점)</span> — 외국인잔고율 변화 기반 쇼트 포지션 역추적<br>
-      <span class="gold">정밀 눌림목 패턴 (30점)</span> — RSI·MA5·MA20·MA60 이동평균 정배열 자동 산출<br>
-      <span class="gold">미반영 호재 뉴스 (20점)</span> — 42개 호재/악재 키워드 NLP 자동 분류<br>
+      <span class="gold">기관·외국인 수급 역추적 (40점)</span> — 기관·외국인 5거래일 순매매 방향성 + 쌍끌이 보너스 자동 감지<br>
+      <span class="gold">미반영 호재 뉴스 (30점)</span> — 42개 호재/악재 키워드 NLP 자동 분류<br>
+      <span class="gold">차트·눌림목 패턴 (20점)</span> — RSI·MA5·MA20·MA60 이동평균 정배열 자동 산출<br>
+      <span class="gold">리스크·숏스퀴즈 (10점)</span> — 외국인잔고율 변화 기반 쇼트 포지션 역추적<br>
       <br>
       종목명 또는 6자리 코드를 입력하고 <span class="gold">해부 시작</span>을 누르세요.
     </div>
