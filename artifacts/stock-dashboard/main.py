@@ -612,6 +612,54 @@ def _get_kis_token() -> str:
         return ""
 
 
+@st.cache_data(ttl=15, show_spinner=False)
+def _get_kis_regular_price(ticker: str) -> dict:
+    """KIS FHKST01010100 — 정규장 실시간 시세 (09:00~15:30 KST).
+
+    Naver 대비 무지연 체결가. 추가 필드:
+      vol_pct  = prdy_vol_vrss_prcnt  (전일 거래량 대비 %)
+      wghn_pct = wghn_avrg_prc_crrt   (가중평균주가 변동률 — 세력 역추적 지표)
+    KIS 실패 또는 가격 0 → 빈 dict → Naver 폴백.
+    """
+    token = _get_kis_token()
+    if not token:
+        return {}
+    try:
+        resp = requests.get(
+            f"{_KIS_BASE}/uapi/domestic-stock/v1/quotations/inquire-price",
+            headers={
+                "Content-Type": "application/json",
+                "authorization": f"Bearer {token}",
+                "appkey":        _KIS_KEY,
+                "appsecret":     _KIS_SECRET,
+                "tr_id":         "FHKST01010100",
+            },
+            params={
+                "fid_cond_mrkt_div_code": "J",
+                "fid_input_iscd":         ticker,
+            },
+            timeout=8,
+        )
+        out = resp.json().get("output", {})
+        price = int(str(out.get("stck_prpr", "0") or "0").replace(",", ""))
+        if price <= 0:
+            return {}
+        rate     = float(str(out.get("prdy_ctrt",           "0") or "0").replace(",", ""))
+        diff     = int(str(out.get("prdy_vrss",             "0") or "0").replace(",", ""))
+        vol_pct  = float(str(out.get("prdy_vol_vrss_prcnt", "0") or "0").replace(",", ""))
+        wghn_pct = float(str(out.get("wghn_avrg_prc_crrt",  "0") or "0").replace(",", ""))
+        return {
+            "현재가":   price,
+            "등락률":   rate,
+            "전일대비": diff,
+            "vol_pct":  vol_pct,   # 전일 거래량 대비 % (150+ = 거래량 폭발)
+            "wghn_pct": wghn_pct,  # 가중평균주가 변동률 (110+ = 세력 매집, 90- = 개인 과열)
+            "_kis":     True,
+        }
+    except Exception:
+        return {}
+
+
 @st.cache_data(ttl=30, show_spinner=False)
 def _get_kis_afterhours_price(ticker: str) -> dict:
     """KIS FHKST01010400 — 시간외 단일가 현재가.
@@ -688,8 +736,27 @@ def get_realtime_price(ticker: str) -> dict:
     except Exception:
         pass
 
-    # ── 장 마감 후 KIS 시간외 단일가 오버라이드 ─────────────────────────────
     _now = datetime.now(KST)
+
+    # ── 정규장 중 KIS 실시간 시세 + 세력 역추적 (09:00~15:30) ──────────────
+    _is_market_open = (
+        _now.weekday() < 5
+        and (9, 0) <= (_now.hour, _now.minute) < (15, 30)
+    )
+    if _is_market_open and _KIS_KEY:
+        rp = _get_kis_regular_price(ticker)
+        if rp.get("현재가", 0) > 0:
+            # 가격·등락률·전일대비·세력지표는 KIS 실시간, 시총·이름은 Naver 유지
+            naver.update({
+                "현재가":   rp["현재가"],
+                "등락률":   rp["등락률"],
+                "전일대비": rp["전일대비"],
+                "vol_pct":  rp.get("vol_pct",  0),
+                "wghn_pct": rp.get("wghn_pct", 0),
+                "_source":  "KIS실시간",
+            })
+
+    # ── 장 마감 후 KIS 시간외 단일가 오버라이드 (15:30~) ────────────────────
     _after_close = (
         _now.weekday() < 5                        # 평일
         and (_now.hour, _now.minute) >= (15, 30)  # 15:30 이후
@@ -3209,6 +3276,41 @@ def ui_price_header(r: dict):
     lo_str  = f"{lo52:,}" if lo52 else "—"
     cap_str = f"{cap:,.0f}억" if cap else "—"
 
+    # ── KIS 세력 역추적 신호 (정규장 KIS 실시간 데이터 있을 때만 표시) ──────
+    _src      = p.get("_source", "")
+    _vol_pct  = float(p.get("vol_pct",  0))
+    _wghn_pct = float(p.get("wghn_pct", 0))
+    _whale_html = ""
+    if _src == "KIS실시간" and (_vol_pct > 0 or _wghn_pct > 0):
+        if _wghn_pct > 110 and _vol_pct > 150:
+            _wsig = "🚀 세력 강력 매집"
+            _wcol = "#D4AF37"
+            _wbg  = "#1a1400"
+            _wbdr = "#D4AF37"
+        elif _wghn_pct < 90:
+            _wsig = "⚠️ 개인 과열 (주의)"
+            _wcol = "#f39c12"
+            _wbg  = "#1e1200"
+            _wbdr = "#f39c12"
+        else:
+            _wsig = "💎 눌림목 / 중립"
+            _wcol = "#8fa3b8"
+            _wbg  = "#12192b"
+            _wbdr = "#2a3550"
+        _whale_html = (
+            f'<div style="display:flex;align-items:center;gap:14px;'
+            f'background:{_wbg};border:1px solid {_wbdr};border-radius:8px;'
+            f'padding:8px 16px;margin-top:12px;flex-wrap:wrap;">'
+            f'<span style="font-size:.7rem;font-weight:900;letter-spacing:.1em;'
+            f'color:#4a5568;text-transform:uppercase;">KIS 세력 역추적</span>'
+            f'<span style="font-size:.92rem;font-weight:800;color:{_wcol};">{_wsig}</span>'
+            f'<span style="font-size:.78rem;color:#6b7c93;">'
+            f'가중평균 <b style="color:{_wcol}">{_wghn_pct:.0f}%</b>'
+            f'&nbsp;·&nbsp;거래량 <b style="color:{_wcol}">{_vol_pct:.0f}%</b>'
+            f'</span>'
+            f'</div>'
+        )
+
     _html_block(f"""
 <style>
   .ph {{
@@ -3254,6 +3356,7 @@ def ui_price_header(r: dict):
     <div class="ph-kv"><span class="ph-k">목표주가</span><span class="ph-v" style="color:#D4AF37">{tp_str}</span></div>
     <div class="ph-kv"><span class="ph-k">52주 고/저</span><span class="ph-v">{hi_str} / {lo_str}</span></div>
   </div>
+  {_whale_html}
   <div class="ph-ts">{r['collected_at']}</div>
 </div>
 """)
