@@ -19,12 +19,18 @@ import math
 import os
 import sys
 import traceback
+import json
 import plotly.graph_objects as go
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. 페이지 설정
 # ─────────────────────────────────────────────────────────────────────────────
 KST = pytz.timezone("Asia/Seoul")
+
+# ── 한국투자증권 오픈 API ──────────────────────────────────────────────────────
+_KIS_KEY    = os.environ.get("KIS_APP_KEY",    "")
+_KIS_SECRET = os.environ.get("KIS_APP_SECRET", "")
+_KIS_BASE   = "https://openapi.koreainvestment.com:9443"
 
 
 def get_accurate_market_date() -> str:
@@ -561,15 +567,90 @@ def search_ticker(query: str, tdf: pd.DataFrame) -> list[dict]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 4. 실시간 현재가 (Naver 모바일 JSON API)
+# 4. 실시간 현재가 (Naver 기본 + KIS 시간외 단일가 오버라이드)
 # ─────────────────────────────────────────────────────────────────────────────
+
+@st.cache_data(ttl=82800, show_spinner=False)
+def _get_kis_token() -> str:
+    """KIS OAuth Bearer 토큰 취득 (TTL=23h 자동 갱신).
+
+    KIS_APP_KEY / KIS_APP_SECRET 미설정 시 빈 문자열 반환.
+    """
+    if not _KIS_KEY or not _KIS_SECRET:
+        return ""
+    try:
+        resp = requests.post(
+            f"{_KIS_BASE}/oauth2/tokenP",
+            headers={"content-type": "application/json"},
+            data=json.dumps({
+                "grant_type": "client_credentials",
+                "appkey":     _KIS_KEY,
+                "appsecret":  _KIS_SECRET,
+            }),
+            timeout=10,
+        )
+        return resp.json().get("access_token", "")
+    except Exception:
+        return ""
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _get_kis_afterhours_price(ticker: str) -> dict:
+    """KIS FHKST01010400 — 시간외 단일가 현재가.
+
+    장 마감(15:30 KST) 이후 호출. 가격 0 또는 오류 시 빈 dict 반환 → Naver 폴백.
+    """
+    token = _get_kis_token()
+    if not token:
+        return {}
+    try:
+        resp = requests.get(
+            f"{_KIS_BASE}/uapi/domestic-stock/v1/quotations/inquire-price",
+            headers={
+                "Content-Type": "application/json",
+                "authorization": f"Bearer {token}",
+                "appkey":        _KIS_KEY,
+                "appsecret":     _KIS_SECRET,
+                "tr_id":         "FHKST01010400",
+            },
+            params={
+                "fid_cond_mrkt_div_code": "J",
+                "fid_input_iscd":         ticker,
+            },
+            timeout=8,
+        )
+        out = resp.json().get("output", {})
+        # 시간외단일가 필드 우선, 없으면 stck_prpr (API 버전 방어)
+        price = (
+            int(str(out.get("ovtm_untp_prpr",  "0") or "0").replace(",", ""))
+            or int(str(out.get("stck_prpr",     "0") or "0").replace(",", ""))
+        )
+        if price <= 0:
+            return {}
+        rate = float(str(
+            out.get("ovtm_untp_prdy_clpr_vrss_prpr_rate") or
+            out.get("prdy_ctrt") or "0"
+        ).replace(",", ""))
+        diff = int(str(
+            out.get("ovtm_untp_prdy_clpr_vrss_prpr") or
+            out.get("prdy_vrss") or "0"
+        ).replace(",", ""))
+        return {"현재가": price, "등락률": rate, "전일대비": diff, "_kis": True}
+    except Exception:
+        return {}
+
+
 @st.cache_data(ttl=30, show_spinner=False)
 def get_realtime_price(ticker: str) -> dict:
-    """Naver m.stock API → 현재가·등락률·시가총액.
+    """현재가·등락률·시가총액 통합 조회.
 
-    방어 처리: marketValue가 None/null로 반환되는 경우 0.0으로 안전 처리.
-    시총 0 반환 시 scan_top_stocks()의 FDR Marcap 폴백이 자동 보완.
+    ① 장 마감(평일 15:30 KST) 이후 → KIS FHKST01010400 시간외 단일가 우선
+       KIS 실패 또는 가격 0 → ② Naver 폴백
+    ② 장 중 / 주말 / KIS 키 미설정 → Naver m.stock API
+    시총·이름은 항상 Naver에서 취득 (KIS 미제공).
     """
+    # ── Naver 기본 데이터 (시총·이름 필수) ───────────────────────────────────
+    naver: dict = {}
     try:
         url  = f"https://m.stock.naver.com/api/stock/{ticker}/basic"
         resp = requests.get(url, headers=NAVER_HDRS, timeout=5)
@@ -577,7 +658,6 @@ def get_realtime_price(ticker: str) -> dict:
         cur  = int(str(d.get("closePrice", "0") or "0").replace(",", "") or 0)
         chg  = float(d.get("fluctuationsRatio", 0) or 0)
         diff = str(d.get("compareToPreviousClosePrice", "0") or "0").replace(",", "")
-        # marketValue가 null/None으로 반환될 수 있음 → 방어적 파싱
         cap_raw = (
             d.get("marketValue")
             or (d.get("totalInfos") or {}).get("marketValue")
@@ -587,12 +667,31 @@ def get_realtime_price(ticker: str) -> dict:
             cap = float(str(cap_raw).replace(",", "")) / 1e8
         except (ValueError, TypeError):
             cap = 0.0
-        return {
+        naver = {
             "현재가": cur, "등락률": chg, "전일대비": int(diff or 0),
             "시가총액": round(cap, 1), "이름": d.get("stockName", ""),
         }
     except Exception:
-        return {}
+        pass
+
+    # ── 장 마감 후 KIS 시간외 단일가 오버라이드 ─────────────────────────────
+    _now = datetime.now(KST)
+    _after_close = (
+        _now.weekday() < 5                        # 평일
+        and (_now.hour, _now.minute) >= (15, 30)  # 15:30 이후
+    )
+    if _after_close and _KIS_KEY:
+        ah = _get_kis_afterhours_price(ticker)
+        if ah.get("현재가", 0) > 0:
+            # 가격·등락률·전일대비는 KIS 시간외로 덮어쓰기, 시총·이름은 Naver 유지
+            naver.update({
+                "현재가":   ah["현재가"],
+                "등락률":   ah["등락률"],
+                "전일대비": ah["전일대비"],
+                "_source":  "KIS시간외단일가",
+            })
+
+    return naver if naver else {}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
