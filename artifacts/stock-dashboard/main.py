@@ -3428,6 +3428,31 @@ def ui_investor_table(inv_data: list[dict]):
         st.info("수급 데이터를 수집할 수 없습니다.")
         return
 
+    # ── KST 기준 수급 확정 상태 배지 ─────────────────────────────────────────
+    # 서버 시간을 무조건 KST로 고정 후 18:00 기준 타겟 날짜 결정
+    _now = datetime.now(KST)
+    _is_weekday = _now.weekday() < 5
+    if not _is_weekday or _now.hour >= 18:
+        # 주말 또는 18:00 이후 → 당일 확정치 반영 완료
+        _target_date = _now.strftime("%Y%m%d")
+        _badge_text  = "당일 확정"
+        _badge_color = "#27ae60"
+    elif (_now.hour, _now.minute) > (15, 30):
+        # 15:30 초과 ~ 18:00 미만 → 마감 후 집계 대기
+        _target_date = _now.strftime("%Y%m%d")
+        _badge_text  = "가집계완료 · 확정 대기"
+        _badge_color = "#f39c12"
+    elif _now.hour >= 9:
+        # 09:00 ~ 15:30 장 중 → 전일 확정치만 표시
+        _target_date = (_now - timedelta(days=1)).strftime("%Y%m%d")
+        _badge_text  = "장중 (전일 확정치)"
+        _badge_color = "#3498db"
+    else:
+        # 장 시작 전
+        _target_date = (_now - timedelta(days=1)).strftime("%Y%m%d")
+        _badge_text  = "장 시작 전 (전일 확정치)"
+        _badge_color = "#6b7c93"
+
     has_other = any(r.get("기타법인", 0) != 0 for r in inv_data)
     num_cols  = ["기관", "외국인", "개인"] + (["기타법인"] if has_other else [])
     all_cols  = ["날짜"] + num_cols
@@ -3471,9 +3496,15 @@ def ui_investor_table(inv_data: list[dict]):
     )
 
     html = f"""
-<p style='font-size:.72rem;font-weight:800;letter-spacing:.14em;
-color:#D4AF37;text-transform:uppercase;margin-bottom:8px;'>
-◈ 세력 수급 역추적 — 4주체 5거래일 확정 수급 (단위: 주)</p>
+<div style='display:flex;align-items:center;gap:10px;margin-bottom:8px;'>
+  <p style='font-size:.72rem;font-weight:800;letter-spacing:.14em;
+  color:#D4AF37;text-transform:uppercase;margin:0;'>
+  ◈ 세력 수급 역추적 — 4주체 5거래일 수급 (단위: 주)</p>
+  <span style='font-size:.65rem;font-weight:800;letter-spacing:.08em;
+  background:transparent;color:{_badge_color};
+  border:1px solid {_badge_color};border-radius:4px;
+  padding:2px 7px;white-space:nowrap;'>{_badge_text}</span>
+</div>
 <table style='width:100%;border-collapse:collapse;background:#12192b;
 border-radius:12px;overflow:hidden;'>
   <thead><tr>{th_cells}</tr></thead>
