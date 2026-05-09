@@ -639,11 +639,19 @@ def get_investor_flow(ticker: str) -> list[dict]:
         frgn_col = next((c for c in cols if "외국인" in c and "매매" in c), None) or \
                    next((c for c in cols if "외국인" in c and "보유" not in c and "율" not in c), None)
 
+        # 날짜 기준 최신순 정렬 후 인덱스 리셋 — 과거 데이터 참조 원천 차단
+        # frgn.naver가 통상 최신순이지만 파서 순서를 명시적으로 보장
+        tbl[date_col] = tbl[date_col].astype(str).str.strip()
+        valid_mask = tbl[date_col].str.match(r"\d{4}\.\d{2}\.\d{2}", na=False)
+        tbl = (
+            tbl[valid_mask]
+            .sort_values(by=date_col, ascending=False)
+            .reset_index(drop=True)
+        )
+
         rows: list[dict] = []
         for _, row in tbl.iterrows():
             dv = str(row[date_col]).strip()
-            if not re.match(r"\d{4}\.\d{2}\.\d{2}", dv):
-                continue
             inst = _parse_int(row[inst_col]) if inst_col else 0
             frgn = _parse_int(row[frgn_col]) if frgn_col else 0
             # 개인 역산 (零合: 기타법인 0 근사)
@@ -1250,6 +1258,10 @@ def score_investor(inv: list[dict]) -> dict:
         if indv_vals[0] < 0:
             score += 2
             details.append("🎯 개인 매도·세력 수취 완벽 구조 (+2)")
+
+    # ⑧ 당일 쌍끌이 매도 경보 — 점수 영향 없음, 경보 텍스트만 표시
+    elif inst_vals[0] < 0 and frgn_vals[0] < 0:
+        details.append("⚠️ 기관·외국인 쌍끌이 매도 (주의)")
 
     score = max(0, min(score, 40))  # 40점 만점 캡
 

@@ -49,6 +49,8 @@ Primary product: **숨비 애널리틱스 (SOOMBI Analytics)** — Korean KRX st
 ## Architecture Decisions
 
 - **배치 스캔 버그 수정 (2026-05-08)**: `NameError: name 'os' is not defined` in `get_naver_news_api()` — `import os` 누락으로 `quick_score()` 500종목 전부 `return None` → `scored=[]`. 수정: 파일 상단에 `import os` 추가. 추가 수정사항: `@st.cache_data` 제거 from `quick_score()` (ThreadPool 호환), `get_top_volume_tickers()`와 `_scan_top_cached()` TTL 300s로 조정 (스캔 시간 ~90초 vs 구 TTL=60초 불일치 해소).
+- **수급 데이터 날짜 정렬 방어 (2026-05-09)**: `get_investor_flow()` — frgn.naver 파싱 후 `sort_values(by=날짜, ascending=False).reset_index(drop=True)` 적용. `inv[0]`이 항상 T-0(당일 최신) 데이터임을 명시적으로 보장. 과거 데이터 참조 원천 차단.
+- **쌍끌이 매도 경보 추가 (2026-05-09)**: `score_investor()` — `inst_vals[0] < 0 and frgn_vals[0] < 0` 조건 시 `"⚠️ 기관·외국인 쌍끌이 매도 (주의)"` detail 텍스트 추가. 점수 영향 없음, 표시 전용. 소유자 제출 코드 반영.
 - **뉴스 파이프라인 V9.0 (2026-05-08)**: `get_news()` 1차 채널을 웹 크롤링 → 네이버 검색 오픈 API로 전면 교체. 크롤링은 API 키 미설정 또는 API 오류 시에만 자동 폴백. `score_news()` NLP 엔진·Flexible Match 로직은 무변경. 아이템 구조에 `description` 필드 추가 (NLP 확장 대비).
 - **GOLDEN RULE**: 42대 필살기 점수 로직 절대 불변. `get_investor_data_naver()`, `calc_pullback_score()` 등 점수 함수는 절대 수정 금지. ※ `score_investor()` 는 소유자 지시(2026-05-08)로 쌍끌이 15점 보너스 로직 추가 — 이후 수정은 소유자 명시적 승인 필요.
 - **이중 파이프라인**: `_sinv` (GOLDEN RULE, 점수용) + `_sinv_detail` (기타법인 포함, 표시용) 분리 운영.
