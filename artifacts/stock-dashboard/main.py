@@ -26,6 +26,24 @@ import plotly.graph_objects as go
 # ─────────────────────────────────────────────────────────────────────────────
 KST = pytz.timezone("Asia/Seoul")
 
+
+def get_accurate_market_date() -> str:
+    """서버 시간을 KST로 고정 후 수급 확정 기준일을 YYYYMMDD로 반환.
+
+    frgn.naver 확정 반영 타임라인 (실측):
+      18:00 미만 → 전일 확정치 기준  (당일 집계 미완료)
+      18:00 이후 → 당일 확정치 기준  (frgn.naver 당일 저녁 자동 반영)
+
+    반환 포맷: 'YYYYMMDD' — 한국투자증권 API 등 외부 날짜 파라미터와 동일.
+    """
+    now = datetime.now(KST)
+    if now.hour < 18:
+        target = now - timedelta(days=1)
+    else:
+        target = now
+    return target.strftime("%Y%m%d")
+
+
 st.set_page_config(
     page_title="숨비 애널리틱스",
     page_icon="🐋",
@@ -3429,27 +3447,20 @@ def ui_investor_table(inv_data: list[dict]):
         return
 
     # ── KST 기준 수급 확정 상태 배지 ─────────────────────────────────────────
-    # 서버 시간을 무조건 KST로 고정 후 18:00 기준 타겟 날짜 결정
+    # get_accurate_market_date()로 기준일 통일, 시간대별 배지 세분화
+    _target_date = get_accurate_market_date()
     _now = datetime.now(KST)
     _is_weekday = _now.weekday() < 5
     if not _is_weekday or _now.hour >= 18:
-        # 주말 또는 18:00 이후 → 당일 확정치 반영 완료
-        _target_date = _now.strftime("%Y%m%d")
         _badge_text  = "당일 확정"
         _badge_color = "#27ae60"
     elif (_now.hour, _now.minute) > (15, 30):
-        # 15:30 초과 ~ 18:00 미만 → 마감 후 집계 대기
-        _target_date = _now.strftime("%Y%m%d")
         _badge_text  = "가집계완료 · 확정 대기"
         _badge_color = "#f39c12"
     elif _now.hour >= 9:
-        # 09:00 ~ 15:30 장 중 → 전일 확정치만 표시
-        _target_date = (_now - timedelta(days=1)).strftime("%Y%m%d")
         _badge_text  = "장중 (전일 확정치)"
         _badge_color = "#3498db"
     else:
-        # 장 시작 전
-        _target_date = (_now - timedelta(days=1)).strftime("%Y%m%d")
         _badge_text  = "장 시작 전 (전일 확정치)"
         _badge_color = "#6b7c93"
 
