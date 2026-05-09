@@ -1865,8 +1865,8 @@ def check_block_deal(ticker: str, inv: list[dict]) -> str | None:
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=300, show_spinner=False)
 def get_macro_data() -> dict:
-    """실시간 매크로 지표: 환율(USDKRW=X)·금(GC=F)·유가(CL=F)·미국채10Y(^TNX)."""
-    symbols = {"환율": "USDKRW=X", "금": "GC=F", "유가": "CL=F", "금리": "^TNX"}
+    """실시간 매크로 지표: 환율(USDKRW=X)·금(GC=F)·유가(CL=F)·미국채10Y(^TNX)·달러지수(DX=F)."""
+    symbols = {"환율": "USDKRW=X", "금": "GC=F", "유가": "CL=F", "금리": "^TNX", "달러지수": "DX=F"}
     out: dict = {}
     for label, sym in symbols.items():
         try:
@@ -3326,6 +3326,84 @@ def ui_price_header(r: dict):
             f'</div>'
         )
 
+    # ── V11.0 QUANTUM GOD — 달국금공 퀀텀 점수 + 가격 헤더 인라인 표시 ───────
+    _md   = r.get("macro_data", {})
+    _sect = r.get("macro_sens", {}).get("sector", "일반")
+    _dxy  = (_md.get("달러지수") or {}).get("cur", 0)
+    _dxy_c= (_md.get("달러지수") or {}).get("chg", 0)
+    _wti  = (_md.get("유가")     or {}).get("cur", 0)
+    _wti_c= (_md.get("유가")     or {}).get("chg", 0)
+    _tnx  = (_md.get("금리")     or {}).get("cur", 0)
+    _tnx_c= (_md.get("금리")     or {}).get("chg", 0)
+    _usd  = (_md.get("환율")     or {}).get("cur", 0)
+    _usd_c= (_md.get("환율")     or {}).get("chg", 0)
+
+    # 섹터별 V11.0 퀀텀 점수
+    _qscore = 50.0
+    if _sect == "조선":
+        if _wti > 75:  _qscore += 25
+        if _dxy > 103: _qscore += 25
+    elif _sect == "방산":
+        if _dxy > 103: _qscore += 30
+        if _wti > 75:  _qscore += 20
+    elif _sect == "에너지":
+        if _wti > 75:  _qscore += 30
+    elif _sect in ("반도체", "바이오", "IT"):
+        if _tnx < 4.5: _qscore += 25
+    elif _sect == "금융":
+        if _tnx > 4.0: _qscore += 25
+    elif _sect == "자동차":
+        if _dxy > 103: _qscore += 15
+    _qscore = min(_qscore, 100)
+
+    if _qscore > 85:
+        _qsig  = "🚨 세력 압도 구간 · 풀배팅 임계점 돌파"
+        _qcol  = "#D4AF37"
+        _qbdr  = "#D4AF37"
+        _qbg   = "#1a1400"
+    elif _qscore > 60:
+        _qsig  = "✅ 분할 매수 · 세력 등 타기 전략 유효"
+        _qcol  = "#27ae60"
+        _qbdr  = "#27ae60"
+        _qbg   = "#0d1a0d"
+    else:
+        _qsig  = "💎 관망 · 눌림목 대기"
+        _qcol  = "#8fa3b8"
+        _qbdr  = "#2a3550"
+        _qbg   = "#12192b"
+
+    def _mv(val: float, chg: float, unit: str = "") -> str:
+        """값 + 등락 화살표 포맷."""
+        if not val:
+            return "—"
+        arrow = "▲" if chg > 0 else "▼" if chg < 0 else "—"
+        col   = "#e74c3c" if chg > 0 else "#3399FF" if chg < 0 else "#6b7c93"
+        return (
+            f'<b style="color:#E8E8E8">{val:,.2f}{unit}</b>'
+            f'&nbsp;<span style="color:{col};font-size:.7rem">{arrow}{abs(chg):.2f}%</span>'
+        )
+
+    _macro_html = ""
+    if _dxy or _wti or _tnx:
+        _macro_html = (
+            f'<div style="border:1px solid {_qbdr};background:{_qbg};border-radius:8px;'
+            f'padding:8px 16px;margin-top:8px;">'
+            f'<div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:5px;">'
+            f'<span style="font-size:.7rem;font-weight:900;letter-spacing:.1em;'
+            f'color:#4a5568;text-transform:uppercase;">V11.0 달국금공 퀀텀</span>'
+            f'<span style="font-size:.88rem;font-weight:800;color:{_qcol};">{_qsig}</span>'
+            f'<span style="font-size:.8rem;font-weight:900;color:{_qcol};">{_qscore:.0f}pt</span>'
+            f'</div>'
+            f'<div style="display:flex;gap:20px;flex-wrap:wrap;font-size:.78rem;color:#6b7c93;">'
+            f'<span>DXY {_mv(_dxy, _dxy_c)}</span>'
+            f'<span>WTI {_mv(_wti, _wti_c, "$")}</span>'
+            f'<span>US10Y {_mv(_tnx, _tnx_c, "%")}</span>'
+            f'<span>USD/KRW {_mv(_usd, _usd_c, "원")}</span>'
+            f'<span style="color:#4a5568">섹터: {_sect}</span>'
+            f'</div>'
+            f'</div>'
+        )
+
     _html_block(f"""
 <style>
   .ph {{
@@ -3372,6 +3450,7 @@ def ui_price_header(r: dict):
     <div class="ph-kv"><span class="ph-k">52주 고/저</span><span class="ph-v">{hi_str} / {lo_str}</span></div>
   </div>
   {_whale_html}
+  {_macro_html}
   <div class="ph-ts">{r['collected_at']}</div>
 </div>
 """)
