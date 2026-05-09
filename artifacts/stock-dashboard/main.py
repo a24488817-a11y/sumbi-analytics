@@ -2101,8 +2101,9 @@ def quick_score(ticker: str, name: str, market: str, turnover_pct: float = 0.0) 
         if not price_data or price_data.get("현재가", 0) == 0:
             return None
 
-        ohlcv    = get_ohlcv(ticker, 90)
-        inv_data = get_investor_flow(ticker)
+        ohlcv     = get_ohlcv(ticker, 90)
+        inv_data  = get_investor_flow(ticker)
+        fund_data = get_fundamentals(ticker)   # 목표주가 취득 (캐시 TTL=3600s)
 
         # 스캐너 Kill Switch — T-0 쌍끌이 판별 전 내림차순 정렬 강제
         # 과거 이력 때문에 억지로 통과하는 것을 원천 차단 (사용자 승인 로직 2026-05-09)
@@ -2191,6 +2192,8 @@ def quick_score(ticker: str, name: str, market: str, turnover_pct: float = 0.0) 
             "ma5":           pb.get("ma5",  0),
             "ma20":          pb.get("ma20", 0),
             "is_ssankkl":    _is_ssankkl,   # T-0 직접 체크 (기관>0 AND 외국인>0), 과거 이력 무시
+            # ── 안전마진 Kill Switch 필드 ─────────────────────────────────────
+            "target_price":  int((fund_data or {}).get("목표주가", 0)),
             # ── Volume Anomaly 필드 (UI 표기·스텔스 필터링용) ─────────────────
             "vol_ratio":     vol_ratio,          # 당일 / 20일 평균 거래량 배수
             "turnover_pct":  round(turnover_pct, 2),  # 시총 대비 회전율 (%)
@@ -2517,6 +2520,162 @@ def ui_top15_tabs(scored: list[dict]):
     with tab4: _show(_to_df(small_mid), "penny", sort_mode="total")
 
 
+def ui_breakout_mode(scored: list[dict]):
+    """🔥 주도주/돌파 모드 — 투 트랙 전략 Track 1.
+
+    [필터 조건 — 공통 Kill Switch + 3 AND]
+    Kill Switch : 현재가 ≥ 목표주가 → 즉시 컷아웃 (안전마진 붕괴)
+    ① 모멘텀   : 등락률 +2.0% ~ +5.0%  (세력 자금 유입 구간)
+    ② 수급     : 수급 15점 이상 OR 기관+외인 쌍끌이
+    ③ 거래량   : vol_ratio ≥ 1.5x  (20일 평균 대비 급증)
+    정렬: 42대 필살기 총점 내림차순
+    """
+
+    # ── Kill Switch + Track 1 필터 ─────────────────────────────────────────
+    passed: list[dict] = []
+    for s in scored:
+        price  = s.get("price", 0)
+        tp     = s.get("target_price", 0)
+        chg    = s.get("change", 0.0)
+        inv_ok = s.get("is_ssankkl") or s["inv_score"] >= 15
+        vr     = s.get("vol_ratio", 1.0)
+
+        if tp > 0 and price >= tp:   continue   # 안전마진 붕괴 — 즉시 컷아웃
+        if not (2.0 <= chg <= 5.0):  continue   # ① 등락률 +2.0~+5.0% 범위 외
+        if not inv_ok:               continue   # ② 수급 다이버전스 없음
+        if vr < 1.5:                 continue   # ③ 거래량 급증 미달 (1.5x 미만)
+
+        passed.append(s)
+
+    # ── 총점 내림차순 정렬, Top 15 ───────────────────────────────────────────
+    ranked = sorted(passed, key=lambda x: x["total"], reverse=True)[:15]
+
+    # ── 통과 결과 배너 ──────────────────────────────────────────────────────
+    n_total  = len(scored)
+    n_passed = len(passed)
+    n_drop   = n_total - n_passed
+    banner_color = "#FF5050" if n_passed > 0 else "#e74c3c"
+    _html_block(f"""
+<style>
+  .bk-banner {{
+    background:linear-gradient(135deg,#1a0a0a,#1e0f0f);
+    border:1px solid #3a1a1a; border-radius:12px;
+    padding:14px 20px; margin:4px 0 12px;
+  }}
+  .bk-banner-title {{
+    font-size:.82rem; font-weight:800; color:{banner_color};
+    letter-spacing:.12em; text-transform:uppercase; margin-bottom:6px;
+  }}
+  .bk-stat {{ font-size:.82rem; color:#c0cce0; margin-bottom:4px; }}
+  .bk-hl1  {{ color:#FF5050; font-weight:900; }}
+  .bk-hl2  {{ color:#D4AF37; font-weight:900; }}
+  .bk-rule {{ font-size:.75rem; color:#6b7c93; margin-top:4px; }}
+</style>
+<div class="bk-banner">
+  <div class="bk-banner-title">🔥 주도주 / 돌파 모드 — Track 1 Kill Switch 결과</div>
+  <div class="bk-stat">
+    전체 <span class="bk-hl1">{n_total}종목</span> 스캔 →
+    <span class="bk-hl1">{n_drop}종목</span> 탈락
+    (안전마진 붕괴·조건 미충족) →
+    <span class="bk-hl2">{n_passed}종목 통과</span>
+    → 상위 <strong>{min(n_passed, 15)}</strong>종목 표출
+  </div>
+  <div class="bk-rule">
+    Kill Switch: 현재가 ≥ 목표주가 즉시 컷아웃 &nbsp;|&nbsp;
+    ① 등락률 +2.0%~+5.0% &amp; ② 수급15+ 또는 쌍끌이 &amp; ③ 거래량 1.5x+ (3 AND 충족 필수) &nbsp;|&nbsp;
+    정렬: 42대 필살기 총점 내림차순
+  </div>
+</div>
+""")
+
+    # ── 통과 종목 없음 ──────────────────────────────────────────────────────
+    if not ranked:
+        _html_block("""
+<style>
+  .bk-empty {{
+    background:#12192b; border:1px solid #2a3a50; border-radius:14px;
+    padding:28px 32px; text-align:center; margin:8px 0;
+  }}
+  .bk-empty-title {{ font-size:1.05rem; font-weight:800; color:#FF5050; margin-bottom:10px; }}
+  .bk-empty-body  {{ font-size:.86rem; color:#8fa3b8; line-height:1.75; }}
+</style>
+<div class="bk-empty">
+  <div class="bk-empty-title">🔥 현재 돌파 조건 충족 종목 없음</div>
+  <div class="bk-empty-body">
+    모멘텀 구간 진입 + 수급 확인 + 거래량 급증을 동시에 충족하는 종목이 없습니다.<br>
+    ⚡ 즉시 갱신으로 재수집하거나, 장 중 거래량 급증 구간에서 다시 확인하세요.
+  </div>
+</div>
+""")
+        return
+
+    # ── 돌파 데이터프레임 구성 ─────────────────────────────────────────────
+    rows = []
+    for i, s in enumerate(ranked, 1):
+        price  = s.get("price", 0)
+        chg    = s.get("change", 0.0)
+        rsi    = float(s.get("rsi", 50.0))
+        vr     = s.get("vol_ratio", 1.0)
+        tp     = s.get("target_price", 0)
+        tr_pct = s.get("turnover_pct", 0.0)
+
+        vr_str = f"{vr:.1f}x"
+        tr_str = f"{tr_pct:.1f}%" if tr_pct > 0 else "—"
+        tp_str = f"{tp:,}원" if tp > 0 else "—"
+        badge  = (
+            "🔥 쌍끌이" if s.get("is_ssankkl")
+            else ("💪 수급강" if s["inv_score"] >= 30 else "📈 수급+")
+        )
+
+        rows.append({
+            "순위":           i,
+            "종목명":         s["name"],
+            "코드":           s["ticker"],
+            "규모":           s.get("cap_label", "—"),
+            "현재가":         f"{price:,}원" if price else "—",
+            "등락률":         f"{chg:+.2f}%",
+            "거래량급증":     vr_str,
+            "회전율":         tr_str,
+            "목표주가":       tp_str,
+            "세력 매집 강도": s["inv_score"],
+            "RSI":            round(rsi, 1),
+            "총점":           s["total"],
+            "매집 유형":      badge,
+        })
+
+    df = pd.DataFrame(rows)
+
+    event = st.dataframe(
+        df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "세력 매집 강도": st.column_config.ProgressColumn(
+                "세력 매집 강도", min_value=0, max_value=40, format="%d점"
+            ),
+            "총점": st.column_config.ProgressColumn(
+                "총점", min_value=0, max_value=100, format="%d점"
+            ),
+        },
+        selection_mode="single-row",
+        on_select="rerun",
+        key="df_breakout_main",
+    )
+
+    if event and len(event.selection.rows) > 0:
+        st.session_state.selected_stock_code = df.iloc[event.selection.rows[0]]["코드"]
+
+    st.markdown(
+        '<p style="color:#6b7c93;font-size:0.75rem;margin:8px 0 0;">'
+        "🔥 쌍끌이 = 기관·외인 당일 동시 순매수 &nbsp;·&nbsp; "
+        "💪 수급강 = 수급 25~39점 &nbsp;·&nbsp; "
+        "거래량급증 = 당일/20일평균 배수 (1.5x+ 돌파 기준) &nbsp;·&nbsp; "
+        "Kill Switch: 현재가 ≥ 목표주가 즉시 컷아웃 &nbsp;·&nbsp; "
+        "표의 행 클릭 → 하단 정밀 해부 즉시 실행</p>",
+        unsafe_allow_html=True,
+    )
+
+
 def ui_stealth_mode(scored: list[dict]):
     """💎 눌림목/스텔스 모드 — Rule 2 Kill Switch 하드 필터링.
 
@@ -2528,13 +2687,16 @@ def ui_stealth_mode(scored: list[dict]):
     정렬: MA20 이격도 음수 우선, 0에 가장 가까운 순 (최적 눌림목 진입 타이밍 순)
     """
 
-    # ── Rule 2 Kill Switch: 3 AND 조건 — 미충족 즉시 drop() ────────────────
+    # ── Rule 2 Kill Switch: 안전마진 붕괴 + 3 AND 조건 — 미충족 즉시 drop() ──
     passed: list[dict] = []
     for s in scored:
+        price  = s.get("price", 0)
+        tp     = s.get("target_price", 0)
         chg    = s.get("change", 0.0)
         rsi    = float(s.get("rsi", 50.0))
         inv_ok = s.get("is_ssankkl") or s["inv_score"] >= 15
 
+        if tp > 0 and price >= tp:  continue   # 안전마진 붕괴 즉시 컷아웃
         if chg > 3.0:   continue   # ① 급등주 차단 (등락률 +3.0% 초과 즉시 drop) — 양봉 턴어라운드 허용
         if rsi > 65:    continue   # ② 과열 배제 (RSI 65 초과 즉시 drop) — 초기 반등 포착
         if not inv_ok:  continue   # ③ 수급 다이버전스 없음 즉시 drop
@@ -4263,10 +4425,10 @@ button[data-baseweb="tab"][aria-selected="true"] p { color: #D4AF37 !important; 
         with mode_tab1:
             st.markdown(
                 '<p style="color:#FF5050;font-size:0.8rem;font-weight:700;margin:4px 0 6px;">'
-                "총점(42대 필살기) 최강 종목 — 수급·뉴스·차트·리스크 4축 합산 최고점 순</p>",
+                "등락률 +2~5% · 수급15+ or 쌍끌이 · 거래량 1.5x+ 동시 충족 — 세력 자금 유입 모멘텀 종목</p>",
                 unsafe_allow_html=True,
             )
-            ui_top15_tabs(scored)
+            ui_breakout_mode(scored)
         with mode_tab2:
             st.markdown(
                 '<p style="color:#D4AF37;font-size:0.8rem;font-weight:700;margin:4px 0 6px;">'
