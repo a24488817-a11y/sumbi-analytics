@@ -17,6 +17,8 @@ import pytz
 import re
 import math
 import os
+import sys
+import traceback
 import plotly.graph_objects as go
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2144,7 +2146,16 @@ def quick_score(ticker: str, name: str, market: str, turnover_pct: float = 0.0) 
             "turnover_pct":  round(turnover_pct, 2),  # 시총 대비 회전율 (%)
             "cap_label":     _cap_label,         # 대형/중형/소형
         }
+    except (KeyError, TypeError, ValueError):
+        # 데이터 파싱 실패 (예상 범위 내) — 해당 종목 건너뜀
+        return None
     except Exception:
+        # 예상치 못한 예외 — 반드시 로그로 남겨 재발 방지
+        print(
+            f"[quick_score] UNEXPECTED ERROR — {ticker} ({name}): "
+            f"{traceback.format_exc()}",
+            file=sys.stderr,
+        )
         return None
 
 
@@ -2166,15 +2177,14 @@ def scan_top_stocks(candidates: list[dict]) -> list[dict]:
                 r = f.result(timeout=40)
                 if r:
                     results.append(r)
-            except Exception as _scan_exc:
+            except Exception:
                 err_count += 1
-                if err_count == 1:   # 첫 번째 오류만 로깅
-                    try:
-                        import traceback as _tb
-                        with open("/tmp/scan_errors.log", "a") as _lf:
-                            _lf.write(f"[scan_top_stocks] {_tb.format_exc()}\n")
-                    except Exception:
-                        pass
+                # 모든 오류를 stderr에 출력 — 무음 실패 방지
+                print(
+                    f"[scan_top_stocks] future #{err_count} failed: "
+                    f"{traceback.format_exc()}",
+                    file=sys.stderr,
+                )
 
     # ── FDR Marcap 병합: Naver API cap이 0/소액인 경우 보완 ──────────────────
     cap_lookup = _get_marcap_lookup()
@@ -4118,7 +4128,17 @@ button[data-baseweb="tab"][aria-selected="true"] p { color: #D4AF37 !important; 
                 unsafe_allow_html=True,
             )
             ui_stealth_mode(scored)
+    elif candidates:
+        # 후보 종목은 수집됐지만 점수 산출이 전부 실패 → 예상치 못한 오류
+        st.warning(
+            "⚠️ **점수 산출 오류** — 종목 후보 수집은 완료됐으나 "
+            f"전체 {len(candidates)}종목 점수 산출이 실패했습니다.\n\n"
+            "네트워크 지연 또는 데이터 소스 일시 장애일 수 있습니다. "
+            "**⚡ 즉시 갱신** 버튼으로 재시도하거나, 오류가 반복되면 앱 로그를 확인하세요.",
+            icon="⚠️",
+        )
     else:
+        # 후보 종목 자체를 가져오지 못함 → 네트워크/초기 로딩 문제
         st.info(
             "📡 데이터 점검 중 — 종목 수급 파이프라인 초기 동기화 완료 대기 중입니다.\n\n"
             "첫 로드 시 최대 60~90초 소요될 수 있습니다. "
