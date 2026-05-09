@@ -3052,21 +3052,55 @@ def ui_score_card(r: dict):
     rs      = r.get("risk_score", {"score": 0, "detail": "—"})
     verdict = r["verdict"]
 
+    # ── 안전마진 Kill Switch ───────────────────────────────────────────────────
+    # 현재가 ≥ 목표주가 → 안전마진 붕괴 판정: 표시 점수만 -30 (원본 total 불변)
+    _cur = (r.get("price") or {}).get("현재가", 0)
+    _tp  = (r.get("fund")  or {}).get("목표주가", 0)
+    kill_switch = bool(_tp > 0 and _cur > 0 and _cur >= _tp)
+    display_total = max(0, total - 30) if kill_switch else total
+
+    if kill_switch:
+        _upside = round((_tp - _cur) / _cur * 100, 1)
+        _html_block(f"""
+<style>
+  .ks {{
+    background:linear-gradient(135deg,#1a0800 0%,#250f00 100%);
+    border:1px solid #c0392b; border-left:4px solid #e74c3c;
+    border-radius:14px; padding:18px 24px; margin-bottom:14px;
+    box-shadow:0 4px 20px rgba(231,76,60,.25);
+  }}
+  .ks-title {{ font-size:.72rem; font-weight:900; letter-spacing:.18em;
+               color:#e74c3c; text-transform:uppercase; margin-bottom:8px; }}
+  .ks-body  {{ font-size:.96rem; font-weight:700; color:#E8E8E8; line-height:1.7; }}
+  .ks-num   {{ color:#e74c3c; font-weight:900; }}
+</style>
+<div class="ks">
+  <div class="ks-title">🚨 안전마진 Kill Switch 발동 — 관망/매도 구간</div>
+  <div class="ks-body">
+    현재가 <span class="ks-num">{_cur:,}원</span>이
+    증권사 목표주가 <span class="ks-num">{_tp:,}원</span>에
+    도달하거나 초과했습니다 (괴리율 <span class="ks-num">{_upside:+.1f}%</span>).<br>
+    안전마진 붕괴 구간 — 종합 점수 30점 차감 적용.
+    분할 매수 판정 강제 취소.
+  </div>
+</div>
+""")
+
     prob, prob_tag = calc_tomorrow_prob(r)
 
-    if total >= 80:
+    if display_total >= 80:
         vd_col = "#D4AF37"; vd_bg = "#1a1600"; vd_border = "#D4AF37"
         badge  = "전 세계 1등 매수 적기 (LEGENDARY)"; sc = "#D4AF37"
         emoji  = "👑"
-    elif total >= 65:
+    elif display_total >= 65:
         vd_col = "#FF5050"; vd_bg = "#1e0a0a"; vd_border = "#FF5050"
         badge  = "즉시 진입 가능 (HIGH)"; sc = "#FF5050"
         emoji  = "🔴"
-    elif total >= 45:
+    elif display_total >= 45:
         vd_col = "#FFB300"; vd_bg = "#1e1600"; vd_border = "#FFB300"
         badge  = "분할 매수 (MID)";  sc = "#FFB300"
         emoji  = "🟡"
-    elif total >= 30:
+    elif display_total >= 30:
         vd_col = "#f39c12"; vd_bg = "#221600"; vd_border = "#f39c12"
         badge  = "관망 (LOW)";        sc = "#f39c12"
         emoji  = "⚪"
@@ -3074,6 +3108,12 @@ def ui_score_card(r: dict):
         vd_col = "#6b7c93"; vd_bg = "#0d1120"; vd_border = "#4a5568"
         badge  = "진입 불가";         sc = "#6b7c93"
         emoji  = "❌"
+
+    # Kill Switch 발동 시 분할 매수 이상 판정 강제 취소 → 관망/매도로 덮기
+    if kill_switch and display_total >= 45:
+        vd_col = "#e74c3c"; vd_bg = "#1a0800"; vd_border = "#e74c3c"
+        badge  = "관망/매도 (안전마진 부족 및 고평가 구간)"; sc = "#e74c3c"
+        emoji  = "🚨"
 
     # 확률 색상
     if   prob >= 90: prob_col = "#D4AF37"
@@ -3111,7 +3151,7 @@ def ui_score_card(r: dict):
   </div>
   <div style="font-size:80px;font-weight:900;color:{sc};
               line-height:1;margin-bottom:8px;">
-    {total}<span style="font-size:40px;">점</span>
+    {display_total}<span style="font-size:40px;">점</span>
   </div>
   <div style="font-size:1.3rem;font-weight:800;color:{vd_col};">
     {emoji} {badge}
@@ -3125,7 +3165,7 @@ def ui_score_card(r: dict):
     # ── Plotly 속도계 게이지 ───────────────────────────────────────────────
     fig = go.Figure(go.Indicator(
         mode="gauge+number",
-        value=total,
+        value=display_total,
         number={
             "font": {"size": 64, "color": sc, "family": "Arial Black"},
             "suffix": "점",
