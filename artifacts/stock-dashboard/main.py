@@ -223,6 +223,24 @@ _SECURITIES_NOISE_KW = [
     "하향", "상향",
     "매수의견", "투자 의견", "종목추천",
 ]
+
+# ── 치명 공시 키워드 (Fatal Disclosure) ──────────────────────────────────────
+# 감지 시 모든 호재 점수를 무효화하고 뉴스 0점 강제 적용 (최우선 감점)
+_FATAL_DISC_KW = [
+    "유상증자",           # 희석 리스크 — 기존 주주 가치 희석
+    "전환사채",           # CB 발행 — 잠재 오버행
+    "CB 발행",
+    "BW 발행",           # 신주인수권부사채
+    "신주인수권부사채",
+    "교환사채",           # EB 발행
+    "EB 발행",
+    "블록딜",             # 대주주·기관 대량 매도
+    "대량매각",           # 지분 대량 매각
+    "최대주주 지분 매각", # 경영진 엑싯
+    "오버행",             # 잠재 매도 물량 경보
+    "주식담보대출",       # 반대매매 리스크
+    "반대매매",
+]
 # 하위 호환 — 기존 _IMPACT_KW 참조 코드가 있는 경우를 위해 별칭 유지
 _IMPACT_KW = _TIER1_KW
 
@@ -1509,23 +1527,39 @@ def score_news(news: list[dict], sector: str = "일반") -> dict:
         "impact_hits": [], "tier0_news": [], "tier1_news": [],
         "tier2_news": [], "neutral_news": [],
         "velocity": 0, "velocity_label": "뉴스 없음",
+        "fatal_disclosures": [],
     }
     if not news:
         return empty
 
-    tier0_news:   list[dict] = []
-    tier1_news:   list[dict] = []
-    tier2_news:   list[dict] = []
-    neutral_news: list[dict] = []   # 10점 — PR·채용·IR
-    bad_news:     list[dict] = []
-    noise_list:   list[dict] = []   # 0점 — 순수 시황 잡음
-    impact_hits:  list[str]  = []
+    tier0_news:      list[dict] = []
+    tier1_news:      list[dict] = []
+    tier2_news:      list[dict] = []
+    neutral_news:    list[dict] = []   # 10점 — PR·채용·IR
+    bad_news:        list[dict] = []
+    noise_list:      list[dict] = []   # 0점 — 순수 시황 잡음
+    fatal_disclosures: list[dict] = [] # 치명 공시 — 유상증자·블록딜·CB 발행
+    impact_hits:     list[str]  = []
 
     for n in news:
         t      = n["title"]
         reason = _extract_news_reason(t)
         is_dart = _is_dart_news(t)
         item   = {**n, "reason": reason, "dart": is_dart}
+
+        # ⓪ 치명 공시 선탐지 — 유상증자·블록딜·전환사채(CB) 발행
+        # 호재 Tier와 관계없이 무조건 최우선 악재 분류 후 종료 (Tier1·Tier2 승격 원천 차단)
+        _fatal_hits = [kw for kw in _FATAL_DISC_KW if kw in t]
+        if _fatal_hits:
+            _kw = _fatal_hits[0]
+            _fd_item = {
+                **item,
+                "reason":    f"🚨 치명 공시 — {_kw} 감지 (호재 Tier 승격 원천 차단)",
+                "fatal_kw":  _kw,
+            }
+            fatal_disclosures.append(_fd_item)
+            bad_news.append(_fd_item)
+            continue
 
         # ① 순수 시황 잡음 — 점수 계산에서 완전 배제
         if any(kw in t for kw in _NOISE_KW):
@@ -1634,20 +1668,29 @@ def score_news(news: list[dict], sector: str = "일반") -> dict:
     else:                   velocity = 0; vel_label = "— 종목 전용 호재 뉴스 없음"
 
     score    = min(score, 30)   # Hard Cap: 뉴스 최대 30점 전역 보장
+
+    # ── 치명 공시 최우선 오버라이드 (유상증자·블록딜·CB 발행) ─────────────────
+    # 어떤 Tier 호재가 있어도 뉴스 점수 강제 0점 — 희석·오버행 리스크 최우선
+    if fatal_disclosures:
+        score = 0
+        _fd_kws = "·".join(dict.fromkeys(d["fatal_kw"] for d in fatal_disclosures))
+        score_label = f"0점 🚨 치명 공시 강제 — {_fd_kws} 감지 (뉴스 점수 최우선 무효화)"
+
     good_all = tier0_news + tier1_news + tier2_news
     return {
-        "score":        score,
-        "score_label":  score_label,
-        "good":         good_all[:5],
-        "bad":          bad_news[:3],
-        "neutral":      noise_list,
-        "neutral_news": neutral_news[:3],
-        "impact_hits":  impact_hits,
-        "tier0_news":   tier0_news[:3],
-        "tier1_news":   tier1_news[:5],
-        "tier2_news":   tier2_news[:5],
-        "velocity":     velocity,
-        "velocity_label": vel_label,
+        "score":             score,
+        "score_label":       score_label,
+        "good":              good_all[:5],
+        "bad":               bad_news[:3],
+        "neutral":           noise_list,
+        "neutral_news":      neutral_news[:3],
+        "impact_hits":       impact_hits,
+        "tier0_news":        tier0_news[:3],
+        "tier1_news":        tier1_news[:5],
+        "tier2_news":        tier2_news[:5],
+        "velocity":          velocity,
+        "velocity_label":    vel_label,
+        "fatal_disclosures": fatal_disclosures,
     }
 
 
@@ -3580,6 +3623,53 @@ def ui_score_card(r: dict):
                f"눌림목 패턴<br>RSI {pb['rsi']} · MA5 {pb['ma5']:,}")
     _mini_card(c4, "리스크/숏스퀴즈 (10점)", rs["score"], 10,
                rs.get("detail", "—"))
+
+    # ── 치명 공시 경보 — 유상증자·블록딜·전환사채(CB) 감지 시 빨간 경보 ─────────
+    _fatal_disc = ns.get("fatal_disclosures", [])
+    if _fatal_disc:
+        _fd_items_html = "".join(
+            f'<div class="fd-item">'
+            f'<span class="fd-kw">⚠️ {d.get("fatal_kw", "치명 공시")}</span>'
+            f'&nbsp;{(d.get("title", ""))[:70]}'
+            f'</div>'
+            for d in _fatal_disc
+        )
+        _html_block(f"""
+<style>
+  .fd-alert {{
+    background:#180606; border:2px solid #e74c3c;
+    border-left:6px solid #ff1a1a;
+    border-radius:12px; padding:18px 22px; margin:16px 0 8px;
+    box-shadow:0 0 20px rgba(231,76,60,.25);
+  }}
+  .fd-title {{
+    font-size:.88rem; font-weight:900; color:#ff4040;
+    letter-spacing:.07em; margin-bottom:12px;
+  }}
+  .fd-item {{
+    font-size:.81rem; color:#ff9090; line-height:2.0;
+    border-bottom:1px solid #3a1010; padding:2px 0;
+  }}
+  .fd-item:last-child {{ border-bottom:none; }}
+  .fd-kw {{
+    display:inline-block; background:#3a0a0a; color:#ff5555;
+    border-radius:4px; padding:1px 8px; margin-right:8px;
+    font-weight:800; font-size:.79rem;
+  }}
+  .fd-note {{
+    font-size:.74rem; color:#a05050; margin-top:10px;
+    border-top:1px solid #3a1010; padding-top:8px;
+  }}
+</style>
+<div class="fd-alert">
+  <div class="fd-title">🚨 치명 공시 경보 — 유상증자 · 블록딜 · 전환사채(CB) 발행 감지</div>
+  {_fd_items_html}
+  <div class="fd-note">
+    ※ 희석·오버행·반대매매 리스크 최우선 감점 적용 —
+    뉴스/호재 점수 <strong style="color:#ff5555">0점 강제</strong> (모든 Tier 호재 무효화)
+  </div>
+</div>
+""")
 
     # ── LEGENDARY 판정 상세 근거 카드 (80점 이상 시 자동 출력) ────────────────
     if total >= 80:
