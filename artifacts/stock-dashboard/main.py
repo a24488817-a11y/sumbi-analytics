@@ -3506,6 +3506,27 @@ def ui_investor_table(inv_data: list[dict]):
         "※ 개인 = 역산(기관+외국인+기타법인 零合). 기타법인 별도 집계 없음.</p>"
     )
 
+    # ── 당일 수급 팩트체크 헤드라인 ──────────────────────────────────────────
+    # inv_data[0] = T-0 최신일 (get_investor_flow() sort 보장)
+    _latest_inst = int(inv_data[0].get("기관",   0))
+    _latest_frgn = int(inv_data[0].get("외국인", 0))
+    if _latest_inst < 0 and _latest_frgn < 0:
+        _sugub_text  = "🚨 기관·외국인 쌍끌이 매도 (주의/관망)"
+        _sugub_color = "#e74c3c"
+        _sugub_bg    = "#1a0800"
+        _sugub_bdr   = "#c0392b"
+    elif _latest_inst > 0 and _latest_frgn > 0:
+        _sugub_text  = "🔥 기관·외국인 쌍끌이 매수 (수급강)"
+        _sugub_color = "#D4AF37"
+        _sugub_bg    = "#1a1600"
+        _sugub_bdr   = "#D4AF37"
+    else:
+        _mix_txt     = f"기관 {_latest_inst:+,} / 외국인 {_latest_frgn:+,}"
+        _sugub_text  = f"〰 {_mix_txt} (혼조세)"
+        _sugub_color = "#8fa3b8"
+        _sugub_bg    = "#12192b"
+        _sugub_bdr   = "#2a3550"
+
     html = f"""
 <div style='display:flex;align-items:center;gap:10px;margin-bottom:8px;'>
   <p style='font-size:.72rem;font-weight:800;letter-spacing:.14em;
@@ -3516,6 +3537,11 @@ def ui_investor_table(inv_data: list[dict]):
   border:1px solid {_badge_color};border-radius:4px;
   padding:2px 7px;white-space:nowrap;'>{_badge_text}</span>
 </div>
+<div style='background:{_sugub_bg};border:1px solid {_sugub_bdr};
+border-left:4px solid {_sugub_color};border-radius:10px;
+padding:10px 16px;margin-bottom:10px;
+font-size:.95rem;font-weight:800;color:{_sugub_color};
+letter-spacing:.03em;'>{_sugub_text}</div>
 <table style='width:100%;border-collapse:collapse;background:#12192b;
 border-radius:12px;overflow:hidden;'>
   <thead><tr>{th_cells}</tr></thead>
