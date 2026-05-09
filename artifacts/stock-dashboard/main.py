@@ -616,9 +616,10 @@ def _get_kis_token() -> str:
 def _get_kis_regular_price(ticker: str) -> dict:
     """KIS FHKST01010100 — 정규장 실시간 시세 (09:00~15:30 KST).
 
-    Naver 대비 무지연 체결가. 추가 필드:
-      vol_pct  = prdy_vol_vrss_prcnt  (전일 거래량 대비 %)
-      wghn_pct = wghn_avrg_prc_crrt   (가중평균주가 변동률 — 세력 역추적 지표)
+    Naver 대비 무지연 체결가. 추가 필드 (V10.0):
+      vol_pct       = prdy_vol_vrss_prcnt  (전일 거래량 대비 %)
+      wghn_pct      = wghn_avrg_prc_crrt   (가중평균주가 변동률 — 세력 역추적 지표)
+      pgm_intensity = pgm_ntby_qty / acml_vol × 100  (프로그램 순매수 강도 %)
     KIS 실패 또는 가격 0 → 빈 dict → Naver 폴백.
     """
     token = _get_kis_token()
@@ -648,13 +649,18 @@ def _get_kis_regular_price(ticker: str) -> dict:
         diff     = int(str(out.get("prdy_vrss",             "0") or "0").replace(",", ""))
         vol_pct  = float(str(out.get("prdy_vol_vrss_prcnt", "0") or "0").replace(",", ""))
         wghn_pct = float(str(out.get("wghn_avrg_prc_crrt",  "0") or "0").replace(",", ""))
+        # V10.0 — 프로그램 순매수 강도
+        pgm_qty  = float(str(out.get("pgm_ntby_qty", "0") or "0").replace(",", ""))
+        acml_vol = float(str(out.get("acml_vol",     "0") or "0").replace(",", ""))
+        pgm_intensity = (pgm_qty / acml_vol * 100) if acml_vol > 0 else 0.0
         return {
-            "현재가":   price,
-            "등락률":   rate,
-            "전일대비": diff,
-            "vol_pct":  vol_pct,   # 전일 거래량 대비 % (150+ = 거래량 폭발)
-            "wghn_pct": wghn_pct,  # 가중평균주가 변동률 (110+ = 세력 매집, 90- = 개인 과열)
-            "_kis":     True,
+            "현재가":        price,
+            "등락률":        rate,
+            "전일대비":      diff,
+            "vol_pct":       vol_pct,       # 전일 거래량 대비 % (150+ = 거래량 폭발)
+            "wghn_pct":      wghn_pct,      # 가중평균주가 변동률 (110+ = 세력 매집, 90- = 개인 과열)
+            "pgm_intensity": pgm_intensity, # 프로그램 순매수 강도 % (0+ = 매집, 0- = 이탈)
+            "_kis":          True,
         }
     except Exception:
         return {}
@@ -748,12 +754,13 @@ def get_realtime_price(ticker: str) -> dict:
         if rp.get("현재가", 0) > 0:
             # 가격·등락률·전일대비·세력지표는 KIS 실시간, 시총·이름은 Naver 유지
             naver.update({
-                "현재가":   rp["현재가"],
-                "등락률":   rp["등락률"],
-                "전일대비": rp["전일대비"],
-                "vol_pct":  rp.get("vol_pct",  0),
-                "wghn_pct": rp.get("wghn_pct", 0),
-                "_source":  "KIS실시간",
+                "현재가":        rp["현재가"],
+                "등락률":        rp["등락률"],
+                "전일대비":      rp["전일대비"],
+                "vol_pct":       rp.get("vol_pct",       0),
+                "wghn_pct":      rp.get("wghn_pct",      0),
+                "pgm_intensity": rp.get("pgm_intensity", 0),
+                "_source":       "KIS실시간",
             })
 
     # ── 장 마감 후 KIS 시간외 단일가 오버라이드 (15:30~) ────────────────────
@@ -3277,36 +3284,44 @@ def ui_price_header(r: dict):
     cap_str = f"{cap:,.0f}억" if cap else "—"
 
     # ── KIS 세력 역추적 신호 (정규장 KIS 실시간 데이터 있을 때만 표시) ──────
-    _src      = p.get("_source", "")
-    _vol_pct  = float(p.get("vol_pct",  0))
-    _wghn_pct = float(p.get("wghn_pct", 0))
+    _src       = p.get("_source", "")
+    _vol_pct   = float(p.get("vol_pct",       0))
+    _wghn_pct  = float(p.get("wghn_pct",      0))
+    _pgm_int   = float(p.get("pgm_intensity", 0))
     _whale_html = ""
-    if _src == "KIS실시간" and (_vol_pct > 0 or _wghn_pct > 0):
-        if _wghn_pct > 110 and _vol_pct > 150:
-            _wsig = "🚀 세력 강력 매집"
-            _wcol = "#D4AF37"
-            _wbg  = "#1a1400"
-            _wbdr = "#D4AF37"
-        elif _wghn_pct < 90:
-            _wsig = "⚠️ 개인 과열 (주의)"
+    if _src == "KIS실시간" and (_vol_pct > 0 or _wghn_pct > 0 or _pgm_int != 0):
+        # V10.0 OVERLORD — god_score 판정
+        # wghn_pct 를 t_vol_confirm_status 대역으로 사용 (squeeze 추정)
+        _squeeze   = (_wghn_pct * 0.6) + (_vol_pct * 0.4)
+        _god_score = min(max((_pgm_int * 2) + (_squeeze * 0.5) + (_vol_pct * 0.1), 0), 100)
+        if _pgm_int < 0 and _squeeze < 100:
+            _wsig = "⚠️ 세력 이탈 / 관망"
             _wcol = "#f39c12"
             _wbg  = "#1e1200"
             _wbdr = "#f39c12"
+        elif _god_score > 80:
+            _wsig = "🔥 천상계 타격 (세력 강력 매집)"
+            _wcol = "#D4AF37"
+            _wbg  = "#1a1400"
+            _wbdr = "#D4AF37"
         else:
-            _wsig = "💎 눌림목 / 중립"
+            _wsig = "💎 세력 매집 중"
             _wcol = "#8fa3b8"
             _wbg  = "#12192b"
             _wbdr = "#2a3550"
+        _pgm_str = f"{_pgm_int:+.2f}%"
         _whale_html = (
             f'<div style="display:flex;align-items:center;gap:14px;'
             f'background:{_wbg};border:1px solid {_wbdr};border-radius:8px;'
             f'padding:8px 16px;margin-top:12px;flex-wrap:wrap;">'
             f'<span style="font-size:.7rem;font-weight:900;letter-spacing:.1em;'
-            f'color:#4a5568;text-transform:uppercase;">KIS 세력 역추적</span>'
+            f'color:#4a5568;text-transform:uppercase;">KIS V10.0 세력 역추적</span>'
             f'<span style="font-size:.92rem;font-weight:800;color:{_wcol};">{_wsig}</span>'
             f'<span style="font-size:.78rem;color:#6b7c93;">'
-            f'가중평균 <b style="color:{_wcol}">{_wghn_pct:.0f}%</b>'
+            f'프로그램 <b style="color:{_wcol}">{_pgm_str}</b>'
+            f'&nbsp;·&nbsp;가중평균 <b style="color:{_wcol}">{_wghn_pct:.0f}%</b>'
             f'&nbsp;·&nbsp;거래량 <b style="color:{_wcol}">{_vol_pct:.0f}%</b>'
+            f'&nbsp;·&nbsp;종합 <b style="color:{_wcol}">{_god_score:.0f}pt</b>'
             f'</span>'
             f'</div>'
         )
