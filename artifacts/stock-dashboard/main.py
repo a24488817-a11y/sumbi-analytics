@@ -192,6 +192,12 @@ _NOISE_KW = [
     "특징주", "기업 개요", "오늘의 주요", "증시 마감", "급등주 포착",
     "코스피 현황", "코스닥 현황", "주요 일정", "주간 브리핑",
 ]
+
+# 증권 섹터 전용 노이즈 키워드 — 타사 리포트·투자의견 발간은 해당 증권사 자체 호재 아님
+_SECURITIES_NOISE_KW = [
+    "매수 추천", "목표주가 유지", "투자의견", "종목 추천",
+    "매수의견", "목표가 유지", "투자 의견", "종목추천",
+]
 # 하위 호환 — 기존 _IMPACT_KW 참조 코드가 있는 경우를 위해 별칭 유지
 _IMPACT_KW = _TIER1_KW
 
@@ -1365,7 +1371,7 @@ def _is_dart_news(title: str) -> bool:
     return any(kw in title for kw in _DART_KW)
 
 
-def score_news(news: list[dict]) -> dict:
+def score_news(news: list[dict], sector: str = "일반") -> dict:
     """뉴스 팩트체크 점수 30점 — V8.0 Tiered Fact-Check 등급제.
 
     등급 체계 (사장님 42대 필살기 함해물 원칙 100% 준수):
@@ -1377,6 +1383,7 @@ def score_news(news: list[dict]) -> dict:
     │ Bad/None│  0점│ 악재 우세 또는 종목 전용 호재 0건        │
     └─────────┴─────┴──────────────────────────────────────────┘
     news 리스트는 get_news() Hard Filter가 적용된 종목 전용 뉴스여야 함.
+    sector: _detect_sector(name) 반환값 — 섹터별 노이즈 필터 적용에 사용.
     """
     empty = {
         "score": 0, "score_label": "0점 (호재 없음)",
@@ -1405,6 +1412,11 @@ def score_news(news: list[dict]) -> dict:
         # ① 순수 시황 잡음 — 점수 계산에서 완전 배제
         if any(kw in t for kw in _NOISE_KW):
             noise_list.append(n)
+            continue
+
+        # ①-b 증권 섹터 전용 노이즈 — 타사 리포트·투자의견 발간은 해당 증권사 자체 호재 아님
+        if sector == "금융" and any(kw in t for kw in _SECURITIES_NOISE_KW):
+            noise_list.append({**n, "reason": "노이즈 (타사 리포트 발간)"})
             continue
 
         # ② Tier 0 — 시장 구조 변경급 (M&A·공개매수·이전상장)
@@ -1868,7 +1880,7 @@ def analyze_ticker(ticker: str, name: str, market: str) -> dict:
     fund_result = score_fundamentals(fund_data)
 
     # 뉴스/미반영호재 (30점) — Tier 1 즉시 만점
-    news_result = score_news(news_list)
+    news_result = score_news(news_list, sector=_detect_sector(name))
     news_result["news_status"] = news_status   # 수집 상태 주입 → ui_news() 표시용
 
     # 리스크/숏스퀴즈 (10점) — 공매도·신용잔고·프로그램매매
@@ -2086,7 +2098,7 @@ def quick_score(ticker: str, name: str, market: str, turnover_pct: float = 0.0) 
                   "ma5": 0, "ma20": 0, "ma60": 0}
         )
         inv         = score_investor(inv_data)
-        news_result = score_news(news_list)         # V8.1 Tier2 모멘텀 키워드 완전 동일
+        news_result = score_news(news_list, sector=_detect_sector(name))   # V8.1 + 섹터별 노이즈 필터
         risk_result = score_risk_squeeze(price_data, inv_data, pb)
 
         # ── 상대 거래량 급증률 (vol_ratio) — OHLCV 이미 보유, 추가 API 없음 ──
