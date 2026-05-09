@@ -2104,6 +2104,13 @@ def quick_score(ticker: str, name: str, market: str, turnover_pct: float = 0.0) 
         ohlcv    = get_ohlcv(ticker, 90)
         inv_data = get_investor_flow(ticker)
 
+        # 스캐너 Kill Switch — T-0 쌍끌이 판별 전 내림차순 정렬 강제
+        # 과거 이력 때문에 억지로 통과하는 것을 원천 차단 (사용자 승인 로직 2026-05-09)
+        _inv_sorted = sorted(inv_data, key=lambda r: str(r.get("날짜", "")), reverse=True)
+        _t0_inst    = int(_inv_sorted[0].get("기관",   0)) if _inv_sorted else 0
+        _t0_frgn    = int(_inv_sorted[0].get("외국인", 0)) if _inv_sorted else 0
+        _is_ssankkl = _t0_inst > 0 and _t0_frgn > 0   # T-0 양매수일 때만 True, 과거 이력 무시
+
         # 뉴스 수집 — 배치 경량 버전(1 API콜) → 500종목 타임아웃 방지
         news_list = get_news_batch(ticker, name)
 
@@ -2183,7 +2190,7 @@ def quick_score(ticker: str, name: str, market: str, turnover_pct: float = 0.0) 
             # ── 스텔스 모드 전용 필드 ──────────────────────────────────────────
             "ma5":           pb.get("ma5",  0),
             "ma20":          pb.get("ma20", 0),
-            "is_ssankkl":    "쌍끌이" in inv.get("detail", ""),
+            "is_ssankkl":    _is_ssankkl,   # T-0 직접 체크 (기관>0 AND 외국인>0), 과거 이력 무시
             # ── Volume Anomaly 필드 (UI 표기·스텔스 필터링용) ─────────────────
             "vol_ratio":     vol_ratio,          # 당일 / 20일 평균 거래량 배수
             "turnover_pct":  round(turnover_pct, 2),  # 시총 대비 회전율 (%)

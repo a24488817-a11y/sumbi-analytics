@@ -49,6 +49,7 @@ Primary product: **숨비 애널리틱스 (SOOMBI Analytics)** — Korean KRX st
 ## Architecture Decisions
 
 - **배치 스캔 버그 수정 (2026-05-08)**: `NameError: name 'os' is not defined` in `get_naver_news_api()` — `import os` 누락으로 `quick_score()` 500종목 전부 `return None` → `scored=[]`. 수정: 파일 상단에 `import os` 추가. 추가 수정사항: `@st.cache_data` 제거 from `quick_score()` (ThreadPool 호환), `get_top_volume_tickers()`와 `_scan_top_cached()` TTL 300s로 조정 (스캔 시간 ~90초 vs 구 TTL=60초 불일치 해소).
+- **스캐너 쌍끌이 Kill Switch (2026-05-09)**: `quick_score()` — `inv_data` 취득 직후 `날짜` 내림차순 정렬 강제 (`_inv_sorted`). `_t0_inst`/`_t0_frgn` = index 0 (T-0) 직접 추출. `_is_ssankkl = _t0_inst > 0 AND _t0_frgn > 0` — T-0 당일 양매수일 때만 True. `"is_ssankkl"` 반환값을 기존 `"쌍끌이" in detail` 문자열 의존에서 직접 bool 체크로 교체. 과거 이력 쌍끌이가 스캐너 필터를 우회하는 문제 원천 차단.
 - **수급 확정 상태 배지 (2026-05-09)**: `ui_investor_table()` — KST 기준 18:00 컷오프 로직 추가. `get_accurate_market_date()` 기준일 통일, 4단계 분기: ①18:00+ 또는 주말 → `당일 확정` (초록), ②15:30~18:00 → `가집계완료 · 확정 대기` (주황), ③09:00~15:30 장중 → `장중 (전일 확정치)` (파랑), ④09:00 미만 → `장 시작 전 (전일 확정치)` (회색). 수급 테이블 헤더 우측에 배지 인라인 표시.
 - **수급 팩트체크 헤드라인 (2026-05-09)**: `ui_investor_table()` — `inv_data[0]`(T-0 최신일 정렬 보장) 기관·외국인 기준 3분기: ①양음 → 🚨 "기관·외국인 쌍끌이 매도 (주의/관망)" 빨간 카드, ②양양 → 🔥 "기관·외국인 쌍끌이 매수 (수급강)" 골드 카드, ③혼조 → "기관 X / 외국인 X (혼조세)" 회색 카드. 상태 배지 아래, 데이터 테이블 위에 인라인 표시.
 - **`get_accurate_market_date()` 헬퍼 함수 (2026-05-09)**: `KST` 상수 바로 아래 전역 등록. 18:00 미만 → 전일, 18:00 이상 → 당일 YYYYMMDD 반환. 한국투자증권 API 등 외부 날짜 파라미터와 동일 포맷. `ui_investor_table` 인라인 중복 로직 제거, 추후 API 연동 시 단일 진실 공급원.
