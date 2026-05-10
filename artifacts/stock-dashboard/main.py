@@ -27,9 +27,22 @@ import plotly.graph_objects as go
 # ─────────────────────────────────────────────────────────────────────────────
 KST = pytz.timezone("Asia/Seoul")
 
+
+def _get_secret(key: str, default: str = "") -> str:
+    """Streamlit Cloud st.secrets 우선, 환경변수 폴백.
+
+    Streamlit Cloud : secrets 대시보드 → st.secrets[key]
+    Replit / 로컬   : os.environ.get(key)
+    """
+    try:
+        return st.secrets[key]
+    except (KeyError, AttributeError, FileNotFoundError):
+        return os.environ.get(key, default)
+
+
 # ── 한국투자증권 오픈 API ──────────────────────────────────────────────────────
-_KIS_KEY    = os.environ.get("KIS_APP_KEY",    "")
-_KIS_SECRET = os.environ.get("KIS_APP_SECRET", "")
+_KIS_KEY    = _get_secret("KIS_APP_KEY")
+_KIS_SECRET = _get_secret("KIS_APP_SECRET")
 _KIS_BASE   = "https://openapi.koreainvestment.com:9443"
 
 
