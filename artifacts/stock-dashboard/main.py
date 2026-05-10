@@ -798,7 +798,7 @@ def get_realtime_price(ticker: str) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 # 5. OHLCV (FinanceDataReader)
 # ─────────────────────────────────────────────────────────────────────────────
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=60, max_entries=40, show_spinner=False)
 def get_ohlcv(ticker: str, days: int = 90) -> pd.DataFrame:
     """FDR → 최근 N 거래일 OHLCV. 한국 6자리 코드 직접 인식."""
     end   = datetime.now()
@@ -828,7 +828,7 @@ def _parse_int(val) -> int:
         return 0
 
 
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=60, max_entries=60, show_spinner=False)
 def get_investor_flow(ticker: str) -> list[dict]:
     """
     Naver frgn.naver table[3] → 기관·외국인 순매매량 (가장 최근 확정 영업일 자동 수집).
@@ -892,7 +892,7 @@ def get_investor_flow(ticker: str) -> list[dict]:
 # ─────────────────────────────────────────────────────────────────────────────
 # 7. 펀더멘털 (frgn.naver 동일 HTML에서 파싱)
 # ─────────────────────────────────────────────────────────────────────────────
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=3600, max_entries=60, show_spinner=False)
 def get_fundamentals(ticker: str) -> dict:
     """
     frgn.naver 공통 사이드바 테이블에서 PER·PBR·목표주가·52주 파싱.
@@ -1127,12 +1127,13 @@ def _fetch_mobile_naver(query: str, seen: set[str]) -> list[dict]:
 def get_naver_news_api(query: str, display: int = 100) -> list[dict]:
     """네이버 검색 오픈 API (뉴스) — 정식 인증 채널 V9.0.
 
-    환경변수 NAVER_CLIENT_ID / NAVER_CLIENT_SECRET 필수 (Replit Secrets).
+    Secrets: NAVER_CLIENT_ID / NAVER_CLIENT_SECRET
+    (Streamlit Cloud st.secrets 또는 환경변수 자동 인식)
     반환: [{"title": str, "url": str, "date": str, "description": str}, ...]
     HTML 태그(<b>, <br> 등)는 정규식으로 완전 제거.
     """
-    client_id     = os.environ.get("NAVER_CLIENT_ID",     "")
-    client_secret = os.environ.get("NAVER_CLIENT_SECRET", "")
+    client_id     = _get_secret("NAVER_CLIENT_ID")
+    client_secret = _get_secret("NAVER_CLIENT_SECRET")
     if not client_id or not client_secret:
         return []   # API 키 미설정 → 빈 리스트 반환 (호출부에서 크롤링 폴백 처리)
 
@@ -2064,7 +2065,7 @@ def analyze_ticker(ticker: str, name: str, market: str) -> dict:
     now_kst = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S KST")
 
     _news_aliases = _build_eng_aliases(name, ticker)   # Flexible Match 영문 약칭
-    with ThreadPoolExecutor(max_workers=6) as ex:
+    with ThreadPoolExecutor(max_workers=4) as ex:   # Cloud 무료 1GB RAM 대응
         f_price = ex.submit(get_realtime_price, ticker)
         f_ohlcv = ex.submit(get_ohlcv, ticker, 90)
         f_inv   = ex.submit(get_investor_flow, ticker)
@@ -2438,8 +2439,12 @@ def quick_score(ticker: str, name: str, market: str, turnover_pct: float = 0.0) 
 
 
 def scan_top_stocks(candidates: list[dict]) -> list[dict]:
-    """후보 종목 병렬 스코어링 → FDR Marcap 병합 → 점수 내림차순 정렬."""
-    with ThreadPoolExecutor(max_workers=24) as ex:
+    """후보 종목 병렬 스코어링 → FDR Marcap 병합 → 점수 내림차순 정렬.
+
+    Streamlit Cloud 무료 티어(1 GB RAM) 대응:
+      max_workers=8 — 24에서 축소. 동시 HTTP 세션·DataFrame 메모리 압박 완화.
+    """
+    with ThreadPoolExecutor(max_workers=8) as ex:
         futs = {
             ex.submit(
                 quick_score,
