@@ -150,11 +150,35 @@ div[data-testid="metric-container"] [data-testid="stMetricValue"] {
   color:#0E1117 !important; font-weight:800;
   border:none !important; border-radius:8px !important;
   box-shadow:0 2px 8px rgba(212,175,55,.3);
-  transition:all .2s;
+  transition:transform .12s ease, box-shadow .12s ease, background .15s ease;
+  position:relative; z-index:10;
+  touch-action:manipulation;
+  -webkit-tap-highlight-color:rgba(212,175,55,0.25);
+  user-select:none; -webkit-user-select:none;
 }
 [data-testid="stButton"] > button:hover {
   background:linear-gradient(135deg,#D4AF37,#f0d060) !important;
   box-shadow:0 4px 16px rgba(212,175,55,.5);
+}
+/* ── 눌리는 시각 피드백 (active / touch) ── */
+[data-testid="stButton"] > button:active {
+  background:linear-gradient(135deg,#7a5e00,#a07800) !important;
+  transform:translateY(2px) scale(0.97) !important;
+  box-shadow:0 1px 3px rgba(212,175,55,.15) !important;
+}
+/* ── 모바일 터치 영역 충분히 확보 + z-index 정리 ── */
+@media (max-width: 768px) {
+  [data-testid="stButton"] { z-index:20; position:relative; }
+  [data-testid="stButton"] > button {
+    min-height:52px !important;
+    padding:14px 18px !important;
+    font-size:16px !important;
+    border-radius:10px !important;
+  }
+  /* 스피너가 버튼 위를 덮지 않도록 스태킹 컨텍스트 정리 */
+  [data-testid="stSpinner"] { z-index:5; position:relative; }
+  /* 탭/셀렉트박스 히트 영역도 동일하게 확보 */
+  [data-baseweb="tab"] { min-height:44px !important; }
 }
 
 /* 탭 골드 */
@@ -4939,7 +4963,7 @@ button[data-baseweb="tab"][aria-selected="true"] p { color: #D4AF37 !important; 
             name   = selected["name"]
             market = selected["market"]
 
-            with st.spinner(f"{name}({ticker}) — 세력 역추적 파이프라인 가동 중…"):
+            with st.spinner(f"⚡ 분석 엔진 가동 중... {name}({ticker}) 세력 역추적 중"):
                 result = analyze_ticker(ticker, name, market)
 
             # ── 데이터 동기화 검증: analyze_ticker 4축 총점이 권위적 소스 ────────
