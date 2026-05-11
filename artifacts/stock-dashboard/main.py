@@ -3826,13 +3826,13 @@ def ui_score_card(r: dict):
 """)
 
     pb_contrib_disp = min(pb["score"], 20)
-    _mini_card(c1, "수급 (40점)",      iv["score"],        40,
+    _mini_card(c1, "기관·외국인 수급 역추적 (40점)", iv["score"],     40,
                f"기관·외국인·쌍끌이<br>{iv['detail']}")
-    _mini_card(c2, "뉴스/호재 (30점)", ns["score"],        30,
+    _mini_card(c2, "미반영 호재 뉴스 (30점)",        ns["score"],     30,
                f"Tier1 {len(ns.get('tier1_news',[]))}건 · Tier2 {len(ns.get('tier2_news',[]))}건<br>악재 {len(ns['bad'])}건")
-    _mini_card(c3, "차트/신호 (20점)", pb_contrib_disp,    20,
+    _mini_card(c3, "차트·눌림목 패턴 (20점)",        pb_contrib_disp, 20,
                f"눌림목 패턴<br>RSI {pb['rsi']} · MA5 {pb['ma5']:,}")
-    _mini_card(c4, "리스크/숏스퀴즈 (10점)", rs["score"], 10,
+    _mini_card(c4, "리스크·숏스퀴즈 (10점)",         rs["score"],     10,
                rs.get("detail", "—"))
 
     # ── 치명 공시 경보 — 유상증자·블록딜·전환사채(CB) 감지 시 빨간 경보 ─────────
