@@ -912,7 +912,7 @@ def get_realtime_price(ticker: str) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 # 5. OHLCV (FinanceDataReader)
 # ─────────────────────────────────────────────────────────────────────────────
-@st.cache_data(ttl=60, max_entries=40, show_spinner=False)
+@st.cache_data(ttl=150, max_entries=40, show_spinner=False)   # 60→150s: 차트는 2.5분 캐시로 충분
 def get_ohlcv(ticker: str, days: int = 90) -> pd.DataFrame:
     """FDR → 최근 N 거래일 OHLCV. 한국 6자리 코드 직접 인식."""
     end   = datetime.now()
@@ -942,7 +942,7 @@ def _parse_int(val) -> int:
         return 0
 
 
-@st.cache_data(ttl=60, max_entries=60, show_spinner=False)
+@st.cache_data(ttl=90, max_entries=60, show_spinner=False)   # 60→90s: 수급 데이터 1.5분 캐시
 def get_investor_flow(ticker: str) -> list[dict]:
     """
     Naver frgn.naver table[3] → 기관·외국인 순매매량 (가장 최근 확정 영업일 자동 수집).
@@ -2174,12 +2174,18 @@ def calc_short_squeeze_trigger(price_data: dict, ohlcv: pd.DataFrame) -> dict:
         return _e
 
 
-def analyze_ticker(ticker: str, name: str, market: str) -> dict:
-    """42대 필살기 전수조사 — 병렬 수집 후 종합 점수 산출."""
-    now_kst = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S KST")
+@st.cache_data(ttl=90, max_entries=30, show_spinner=False)
+def _analyze_ticker_cached(ticker: str, name: str, market: str) -> dict:
+    """42대 필살기 전수조사 핵심 연산 — 90s 캐시로 반복 클릭 즉시 응답.
 
+    ✦ max_workers 4→6 : IO-bound 6개 태스크 완전 동시 실행
+    ✦ ttl=90s : 두 번째 조회부터 <1s 응답 (첫 로드만 풀 계산)
+    ✦ collected_at 타임스탬프는 래퍼에서 주입 (캐시 오염 방지)
+    """
     _news_aliases = _build_eng_aliases(name, ticker)   # Flexible Match 영문 약칭
-    with ThreadPoolExecutor(max_workers=4) as ex:   # Cloud 무료 1GB RAM 대응
+
+    # ── Phase 1: 6개 IO 태스크 완전 병렬 (4→6 워커 확장) ─────────────────────
+    with ThreadPoolExecutor(max_workers=6) as ex:
         f_price = ex.submit(get_realtime_price, ticker)
         f_ohlcv = ex.submit(get_ohlcv, ticker, 90)
         f_inv   = ex.submit(get_investor_flow, ticker)
@@ -2207,9 +2213,9 @@ def analyze_ticker(ticker: str, name: str, market: str) -> dict:
     except Exception:
         fund_data = {}
     try:
-        _news_raw     = f_news.result() or {}
-        news_list     = _news_raw.get("items", [])
-        news_status   = _news_raw.get("status", "error")   # "ok"|"empty"|"error"
+        _news_raw   = f_news.result() or {}
+        news_list   = _news_raw.get("items", [])
+        news_status = _news_raw.get("status", "error")
     except Exception:
         news_list   = []
         news_status = "error"
@@ -2218,40 +2224,59 @@ def analyze_ticker(ticker: str, name: str, market: str) -> dict:
     except Exception:
         macro_data = {}
 
-    # ── V8.0 God Mode 추가 분석 (매크로·VWAP·숏스퀴즈) ──────────────────────
-    macro_sens   = calc_macro_sensitivity(name, macro_data)
-    vwap_result  = calc_vwap_smart_money(ohlcv)
-    squeeze_data = calc_short_squeeze_trigger(price_data, ohlcv)
+    # ── Phase 2: 독립 분석 태스크 병렬 실행 (IO 완료 후 CPU 연산) ───────────
+    _sector = _detect_sector(name)
+    with ThreadPoolExecutor(max_workers=4) as ex2:
+        f_macro_s  = ex2.submit(calc_macro_sensitivity, name, macro_data)
+        f_vwap     = ex2.submit(calc_vwap_smart_money, ohlcv)
+        f_squeeze  = ex2.submit(calc_short_squeeze_trigger, price_data, ohlcv)
+        f_inv_sc   = ex2.submit(score_investor, inv_data)
+        f_fund_sc  = ex2.submit(score_fundamentals, fund_data)
+        f_news_sc  = ex2.submit(score_news, news_list, _sector)
 
-    # ── V7.0 Quantum Vanguard 4축 점수 체계 ─────────────────────────────────
-    # 차트/신호 (20점 기여) — GOLDEN RULE: calc_pullback_score 함수 불변
+    try:
+        macro_sens = f_macro_s.result()
+    except Exception:
+        macro_sens = {}
+    try:
+        vwap_result = f_vwap.result()
+    except Exception:
+        vwap_result = {}
+    try:
+        squeeze_data = f_squeeze.result()
+    except Exception:
+        squeeze_data = {}
+    try:
+        inv_result = f_inv_sc.result()
+    except Exception:
+        inv_result = {"score": 0, "detail": ""}
+    try:
+        fund_result = f_fund_sc.result()
+    except Exception:
+        fund_result = {"score": 0}
+    try:
+        news_result = f_news_sc.result()
+    except Exception:
+        news_result = {"score": 0, "items": []}
+    news_result["news_status"] = news_status
+
+    # ── GOLDEN RULE: calc_pullback_score 불변 (단독 실행) ────────────────────
     pb_result = calc_pullback_score(
         ohlcv["Close"],
         ohlcv["Volume"] if "Volume" in ohlcv.columns else pd.Series(dtype=float),
     ) if not ohlcv.empty and len(ohlcv) >= 22 else \
         {"score": 0, "signal": "데이터 부족", "rsi": 50.0, "ma5": 0, "ma20": 0, "ma60": 0}
-    pb_contrib = min(pb_result["score"], 20)   # 차트 기여 최대 20점 캡
+    pb_contrib = min(pb_result["score"], 20)
 
-    # 수급 (40점) — 기관·외국인·쌍끌이
-    inv_result = score_investor(inv_data)
-
-    # 가치/재무 — 표시 전용 (총점 미반영, 브리핑용 보조 데이터)
-    fund_result = score_fundamentals(fund_data)
-
-    # 뉴스/미반영호재 (30점) — Tier 1 즉시 만점
-    news_result = score_news(news_list, sector=_detect_sector(name))
-    news_result["news_status"] = news_status   # 수집 상태 주입 → ui_news() 표시용
-
-    # 리스크/숏스퀴즈 (10점) — 공매도·신용잔고·프로그램매매
+    # 리스크/숏스퀴즈 — pb_result 의존성으로 Phase 2 이후 실행
     risk_result = score_risk_squeeze(price_data, inv_data, pb_result)
 
     # ── Hard Cap 전역 적용 — 각 축 상한 강제 후 총점 산출 ───────────────────
-    _inv_sc  = min(inv_result["score"],    40)   # 수급  최대 40점
-    _news_sc = min(news_result["score"],   30)   # 뉴스  최대 30점
-    _pb_sc   = pb_contrib                        # 이미 min(pb_result["score"], 20) 적용
-    _risk_sc = min(risk_result["score"],   10)   # 리스크 최대 10점
-    # V7.0 총점: 수급40 + 뉴스30 + 차트20 + 리스크10 = 100
-    total = min(_inv_sc + _news_sc + _pb_sc + _risk_sc, 100)
+    _inv_sc  = min(inv_result["score"],  40)
+    _news_sc = min(news_result["score"], 30)
+    _pb_sc   = pb_contrib
+    _risk_sc = min(risk_result["score"], 10)
+    total    = min(_inv_sc + _news_sc + _pb_sc + _risk_sc, 100)
 
     if   total >= 80: verdict = "👑 전 세계 1등 매수 적기 (LEGENDARY)"
     elif total >= 65: verdict = "🔴 즉시 진입 가능 (HIGH CONFIDENCE)"
@@ -2268,16 +2293,23 @@ def analyze_ticker(ticker: str, name: str, market: str) -> dict:
         "pb": pb_result, "inv_score": inv_result,
         "fund_score": fund_result, "news_score": news_result,
         "risk_score": risk_result,
-        "short_score": _news_sc,     # 하위 호환 — Hard Cap 적용 값
-        "pb_contrib":  _pb_sc,       # SSOT: 20-cap 확정치 (배치·상세 일치 보장)
+        "short_score": _news_sc,
+        "pb_contrib":  _pb_sc,
         "total": total, "verdict": verdict,
-        "block_alert": block_alert, "collected_at": now_kst,
-        # V8.0 God Mode
+        "block_alert": block_alert,
         "macro_data":  macro_data,
         "macro_sens":  macro_sens,
         "vwap_result": vwap_result,
         "squeeze":     squeeze_data,
     }
+
+
+def analyze_ticker(ticker: str, name: str, market: str) -> dict:
+    """42대 필살기 전수조사 — 90s 캐시 래퍼 + 실시간 타임스탬프 주입."""
+    r = _analyze_ticker_cached(ticker, name, market)
+    out = dict(r)   # 캐시 객체 불변 보장 (shallow copy)
+    out["collected_at"] = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S KST")
+    return out
 
 
 # ─────────────────────────────────────────────────────────────────────────────
