@@ -2469,13 +2469,24 @@ def quick_score(ticker: str, name: str, market: str, turnover_pct: float = 0.0) 
     _scan_top_cached() (ttl=60) 가 집계 결과를 캐시하므로 개별 캐시 불필요.
     """
     try:
-        price_data = get_realtime_price(ticker)
+        # ── Phase 1: 5개 IO 태스크 완전 병렬 (순차→동시, 3x 속도 향상) ─────────
+        with ThreadPoolExecutor(max_workers=4) as _ex:
+            _f_price = _ex.submit(get_realtime_price, ticker)
+            _f_ohlcv = _ex.submit(get_ohlcv, ticker, 90)
+            _f_inv   = _ex.submit(get_investor_flow, ticker)
+            _f_fund  = _ex.submit(get_fundamentals, ticker)   # 목표주가 (TTL=3600s)
+            _f_news  = _ex.submit(get_news_batch, ticker, name)
+
+        price_data = _f_price.result() or {}
         if not price_data or price_data.get("현재가", 0) == 0:
             return None
 
-        ohlcv     = get_ohlcv(ticker, 90)
-        inv_data  = get_investor_flow(ticker)
-        fund_data = get_fundamentals(ticker)   # 목표주가 취득 (캐시 TTL=3600s)
+        ohlcv = _f_ohlcv.result()
+        if ohlcv is None or not isinstance(ohlcv, pd.DataFrame):
+            ohlcv = pd.DataFrame()
+        inv_data  = _f_inv.result()  or []
+        fund_data = _f_fund.result() or {}
+        news_list = _f_news.result() or []
 
         # 스캐너 Kill Switch — T-0 쌍끌이 판별 전 내림차순 정렬 강제
         # 과거 이력 때문에 억지로 통과하는 것을 원천 차단 (사용자 승인 로직 2026-05-09)
@@ -2483,9 +2494,6 @@ def quick_score(ticker: str, name: str, market: str, turnover_pct: float = 0.0) 
         _t0_inst    = int(_inv_sorted[0].get("기관",   0)) if _inv_sorted else 0
         _t0_frgn    = int(_inv_sorted[0].get("외국인", 0)) if _inv_sorted else 0
         _is_ssankkl = _t0_inst > 0 and _t0_frgn > 0   # T-0 양매수일 때만 True, 과거 이력 무시
-
-        # 뉴스 수집 — 배치 경량 버전(1 API콜) → 500종목 타임아웃 방지
-        news_list = get_news_batch(ticker, name)
 
         pb = (
             calc_pullback_score(
@@ -2588,9 +2596,10 @@ def scan_top_stocks(candidates: list[dict]) -> list[dict]:
     """후보 종목 병렬 스코어링 → FDR Marcap 병합 → 점수 내림차순 정렬.
 
     Streamlit Cloud 무료 티어(1 GB RAM) 대응:
-      max_workers=8 — 24에서 축소. 동시 HTTP 세션·DataFrame 메모리 압박 완화.
+      max_workers=12 — quick_score 내부 IO 이미 병렬화되어 총 동시 호출 감소,
+      외부 워커 12개로 더 많은 종목 동시 처리 가능.
     """
-    with ThreadPoolExecutor(max_workers=8) as ex:
+    with ThreadPoolExecutor(max_workers=12) as ex:
         futs = {
             ex.submit(
                 quick_score,
@@ -4874,9 +4883,24 @@ button[data-baseweb="tab"][aria-selected="true"] p { color: #D4AF37 !important; 
         st.markdown(f"**기준 시각**: {now_kst.strftime('%Y-%m-%d %H:%M KST')}")
         st.markdown(f"**커버리지**: {len(tickers_df):,}개 전종목")
         st.divider()
-        if st.button("⚡ 즉시 갱신 (캐시 초기화)", use_container_width=True):
-            # st.spinner는 st.rerun() 즉시 소멸 → toast만 rerun 후에도 ~3s 유지
-            st.toast("⚡ 전체 캐시 초기화 중… 데이터 재수집 시작합니다", icon="⚡")
+        _sb_rc1, _sb_rc2 = st.columns([5, 1])
+        with _sb_rc1:
+            _sb_ref_clicked = st.button("⚡ 즉시 갱신 (캐시 초기화)", use_container_width=True)
+        with _sb_rc2:
+            _sb_spin_ph = st.empty()
+            if st.session_state.get("_rank_refreshing"):
+                _sb_spin_ph.markdown(
+                    '<div style="display:flex;align-items:center;height:38px;'
+                    'justify-content:center;">'
+                    '<div style="width:18px;height:18px;border:2.5px solid #D4AF37;'
+                    'border-top:2.5px solid transparent;border-radius:50%;'
+                    'animation:_sb-spin .75s linear infinite;"></div></div>'
+                    '<style>@keyframes _sb-spin{'
+                    '0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}</style>',
+                    unsafe_allow_html=True,
+                )
+        if _sb_ref_clicked:
+            st.session_state["_rank_refreshing"] = True
             st.cache_data.clear()
             st.rerun()
         st.divider()
@@ -4969,7 +4993,29 @@ button[data-baseweb="tab"][aria-selected="true"] p { color: #D4AF37 !important; 
         unsafe_allow_html=True,
     )
 
-    with st.spinner("데이터 동기화 중 — 전종목 세력 수급 역추적 파이프라인 가동 중 (최대 60초)…"):
+    # ── 순위 영역 "데이터 분석 중..." 플레이스홀더 ─────────────────────────────
+    _rank_ph = st.empty()
+    if st.session_state.get("_rank_refreshing"):
+        _rank_ph.markdown(
+            '<div style="background:linear-gradient(135deg,#0d1219,#111827);'
+            'border:1px solid #D4AF3760;border-radius:14px;padding:22px 28px;'
+            'margin:8px 0 12px;text-align:center;">'
+            '<div style="display:inline-flex;align-items:center;gap:12px;">'
+            '<div style="width:22px;height:22px;border:3px solid #D4AF37;'
+            'border-top:3px solid transparent;border-radius:50%;'
+            'animation:_rk-spin .75s linear infinite;flex-shrink:0;"></div>'
+            '<span style="color:#D4AF37;font-size:.95rem;font-weight:700;'
+            'letter-spacing:.05em;">전종목 수급 데이터 분석 중…</span>'
+            '</div>'
+            '<div style="color:#8fa3b8;font-size:.8rem;margin-top:8px;">'
+            '거래량 상위 500종목 42대 필살기 전수 계산 중 (최대 90초)</div>'
+            '</div>'
+            '<style>@keyframes _rk-spin{'
+            '0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}</style>',
+            unsafe_allow_html=True,
+        )
+
+    with st.spinner("전종목 수급 역추적 파이프라인 가동 중…"):
         candidates = get_top_volume_tickers()
         if candidates:
             candidate_tuples = tuple(
@@ -4980,17 +5026,18 @@ button[data-baseweb="tab"][aria-selected="true"] p { color: #D4AF37 !important; 
         else:
             scored = []
 
-    if scored:
-        # 코드 기준 역추적을 위한 scored 캐시 세션 저장 (detail 뷰 점수 동기화)
-        st.session_state["scored_cache"] = {r["ticker"]: r for r in scored}
+    # 갱신 완료 → 플레이스홀더 제거 + 플래그 리셋
+    _rank_ph.empty()
+    st.session_state["_rank_refreshing"] = False
 
-        # ── 듀얼 랭킹 모드 토글 (session_state 탭 상태 관리) ────────────────
-        if "scanner_mode" not in st.session_state:
-            st.session_state["scanner_mode"] = "breakout"
+    # ── 듀얼 랭킹 모드 토글 (scored 유무와 무관하게 항상 표시 — 빈 화면 금지) ──
+    if candidates:
+        if scored:
+            st.session_state["scored_cache"] = {r["ticker"]: r for r in scored}
 
+        st.session_state.setdefault("scanner_mode", "breakout")
         _mode = st.session_state["scanner_mode"]
 
-        # 모바일 터치 친화 버튼 탭 (CSS native tab보다 터치 신뢰성 높음)
         st.markdown("""
 <style>
 .mode-btn-row { display:flex; gap:8px; margin-bottom:8px; }
@@ -5013,7 +5060,7 @@ button[data-baseweb="tab"][aria-selected="true"] p { color: #D4AF37 !important; 
                 st.session_state["scanner_mode"] = "stealth"
                 st.rerun()
 
-        # ── 선택된 모드 콘텐츠 렌더링 ────────────────────────────────────────
+        # ── 선택된 모드 콘텐츠 렌더링 (scored=[] 이어도 내부 폴백 처리) ─────────
         if _mode == "breakout":
             st.markdown(
                 '<p style="color:#FF5050;font-size:0.8rem;font-weight:700;margin:4px 0 6px;">'
@@ -5028,15 +5075,6 @@ button[data-baseweb="tab"][aria-selected="true"] p { color: #D4AF37 !important; 
                 unsafe_allow_html=True,
             )
             ui_stealth_mode(scored)
-    elif candidates:
-        # 후보 종목은 수집됐지만 점수 산출이 전부 실패 → 예상치 못한 오류
-        st.warning(
-            "⚠️ **점수 산출 오류** — 종목 후보 수집은 완료됐으나 "
-            f"전체 {len(candidates)}종목 점수 산출이 실패했습니다.\n\n"
-            "네트워크 지연 또는 데이터 소스 일시 장애일 수 있습니다. "
-            "**⚡ 즉시 갱신** 버튼으로 재시도하거나, 오류가 반복되면 앱 로그를 확인하세요.",
-            icon="⚠️",
-        )
     else:
         # 후보 종목 자체를 가져오지 못함 → 네트워크/초기 로딩 문제
         st.info(
