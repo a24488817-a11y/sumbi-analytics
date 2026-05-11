@@ -4809,8 +4809,9 @@ button[data-baseweb="tab"][aria-selected="true"] p { color: #D4AF37 !important; 
         st.markdown(f"**커버리지**: {len(tickers_df):,}개 전종목")
         st.divider()
         if st.button("⚡ 즉시 갱신 (캐시 초기화)", use_container_width=True):
-            with st.spinner("⚡ 캐시 초기화 중... 잠시 기다려주세요"):
-                st.cache_data.clear()
+            # st.spinner는 st.rerun() 즉시 소멸 → toast만 rerun 후에도 ~3s 유지
+            st.toast("⚡ 전체 캐시 초기화 중… 데이터 재수집 시작합니다", icon="⚡")
+            st.cache_data.clear()
             st.rerun()
         st.divider()
         st.markdown("#### 숨비 종합 진단 점수")
@@ -4935,12 +4936,14 @@ button[data-baseweb="tab"][aria-selected="true"] p { color: #D4AF37 !important; 
             _b1_style = "primary" if _mode == "breakout" else "secondary"
             if st.button("🔥 주도주 / 돌파", key="btn_breakout",
                          use_container_width=True, type=_b1_style):
+                st.toast("🔥 주도주 / 돌파 모드로 전환합니다", icon="🔥")
                 st.session_state["scanner_mode"] = "breakout"
                 st.rerun()
         with _btn_col2:
             _b2_style = "primary" if _mode == "stealth" else "secondary"
             if st.button("💎 눌림목 / 스텔스", key="btn_stealth",
                          use_container_width=True, type=_b2_style):
+                st.toast("💎 눌림목 / 스텔스 모드로 전환합니다", icon="💎")
                 st.session_state["scanner_mode"] = "stealth"
                 st.rerun()
 
@@ -4984,7 +4987,7 @@ button[data-baseweb="tab"][aria-selected="true"] p { color: #D4AF37 !important; 
         unsafe_allow_html=True,
     )
 
-    col_q, col_btn = st.columns([5, 1])
+    col_q, col_btn = st.columns([5, 2])
     with col_q:
         query = st.text_input(
             "종목명 또는 6자리 코드 입력",
@@ -4994,6 +4997,8 @@ button[data-baseweb="tab"][aria-selected="true"] p { color: #D4AF37 !important; 
         )
     with col_btn:
         go = st.button("🔍 해부 시작", use_container_width=True, type="primary")
+    # 분석 로딩 상태를 버튼 바로 아래 고정 영역에 렌더링 (레이아웃 덜컹거림 방지)
+    _analysis_slot = st.empty()
 
     # 클릭-투-애널라이즈: Top15 행 클릭 시 자동 트리거
     auto_go = bool(st.session_state.pop("auto_analyze", False))
@@ -5026,8 +5031,19 @@ button[data-baseweb="tab"][aria-selected="true"] p { color: #D4AF37 !important; 
             name   = selected["name"]
             market = selected["market"]
 
-            with st.spinner(f"⚡ 분석 엔진 가동 중... {name}({ticker}) 세력 역추적 중"):
-                result = analyze_ticker(ticker, name, market)
+            # ── 버튼 바로 아래 인라인 로딩 (레이아웃 덜컹 없이 고정 슬롯 사용) ──
+            with _analysis_slot.container():
+                with st.status(
+                    f"⚡ {name}({ticker}) 분석 엔진 가동 중…",
+                    expanded=True,
+                ) as _st_status:
+                    st.write("수급 파이프라인 · 뉴스 NLP · 차트 기술분석 동시 실행 중")
+                    result = analyze_ticker(ticker, name, market)
+                    _st_status.update(
+                        label=f"✅ {name}({ticker}) 분석 완료",
+                        state="complete",
+                        expanded=False,
+                    )
 
             # ── 데이터 동기화 검증: analyze_ticker 4축 총점이 권위적 소스 ────────
             # (quick_score 캐시 총점 덮어쓰기 금지 — 뉴스/재무 완전 반영된 총점 보존)
