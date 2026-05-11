@@ -153,18 +153,23 @@ div[data-testid="metric-container"] [data-testid="stMetricValue"] {
   transition:transform .12s ease, box-shadow .12s ease, background .15s ease;
   position:relative; z-index:10;
   touch-action:manipulation;
-  -webkit-tap-highlight-color:rgba(212,175,55,0.25);
+  cursor:pointer;
+  -webkit-tap-highlight-color:rgba(212,175,55,0.35);
   user-select:none; -webkit-user-select:none;
+  -webkit-appearance:none;
 }
 [data-testid="stButton"] > button:hover {
   background:linear-gradient(135deg,#D4AF37,#f0d060) !important;
   box-shadow:0 4px 16px rgba(212,175,55,.5);
 }
-/* ── 눌리는 시각 피드백 (active / touch) ── */
-[data-testid="stButton"] > button:active {
+/* ── 눌리는 시각 피드백 (active / touch)
+   iOS Safari: cursor:pointer + -webkit-appearance:none 필수 ── */
+[data-testid="stButton"] > button:active,
+[data-testid="stButton"] > button:focus:not(:focus-visible) {
   background:linear-gradient(135deg,#7a5e00,#a07800) !important;
   transform:translateY(2px) scale(0.97) !important;
   box-shadow:0 1px 3px rgba(212,175,55,.15) !important;
+  outline:none !important;
 }
 /* ── 모바일 터치 영역 충분히 확보 + z-index 정리 ── */
 @media (max-width: 768px) {
@@ -3530,6 +3535,21 @@ def ui_price_header(r: dict):
   {_whale_html}
   {_macro_html}
   <div class="ph-ts">{r['collected_at']}</div>
+  {(
+    f'<div style="display:inline-flex;align-items:center;gap:6px;'
+    f'margin-top:8px;background:#0d1a0d;border:1px solid #27ae60;'
+    f'border-radius:6px;padding:4px 12px;">'
+    f'<span style="font-size:.68rem;color:#27ae60;font-weight:900;'
+    f'letter-spacing:.08em;">🏦 한국투자증권 API — 최종 확정 실시간 데이터</span>'
+    f'</div>'
+  ) if _src in ("KIS실시간", "KIS시간외단일가") else (
+    f'<div style="display:inline-flex;align-items:center;gap:6px;'
+    f'margin-top:8px;background:#12192b;border:1px solid #2a3550;'
+    f'border-radius:6px;padding:4px 12px;">'
+    f'<span style="font-size:.68rem;color:#6b7c93;font-weight:700;'
+    f'letter-spacing:.08em;">📡 네이버 증권 — 실시간 체결가</span>'
+    f'</div>'
+  )}
 </div>
 """)
 
@@ -4770,7 +4790,8 @@ button[data-baseweb="tab"][aria-selected="true"] p { color: #D4AF37 !important; 
         st.markdown(f"**커버리지**: {len(tickers_df):,}개 전종목")
         st.divider()
         if st.button("⚡ 즉시 갱신 (캐시 초기화)", use_container_width=True):
-            st.cache_data.clear()
+            with st.spinner("⚡ 캐시 초기화 중... 잠시 기다려주세요"):
+                st.cache_data.clear()
             st.rerun()
         st.divider()
         st.markdown("#### 숨비 종합 진단 점수")
