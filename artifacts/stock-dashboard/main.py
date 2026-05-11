@@ -67,12 +67,48 @@ st.set_page_config(
     page_title="숨비 애널리틱스",
     page_icon="🐋",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 st.markdown("""
 <style>
 /* ── SOOMBI ANALYTICS v4.0 — Gold & Dark Luxury Theme ── */
+
+/* ── 모바일 가로 스크롤 원천 차단 ── */
+html, body {
+  overflow-x: hidden !important;
+  max-width: 100vw !important;
+}
+.main, [data-testid="stAppViewContainer"],
+[data-testid="stApp"], section.main {
+  overflow-x: hidden !important;
+  max-width: 100% !important;
+}
+
+/* ── 모바일 사이드바 스와이프 최적화 ──
+   터치 감도 과잉 반응 방지: 사이드바 가장자리 히트 영역을 CSS로 축소하고
+   transform 애니메이션을 GPU 가속으로 부드럽게 처리 */
+[data-testid="stSidebar"] {
+  touch-action: pan-y !important;
+  -webkit-overflow-scrolling: touch;
+  will-change: transform;
+}
+@media (max-width: 768px) {
+  [data-testid="stSidebarCollapsedControl"] {
+    padding-left: 4px !important;
+    margin-left: 0 !important;
+  }
+  [data-testid="stSidebar"] > div:first-child {
+    padding-top: 2.5rem !important;
+    padding-left: 0.75rem !important;
+    padding-right: 0.75rem !important;
+  }
+  .main .block-container {
+    padding-left: 0.75rem !important;
+    padding-right: 0.75rem !important;
+    max-width: 100% !important;
+  }
+}
 
 /* 전체 배경 */
 [data-testid="stApp"] { background:#0E1117; }
