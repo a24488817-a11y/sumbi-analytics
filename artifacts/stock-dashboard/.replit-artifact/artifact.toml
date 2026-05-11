@@ -4,9 +4,9 @@ title = "KRX Stock Dashboard"
 version = "1.0.0"
 
 [[services]]
-localPort = 5000
+localPort = 8501
 name = "KRX Stock Dashboard"
 paths = ["/"]
 
 [services.development]
-run = "streamlit run /home/runner/workspace/artifacts/stock-dashboard/main.py --server.port $PORT --server.address 0.0.0.0 --server.enableCORS false --server.enableXsrfProtection false"
+run = "streamlit run /home/runner/workspace/artifacts/stock-dashboard/main.py --server.port $PORT --server.address 0.0.0.0 --server.headless true --server.enableCORS false --server.enableXsrfProtection false"
