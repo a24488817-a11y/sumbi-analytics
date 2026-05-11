@@ -181,14 +181,16 @@ div[data-testid="metric-container"] [data-testid="stMetricValue"] {
   background:linear-gradient(135deg,#D4AF37,#f0d060) !important;
   box-shadow:0 4px 16px rgba(212,175,55,.5);
 }
-/* ── 눌리는 시각 피드백 (active / touch)
+/* ── 눌리는 시각 피드백 (active / touch) — 강화
    iOS Safari: cursor:pointer + -webkit-appearance:none 필수 ── */
 [data-testid="stButton"] > button:active,
 [data-testid="stButton"] > button:focus:not(:focus-visible) {
-  background:linear-gradient(135deg,#7a5e00,#a07800) !important;
-  transform:translateY(2px) scale(0.97) !important;
-  box-shadow:0 1px 3px rgba(212,175,55,.15) !important;
+  background:linear-gradient(135deg,#5a4000,#8a6800) !important;
+  transform:translateY(4px) scale(0.91) !important;
+  box-shadow:0 0 22px rgba(212,175,55,.7) !important;
+  filter:brightness(1.25) !important;
   outline:none !important;
+  transition:transform .06s ease, box-shadow .06s ease !important;
 }
 /* ── 모바일 터치 영역 충분히 확보 + z-index 정리 ── */
 @media (max-width: 768px) {
@@ -234,6 +236,34 @@ hr { border-color:#2a2f3e !important; }
 
 /* 익스팬더 */
 details summary { color:#D4AF37 !important; font-weight:700; }
+
+/* ━━━ 스트림릿 기본 UI 완전 숨김 — 전용 앱 터미널 ━━━ */
+/* 상단 붉은 decoration 바 */
+#stDecoration { display:none !important; }
+/* Running 스피너 + Stop 버튼 전체 */
+[data-testid="stStatusWidget"] { display:none !important; }
+/* 우상단 Deploy / ⋮ 툴바 */
+[data-testid="stToolbar"] { display:none !important; }
+.stDeployButton { display:none !important; }
+/* 햄버거 메뉴 */
+#MainMenu { visibility:hidden !important; }
+/* 하단 "Made with Streamlit" 푸터 */
+footer { visibility:hidden !important; }
+/* 헤더 배경 투명화 (사이드바 토글 버튼은 유지) */
+header[data-testid="stHeader"] {
+  background:transparent !important;
+  border-bottom:none !important;
+}
+
+/* ━━━ 활성 스캐너 모드 버튼 — 펄스 글로우 ━━━ */
+@keyframes _sbtn-glow {
+  0%,100% { box-shadow:0 2px 8px rgba(212,175,55,.35); }
+  50%     { box-shadow:0 0 26px rgba(212,175,55,.90), inset 0 0 6px rgba(255,220,80,.15); }
+}
+/* primary 버튼(= 활성 선택 모드)에 펄스 적용 */
+[data-testid="stButton"] > button[kind="primary"] {
+  animation:_sbtn-glow 2s ease-in-out infinite;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -2902,26 +2932,28 @@ def ui_breakout_mode(scored: list[dict]):
 </div>
 """)
 
-    # ── 통과 종목 없음 ──────────────────────────────────────────────────────
-    if not ranked:
-        _html_block("""
-<style>
-  .bk-empty {{
-    background:#12192b; border:1px solid #2a3a50; border-radius:14px;
-    padding:28px 32px; text-align:center; margin:8px 0;
-  }}
-  .bk-empty-title {{ font-size:1.05rem; font-weight:800; color:#FF5050; margin-bottom:10px; }}
-  .bk-empty-body  {{ font-size:.86rem; color:#8fa3b8; line-height:1.75; }}
-</style>
-<div class="bk-empty">
-  <div class="bk-empty-title">🔥 현재 돌파 조건 충족 종목 없음</div>
-  <div class="bk-empty-body">
-    모멘텀 구간 진입 + 수급 확인 + 거래량 급증을 동시에 충족하는 종목이 없습니다.<br>
-    ⚡ 즉시 갱신으로 재수집하거나, 장 중 거래량 급증 구간에서 다시 확인하세요.
-  </div>
-</div>
-""")
-        return
+    # ── Kill Switch 통과 0 → 총점 Top 5 참고용 폴백 ─────────────────────────
+    _is_bk_fallback = not ranked
+    if _is_bk_fallback:
+        ranked = sorted(scored, key=lambda x: x["total"], reverse=True)[:5]
+        if not ranked:   # scored 자체가 비어있을 때만 완전 종료
+            _html_block("""
+<div style="background:#12192b;border:1px solid #2a3a50;border-radius:14px;
+            padding:28px 32px;text-align:center;margin:8px 0;">
+  <div style="font-size:1.05rem;font-weight:800;color:#FF5050;margin-bottom:10px;">
+    🔥 스캔 가능한 종목 없음</div>
+  <div style="font-size:.86rem;color:#8fa3b8;line-height:1.75;">
+    ⚡ 즉시 갱신으로 재수집하거나 잠시 후 다시 확인하세요.</div>
+</div>""")
+            return
+        _html_block(f"""
+<div style="background:#1a1200;border:1px solid #b8960c;border-radius:10px;
+            padding:10px 16px;margin:6px 0 10px;">
+  <span style="color:#D4AF37;font-weight:800;font-size:.82rem;">
+  ⚠️ Kill Switch 통과 종목 없음 — 전체 {len(scored)}종목 中 필살기 총점 상위 5개를
+  <u>참고용</u>으로 표출합니다 (조건 미충족 · 투자 판단 단독 활용 금지)
+  </span>
+</div>""")
 
     # ── 돌파 데이터프레임 구성 ─────────────────────────────────────────────
     rows = []
@@ -3065,26 +3097,28 @@ def ui_stealth_mode(scored: list[dict]):
 </div>
 """)
 
-    # ── 통과 종목 없음 ────────────────────────────────────────────────────────
-    if not ranked:
-        _html_block("""
-<style>
-  .sm-empty {{
-    background:#12192b; border:1px solid #2a3a50; border-radius:14px;
-    padding:28px 32px; text-align:center; margin:8px 0;
-  }}
-  .sm-empty-title {{ font-size:1.05rem; font-weight:800; color:#D4AF37; margin-bottom:10px; }}
-  .sm-empty-body  {{ font-size:.86rem; color:#8fa3b8; line-height:1.75; }}
-</style>
-<div class="sm-empty">
-  <div class="sm-empty-title">💎 현재 스텔스 조건 충족 종목 없음</div>
-  <div class="sm-empty-body">
-    시장이 전반적 과열 구간이거나 세력 매집이 미발생 상태입니다.<br>
-    ⚡ 즉시 갱신으로 재수집하거나, 조정 구간에서 다시 확인하세요.
-  </div>
-</div>
-""")
-        return
+    # ── Kill Switch 통과 0 → 총점 Top 5 참고용 폴백 ─────────────────────────
+    _is_sm_fallback = not ranked
+    if _is_sm_fallback:
+        ranked = sorted(scored, key=lambda x: x["total"], reverse=True)[:5]
+        if not ranked:
+            _html_block("""
+<div style="background:#12192b;border:1px solid #2a3a50;border-radius:14px;
+            padding:28px 32px;text-align:center;margin:8px 0;">
+  <div style="font-size:1.05rem;font-weight:800;color:#D4AF37;margin-bottom:10px;">
+    💎 스캔 가능한 종목 없음</div>
+  <div style="font-size:.86rem;color:#8fa3b8;line-height:1.75;">
+    ⚡ 즉시 갱신으로 재수집하거나 잠시 후 다시 확인하세요.</div>
+</div>""")
+            return
+        _html_block(f"""
+<div style="background:#0d1a2b;border:1px solid #1a5c8a;border-radius:10px;
+            padding:10px 16px;margin:6px 0 10px;">
+  <span style="color:#7ec8e3;font-weight:800;font-size:.82rem;">
+  ⚠️ 스텔스 조건 통과 종목 없음 — 전체 {len(scored)}종목 中 필살기 총점 상위 5개를
+  <u>참고용</u>으로 표출합니다 (조건 미충족 · 투자 판단 단독 활용 금지)
+  </span>
+</div>""")
 
     # ── 스텔스 데이터프레임 구성 ─────────────────────────────────────────────
     rows = []
@@ -4987,7 +5021,7 @@ button[data-baseweb="tab"][aria-selected="true"] p { color: #D4AF37 !important; 
         unsafe_allow_html=True,
     )
 
-    col_q, col_btn = st.columns([5, 2])
+    col_q, col_btn, col_spin = st.columns([4, 2, 1])
     with col_q:
         query = st.text_input(
             "종목명 또는 6자리 코드 입력",
@@ -4997,7 +5031,10 @@ button[data-baseweb="tab"][aria-selected="true"] p { color: #D4AF37 !important; 
         )
     with col_btn:
         go = st.button("🔍 해부 시작", use_container_width=True, type="primary")
-    # 분석 로딩 상태를 버튼 바로 아래 고정 영역에 렌더링 (레이아웃 덜컹거림 방지)
+    with col_spin:
+        # 버튼 바로 옆 스피너 슬롯 — 분석 중에만 채워지고 완료 후 자동 비워짐
+        _btn_spin_slot = st.empty()
+    # 분석 결과 렌더링 슬롯 (레이아웃 덜컹거림 방지)
     _analysis_slot = st.empty()
 
     # 클릭-투-애널라이즈: Top15 행 클릭 시 자동 트리거
@@ -5031,6 +5068,20 @@ button[data-baseweb="tab"][aria-selected="true"] p { color: #D4AF37 !important; 
             name   = selected["name"]
             market = selected["market"]
 
+            # ── 버튼 바로 옆 슬롯에 CSS 스피너 표시 ──────────────────────────
+            _btn_spin_slot.markdown(
+                '<div style="display:flex;align-items:center;justify-content:center;'
+                'height:36px;padding-top:4px;">'
+                '<div style="width:20px;height:20px;border:3px solid #D4AF37;'
+                'border-top:3px solid transparent;border-radius:50%;'
+                'animation:_spin-anim .75s linear infinite;"></div>'
+                '</div>'
+                '<style>@keyframes _spin-anim{'
+                '0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}'
+                '</style>',
+                unsafe_allow_html=True,
+            )
+
             # ── 버튼 바로 아래 인라인 로딩 (레이아웃 덜컹 없이 고정 슬롯 사용) ──
             with _analysis_slot.container():
                 with st.status(
@@ -5044,6 +5095,9 @@ button[data-baseweb="tab"][aria-selected="true"] p { color: #D4AF37 !important; 
                         state="complete",
                         expanded=False,
                     )
+
+            # 분석 완료 → 버튼 옆 스피너 제거
+            _btn_spin_slot.empty()
 
             # ── 데이터 동기화 검증: analyze_ticker 4축 총점이 권위적 소스 ────────
             # (quick_score 캐시 총점 덮어쓰기 금지 — 뉴스/재무 완전 반영된 총점 보존)
