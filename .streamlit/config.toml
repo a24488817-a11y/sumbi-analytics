@@ -1,4 +1,13 @@
 [server]
 headless = true
 address = "0.0.0.0"
-port = 5000
+enableCORS = false
+enableXsrfProtection = false
+
+[theme]
+base = "dark"
+primaryColor = "#D4AF37"
+backgroundColor = "#0E1117"
+secondaryBackgroundColor = "#0d1526"
+textColor = "#E8E8E8"
+font = "sans serif"
