@@ -74,15 +74,34 @@ st.markdown("""
 <style>
 /* ── SOOMBI ANALYTICS v4.0 — Gold & Dark Luxury Theme ── */
 
-/* ── 모바일 가로 스크롤 원천 차단 ── */
+/* ── 모바일 가로 스크롤 원천 차단 (탭 터치 영역 보호) ── */
 html, body {
   overflow-x: hidden !important;
   max-width: 100vw !important;
 }
-.main, [data-testid="stAppViewContainer"],
-[data-testid="stApp"], section.main {
+/* overflow-x: hidden은 .main 레벨에만 적용 — tab-list 레이어 터치 보호 */
+[data-testid="stApp"] {
   overflow-x: hidden !important;
   max-width: 100% !important;
+}
+section.main > .block-container {
+  overflow-x: hidden !important;
+  max-width: 100% !important;
+}
+/* ── 탭 터치 이벤트 완전 보호 ──
+   overflow-x:hidden이 stTabsContent 위에 올라오면 터치 씹힘 발생 → 명시적 해제 */
+[data-testid="stTabs"],
+[data-testid="stTabsTabList"],
+[data-baseweb="tab-list"],
+[data-baseweb="tab"] {
+  overflow: visible !important;
+  pointer-events: auto !important;
+  touch-action: manipulation !important;
+  position: relative !important;
+  z-index: 30 !important;
+}
+[data-testid="stTabsContent"] {
+  overflow-x: hidden !important;
 }
 
 /* ── 모바일 사이드바 스와이프 최적화 ──
@@ -2835,10 +2854,10 @@ def ui_breakout_mode(scored: list[dict]):
         inv_ok = s.get("is_ssankkl") or s["inv_score"] >= 15
         vr     = s.get("vol_ratio", 1.0)
 
-        if tp > 0 and price >= tp:   continue   # 안전마진 붕괴 — 즉시 컷아웃
-        if not (2.0 <= chg <= 5.0):  continue   # ① 등락률 +2.0~+5.0% 범위 외
+        if tp > 0 and price >= tp:    continue   # 안전마진 붕괴 — 즉시 컷아웃
+        if not (-1.0 <= chg <= 8.0): continue   # ① 등락률 -1~+8% (장 마감 후 포착 강화)
         if not inv_ok:               continue   # ② 수급 다이버전스 없음
-        if vr < 1.5:                 continue   # ③ 거래량 급증 미달 (1.5x 미만)
+        if vr < 1.2:                 continue   # ③ 거래량 급증 (1.5→1.2x 완화)
 
         passed.append(s)
 
@@ -2877,7 +2896,7 @@ def ui_breakout_mode(scored: list[dict]):
   </div>
   <div class="bk-rule">
     Kill Switch: 현재가 ≥ 목표주가 즉시 컷아웃 &nbsp;|&nbsp;
-    ① 등락률 +2.0%~+5.0% &amp; ② 수급15+ 또는 쌍끌이 &amp; ③ 거래량 1.5x+ (3 AND 충족 필수) &nbsp;|&nbsp;
+    ① 등락률 -1.0%~+8.0% &amp; ② 수급10+ 또는 쌍끌이 &amp; ③ 거래량 1.2x+ (3 AND 충족 필수) &nbsp;|&nbsp;
     정렬: 42대 필살기 총점 내림차순
   </div>
 </div>
@@ -2989,11 +3008,11 @@ def ui_stealth_mode(scored: list[dict]):
         tp     = s.get("target_price", 0)
         chg    = s.get("change", 0.0)
         rsi    = float(s.get("rsi", 50.0))
-        inv_ok = s.get("is_ssankkl") or s["inv_score"] >= 15
+        inv_ok = s.get("is_ssankkl") or s["inv_score"] >= 10   # 15→10 완화
 
         if tp > 0 and price >= tp:  continue   # 안전마진 붕괴 즉시 컷아웃
-        if chg > 3.0:   continue   # ① 급등주 차단 (등락률 +3.0% 초과 즉시 drop) — 양봉 턴어라운드 허용
-        if rsi > 65:    continue   # ② 과열 배제 (RSI 65 초과 즉시 drop) — 초기 반등 포착
+        if chg > 5.0:   continue   # ① 급등주 차단 (3.0→5.0% 완화 — 장 마감 반등 포착)
+        if rsi > 72:    continue   # ② 과열 배제 (RSI 65→72 완화 — 초기 반등 포착)
         if not inv_ok:  continue   # ③ 수급 다이버전스 없음 즉시 drop
 
         passed.append(s)
@@ -3039,8 +3058,8 @@ def ui_stealth_mode(scored: list[dict]):
     → 상위 <strong>{min(n_passed, 15)}</strong>종목 표출
   </div>
   <div class="sm-rule">
-    Kill Switch: ① 등락률 ≤ +3.0% &amp; ② RSI ≤ 65 &amp;
-    ③ 수급 15점+ 또는 쌍끌이 (3개 AND 충족 필수) &nbsp;|&nbsp;
+    Kill Switch: ① 등락률 ≤ +5.0% &amp; ② RSI ≤ 72 &amp;
+    ③ 수급 10점+ 또는 쌍끌이 (3개 AND 충족 필수) &nbsp;|&nbsp;
     정렬: MA20 이격도 음수 우선·0 근접 순
   </div>
 </div>
@@ -4898,19 +4917,42 @@ button[data-baseweb="tab"][aria-selected="true"] p { color: #D4AF37 !important; 
         # 코드 기준 역추적을 위한 scored 캐시 세션 저장 (detail 뷰 점수 동기화)
         st.session_state["scored_cache"] = {r["ticker"]: r for r in scored}
 
-        # ── 듀얼 랭킹 모드 토글 ──────────────────────────────────────────────
-        mode_tab1, mode_tab2 = st.tabs([
-            "🔥 주도주 / 돌파 모드",
-            "💎 눌림목 / 스텔스 모드",
-        ])
-        with mode_tab1:
+        # ── 듀얼 랭킹 모드 토글 (session_state 탭 상태 관리) ────────────────
+        if "scanner_mode" not in st.session_state:
+            st.session_state["scanner_mode"] = "breakout"
+
+        _mode = st.session_state["scanner_mode"]
+
+        # 모바일 터치 친화 버튼 탭 (CSS native tab보다 터치 신뢰성 높음)
+        st.markdown("""
+<style>
+.mode-btn-row { display:flex; gap:8px; margin-bottom:8px; }
+.mode-btn-row form { flex:1; }
+</style>""", unsafe_allow_html=True)
+
+        _btn_col1, _btn_col2 = st.columns(2)
+        with _btn_col1:
+            _b1_style = "primary" if _mode == "breakout" else "secondary"
+            if st.button("🔥 주도주 / 돌파", key="btn_breakout",
+                         use_container_width=True, type=_b1_style):
+                st.session_state["scanner_mode"] = "breakout"
+                st.rerun()
+        with _btn_col2:
+            _b2_style = "primary" if _mode == "stealth" else "secondary"
+            if st.button("💎 눌림목 / 스텔스", key="btn_stealth",
+                         use_container_width=True, type=_b2_style):
+                st.session_state["scanner_mode"] = "stealth"
+                st.rerun()
+
+        # ── 선택된 모드 콘텐츠 렌더링 ────────────────────────────────────────
+        if _mode == "breakout":
             st.markdown(
                 '<p style="color:#FF5050;font-size:0.8rem;font-weight:700;margin:4px 0 6px;">'
-                "등락률 +2~5% · 수급15+ or 쌍끌이 · 거래량 1.5x+ 동시 충족 — 세력 자금 유입 모멘텀 종목</p>",
+                "등락률 -1~+8% · 수급10+ or 쌍끌이 · 거래량 1.2x+ — 세력 자금 유입 모멘텀 종목</p>",
                 unsafe_allow_html=True,
             )
             ui_breakout_mode(scored)
-        with mode_tab2:
+        else:
             st.markdown(
                 '<p style="color:#D4AF37;font-size:0.8rem;font-weight:700;margin:4px 0 6px;">'
                 "세력 매집 中 + 주가 아직 눌린 종목 — 추격 매수 금지 · 눌림목 진입 전용</p>",
