@@ -240,8 +240,15 @@ details summary { color:#D4AF37 !important; font-weight:700; }
 /* ━━━ 스트림릿 기본 UI 완전 숨김 — 전용 앱 터미널 ━━━ */
 /* 상단 붉은 decoration 바 */
 #stDecoration { display:none !important; }
-/* Running 스피너 + Stop 버튼 전체 */
-[data-testid="stStatusWidget"] { display:none !important; }
+/* Running 스피너 + Stop 버튼 전체 (모든 Streamlit 버전 대응) */
+[data-testid="stStatusWidget"],
+div[class*="StatusWidget"],
+[data-testid="stStatusWidget"] * { display:none !important; }
+/* 상단 로딩 프로그레스 바 완전 제거 */
+[data-testid="stHeader"] > div:first-child,
+div[class*="loadingBar"],
+div[class*="LoadingBar"],
+iframe[title="streamlit_loading"] { display:none !important; }
 /* 우상단 Deploy / ⋮ 툴바 */
 [data-testid="stToolbar"] { display:none !important; }
 .stDeployButton { display:none !important; }
@@ -253,6 +260,12 @@ footer { visibility:hidden !important; }
 header[data-testid="stHeader"] {
   background:transparent !important;
   border-bottom:none !important;
+}
+/* 스피너가 버튼 위치에서 인라인 표시 — 최상단 float 방지 */
+[data-testid="stSpinner"] {
+  position:relative !important;
+  top:auto !important;
+  left:auto !important;
 }
 
 /* ━━━ 활성 스캐너 모드 버튼 — 펄스 글로우 ━━━ */
@@ -694,21 +707,95 @@ def _get_marcap_lookup() -> dict[str, float]:
         return {}
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _get_cap_rank_lookup() -> dict[str, int]:
+    """
+    KRX 전종목 시총 순위 — {code: rank}.
+
+    _get_marcap_lookup() 캐시를 재활용해 FDR 이중 호출 방지.
+    rank=1 이 시총 1위(삼성전자). 시총 0인 종목은 제외.
+    TTL=1h : 순위는 장 중에도 크게 변하지 않음.
+    """
+    cap_dict = _get_marcap_lookup()
+    if not cap_dict:
+        return {}
+    sorted_codes = sorted(
+        (c for c, v in cap_dict.items() if v > 0),
+        key=lambda c: cap_dict[c], reverse=True,
+    )
+    return {code: rank + 1 for rank, code in enumerate(sorted_codes)}
+
+
+def _classify_cap(code: str, cap_억: float, rank_lookup: dict[str, int]) -> str:
+    """KRX 시총 순위 기반 규모 자동 분류.
+
+    KRX 전종목 Marcap 순위 기준 (한국거래소 공식 기준 준용):
+      1 ~ 100위  → 대형  (삼성전자·SK하이닉스·현대차 등)
+      101 ~ 300위→ 중형
+      301위 ~    → 소형
+    rank_lookup 에 코드가 없으면 시총 절대값으로 폴백.
+    """
+    rank = rank_lookup.get(code)
+    if rank is not None:
+        if rank <= 100:  return "대형"
+        if rank <= 300:  return "중형"
+        return "소형"
+    # 순위 데이터 없을 때 시총 절대값 폴백
+    if cap_억 >= 10_000: return "대형"
+    if cap_억 >= 3_000:  return "중형"
+    return "소형"
+
+
 def search_ticker(query: str, tdf: pd.DataFrame) -> list[dict]:
-    """종목명/코드 퍼지 검색 → 최대 8건."""
+    """종목명/코드 검색 — 0% 오차 목표.
+
+    우선순위:
+      ① 6자리 코드 완전 일치 (1~6자리 숫자 입력 → 자동 선행 0 보정)
+      ② 이름 완전 일치 (대소문자·공백 무시)
+      ③ 이름 전방 일치
+      ④ 이름 포함 (기존 동작)
+      ⑤ _key(이름+코드 조합) 포함 — 부분 코드 검색도 포착
+    """
     q = query.strip()
     if not q or tdf.empty:
         return []
-    # 6자리 코드 완전 일치
-    if re.match(r"^\d{4,6}$", q):
-        code = q.zfill(6)
+
+    def _row(r) -> dict:
+        return {"code": r["Code"], "name": r["Name"], "market": r["Market"]}
+
+    # ① 숫자만 입력 시 코드 완전 일치 (선행 0 자동 보정)
+    q_digits = re.sub(r"[^\d]", "", q)
+    if q_digits and len(q_digits) <= 6:
+        code = q_digits.zfill(6)
         exact = tdf[tdf["Code"] == code]
         if not exact.empty:
-            r = exact.iloc[0]
-            return [{"code": r["Code"], "name": r["Name"], "market": r["Market"]}]
-    # 이름 포함
-    hits = tdf[tdf["Name"].str.contains(q, case=False, na=False)].head(8)
-    return [{"code": r["Code"], "name": r["Name"], "market": r["Market"]} for _, r in hits.iterrows()]
+            return [_row(exact.iloc[0])]
+
+    seen:    set[str]  = set()
+    results: list[dict] = []
+
+    def _add(df_part):
+        for _, r in df_part.iterrows():
+            if r["Code"] not in seen and len(results) < 8:
+                seen.add(r["Code"])
+                results.append(_row(r))
+
+    q_low = q.lower()
+    q_esc = re.escape(q)
+
+    # ② 이름 완전 일치
+    _add(tdf[tdf["Name"].str.lower() == q_low])
+    # ③ 이름 전방 일치
+    if len(results) < 8:
+        _add(tdf[tdf["Name"].str.lower().str.startswith(q_low, na=False)])
+    # ④ 이름 포함
+    if len(results) < 8:
+        _add(tdf[tdf["Name"].str.contains(q_esc, case=False, na=False, regex=True)])
+    # ⑤ _key 포함 (이름+코드 조합 — 부분 코드도 검색 가능)
+    if len(results) < 8:
+        _add(tdf[tdf["_key"].str.contains(re.escape(q_low), case=False, na=False, regex=False)])
+
+    return results
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2547,11 +2634,9 @@ def quick_score(ticker: str, name: str, market: str, turnover_pct: float = 0.0) 
 
         _total   = min(_inv_sc + _news_sc + _pb_sc + _risk_sc, 100)
 
-        # ── 시총 규모 레이블 ──────────────────────────────────────────────────
-        _cap_label = (
-            "대형" if _cap_억 >= 10_000
-            else ("중형" if _cap_억 >= 3_000 else "소형")
-        )
+        # ── 시총 규모 레이블 — KRX 순위 기반 자동 분류 ──────────────────────────
+        # rank_lookup은 TTL=1h 캐시, quick_score 내부 호출 비용 최소
+        _cap_label = _classify_cap(ticker, _cap_억, _get_cap_rank_lookup())
 
         return {
             "ticker":        ticker,
@@ -2624,18 +2709,16 @@ def scan_top_stocks(candidates: list[dict]) -> list[dict]:
                     file=sys.stderr,
                 )
 
-    # ── FDR Marcap 병합: Naver API cap이 0/소액인 경우 보완 ──────────────────
-    cap_lookup = _get_marcap_lookup()
+    # ── FDR Marcap 병합 + KRX 순위 기반 규모 분류 (Naver API 0 반환 보정) ──────
+    cap_lookup  = _get_marcap_lookup()    # {code: 시총_억} TTL=1h
+    rank_lookup = _get_cap_rank_lookup()  # {code: rank}  TTL=1h (cap_lookup 재활용)
     for r in results:
         code = r["ticker"]
+        # Naver API가 0/소액 반환 시 FDR Marcap으로 보정
         if r.get("cap", 0) < 100 and code in cap_lookup:
             r["cap"] = round(cap_lookup[code], 0)
-        # cap_label을 병합 후 최종 시총 기준으로 재계산 (Naver API 0 반환 오류 보정)
-        cap_억 = r.get("cap", 0)
-        r["cap_label"] = (
-            "대형" if cap_억 >= 10_000
-            else ("중형" if cap_억 >= 3_000 else "소형")
-        )
+        # cap_label — KRX 시총 순위 기반 자동 분류 (현대차·삼성전자 등 정확 반영)
+        r["cap_label"] = _classify_cap(code, r.get("cap", 0), rank_lookup)
 
     # ── 정렬: 1순위 차트신호(HIGH→MID→LOW→진입불가), 2순위 rank_score ────────
     # rank_score = 가중치 적용 합산(차트신호강도×pb + 수급×2 + 뉴스 + 리스크/숏스퀴즈)
@@ -4971,9 +5054,8 @@ button[data-baseweb="tab"][aria-selected="true"] p { color: #D4AF37 !important; 
 </div>
 """)
 
-    # ── 글로벌/국내 증시 전광판 ─────────────────────────────────────────────
-    with st.spinner("시장 데이터 동기화 중…"):
-        indices = get_market_indices()
+    # ── 글로벌/국내 증시 전광판 (스피너 제거 — 캐시 TTL=60s, 최상단 로딩 방지) ──
+    indices = get_market_indices()
     st.markdown(
         '<h2 style="color:#D4AF37;font-size:20px;font-weight:700;'
         'letter-spacing:.05em;margin:4px 0 2px;">글로벌 시장 실시간 전광판</h2>',
@@ -5015,16 +5097,16 @@ button[data-baseweb="tab"][aria-selected="true"] p { color: #D4AF37 !important; 
             unsafe_allow_html=True,
         )
 
-    with st.spinner("전종목 수급 역추적 파이프라인 가동 중…"):
-        candidates = get_top_volume_tickers()
-        if candidates:
-            candidate_tuples = tuple(
-                (c["code"], c["name"], c["market"], c.get("turnover_pct", 0.0))
-                for c in candidates
-            )
-            scored = _scan_top_cached(candidate_tuples)
-        else:
-            scored = []
+    # 스피너 제거 — _rank_refreshing 인라인 카드가 로딩 상태 대신 표시
+    candidates = get_top_volume_tickers()
+    if candidates:
+        candidate_tuples = tuple(
+            (c["code"], c["name"], c["market"], c.get("turnover_pct", 0.0))
+            for c in candidates
+        )
+        scored = _scan_top_cached(candidate_tuples)
+    else:
+        scored = []
 
     # 갱신 완료 → 플레이스홀더 제거 + 플래그 리셋
     _rank_ph.empty()
