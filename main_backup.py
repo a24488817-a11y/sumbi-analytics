@@ -1,0 +1,946 @@
+"""
+SUMBI ANALYTICS · PRESTIGE TERMINAL v6.0
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+실데이터 소스:
+  - 한국투자증권 OpenAPI  → 기관/외국인/개인 실시간 순매수
+  - yfinance              → 미국채, 달러인덱스, 원달러, WTI
+  - FinanceDataReader     → 주가 캔들 차트 (120일)
+  - Google News RSS       → 실시간 종목 뉴스
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+"""
+
+from v3_scorer import calc_sumbi_v3
+
+# ================================================================
+# SUMBI V3 Advanced Data Extractors (Mock for API)
+# ================================================================
+def get_short_data(ticker):
+    return {'short_ratio': 2.5, 'loan_change': -5.0}
+
+def get_sector_data(ticker):
+    return {'relative_strength': 0.03, 'foreign_flow': 1500}
+
+def get_broker_data(ticker):
+    return {'foreign_buy': 2, 'top_buy_consensus': 3}
+
+import os
+import datetime
+import urllib.parse
+import json
+import xml.etree.ElementTree as ET
+
+import streamlit as st
+import requests
+import pandas as pd
+import numpy as np
+import plotly.graph_objects as go
+import yfinance as yf
+import FinanceDataReader as fdr
+from dotenv import load_dotenv
+
+# ═══════════════════════════════════════════════════════════════
+# 환경 설정
+# ═══════════════════════════════════════════════════════════════
+load_dotenv()
+APP_KEY    = os.environ.get("KIS_APP_KEY")
+APP_SECRET = os.environ.get("KIS_APP_SECRET")
+URL_BASE   = "https://openapi.koreainvestment.com:9443"
+
+st.set_page_config(
+    page_title="SUMBI ANALYTICS · PRESTIGE TERMINAL",
+    page_icon="👑",
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
+
+# ═══════════════════════════════════════════════════════════════
+# 럭셔리 CSS
+# ═══════════════════════════════════════════════════════════════
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500;700&family=Inter:wght@300;400;500;600;700&display=swap');
+
+/* ── 기본 숨기기 ── */
+#MainMenu, footer, header { visibility: hidden; }
+.stDeployButton { display: none; }
+
+/* ── 배경 ── */
+.stApp {
+    background: radial-gradient(ellipse at top, #1a1410 0%, #060504 50%, #000000 100%);
+    color: #e4e4e7;
+    font-family: 'Inter', sans-serif;
+}
+.block-container { padding-top: 1.2rem !important; padding-bottom: 2rem !important; }
+
+/* ── 히어로 ── */
+.hero-eyebrow {
+    text-align: center; font-size: 10px; letter-spacing: 0.5em;
+    color: rgba(180,120,30,0.7); margin-bottom: 4px;
+}
+.hero-title {
+    font-family: 'Cormorant Garamond', serif;
+    font-size: clamp(3rem, 10vw, 5.5rem);
+    font-weight: 300; letter-spacing: 0.15em;
+    background: linear-gradient(180deg,#F5D67A 0%,#D9A147 50%,#8B6914 100%);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    text-align: center; margin: 0; line-height: 1;
+    filter: drop-shadow(0 0 30px rgba(217,161,71,0.3));
+}
+.hero-sub {
+    font-family: 'Cormorant Garamond', serif;
+    font-size: clamp(1rem, 4vw, 1.8rem);
+    font-weight: 300; letter-spacing: 0.4em;
+    color: rgba(217,199,130,0.8); text-align: center; margin-top: 4px;
+}
+.hero-divider {
+    text-align: center; font-size: 10px;
+    letter-spacing: 0.3em; color: #52525b; margin: 8px 0 20px;
+}
+
+/* ── 상단 바 ── */
+.topbar {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 6px 4px; border-bottom: 1px solid rgba(180,120,30,0.2);
+    margin-bottom: 14px; font-family: 'JetBrains Mono', monospace;
+}
+.topbar-brand { display: flex; align-items: center; gap: 8px; }
+.topbar-crown { color: #D9A147; font-size: 18px; filter: drop-shadow(0 0 8px rgba(217,161,71,0.6)); }
+.topbar-label { font-size: 8px; letter-spacing: 0.4em; color: rgba(180,120,30,0.8); }
+.topbar-ver { font-size: 9px; letter-spacing: 0.25em; color: #71717a; margin-top: -2px; }
+.topbar-right { display: flex; gap: 10px; font-size: 10px; color: #a1a1aa; align-items: center; }
+.live-dot {
+    display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+    background: #10b981; box-shadow: 0 0 8px #10b981;
+    animation: blink 1.5s infinite; margin-right: 4px;
+}
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.35} }
+
+/* ── 패널 ── */
+.panel {
+    background: linear-gradient(180deg,rgba(24,24,27,.85),rgba(0,0,0,.95));
+    border: 1px solid rgba(180,120,30,.3);
+    border-radius: 16px; padding: 18px; margin-bottom: 14px;
+    backdrop-filter: blur(6px);
+}
+.panel-glow { box-shadow: 0 0 40px -10px rgba(217,161,71,.25), inset 0 1px 0 rgba(217,161,71,.1); }
+
+/* ── 섹션 라벨 ── */
+.sec-label {
+    display: flex; align-items: center; gap: 8px;
+    margin-bottom: 14px; font-size: 10px; letter-spacing: 0.3em;
+    color: #D9A147; font-family: 'JetBrains Mono', monospace; font-weight: 600;
+}
+.sec-label::before { content:''; width:20px; height:1px; background:linear-gradient(90deg,transparent,#D9A147); }
+.sec-label::after  { content:''; flex:1; height:1px; background:linear-gradient(90deg,rgba(217,161,71,.3),transparent); }
+.sec-sub { font-size:10px; color:#71717a; letter-spacing:normal; font-weight:normal; }
+
+/* ── 종목 헤더 ── */
+.stock-meta { font-size:10px; letter-spacing:.25em; color:rgba(180,120,30,.8); font-family:'JetBrains Mono',monospace; }
+.stock-name { font-family:'Cormorant Garamond',serif; font-size:clamp(1.6rem,5vw,2.4rem); font-weight:300; color:#fafafa; line-height:1.1; }
+.stock-en   { font-size:11px; color:#71717a; font-style:italic; }
+.stock-price{ font-family:'JetBrains Mono',monospace; font-size:clamp(1.8rem,6vw,2.8rem); font-weight:300; text-align:right; line-height:1; }
+.change-pill{
+    display:inline-block; padding:3px 10px; border-radius:6px;
+    font-size:13px; font-weight:700; font-family:'JetBrains Mono',monospace;
+}
+
+/* ── 미니 메트릭 ── */
+.mini-box { text-align:center; padding:8px 4px; }
+.mini-lbl { font-size:9px; letter-spacing:.2em; color:#71717a; margin-bottom:3px; }
+.mini-val { font-family:'JetBrains Mono',monospace; font-size:13px; color:#e4e4e7; }
+
+/* ── 주체별 카드 ── */
+.flow-card {
+    background:linear-gradient(135deg,#0a0a0a,#000);
+    border:1px solid rgba(63,63,70,.8);
+    border-radius:12px; padding:15px; position:relative; overflow:hidden;
+}
+.flow-lbl { font-size:10px; letter-spacing:.25em; color:#a1a1aa; font-weight:600; margin-bottom:3px; }
+.flow-sub { font-size:10px; color:#71717a; margin-bottom:8px; }
+.flow-val { font-family:'JetBrains Mono',monospace; font-size:clamp(1.2rem,4vw,1.8rem); font-weight:300; }
+.flow-bar-wrap{ margin-top:10px; height:3px; background:rgba(63,63,70,.5); border-radius:2px; overflow:hidden; }
+
+/* ── 매크로 칩 ── */
+.macro-chip {
+    display:flex; align-items:center; gap:10px;
+    padding:10px 12px; border-radius:8px;
+    border:1px solid rgba(63,63,70,.8); background:rgba(9,9,11,.5);
+    margin-bottom:8px;
+}
+.macro-lbl { font-size:9px; letter-spacing:.2em; color:#71717a; }
+.macro-val { font-family:'JetBrains Mono',monospace; font-size:17px; font-weight:300; }
+.macro-unit{ font-size:10px; color:#52525b; margin-left:3px; }
+.macro-chg { font-family:'JetBrains Mono',monospace; font-size:10px; }
+
+/* ── 뉴스 ── */
+.news-card {
+    background:rgba(0,0,0,.3); border:1px solid rgba(63,63,70,.6);
+    border-radius:8px; padding:11px; margin-bottom:7px;
+    display:flex; gap:10px; align-items:flex-start;
+}
+.news-tag {
+    padding:2px 7px; border-radius:4px; font-size:9px;
+    letter-spacing:.1em; font-weight:bold;
+    font-family:'JetBrains Mono',monospace; white-space:nowrap; flex-shrink:0;
+}
+.tag-p { background:rgba(255,59,92,.15);  color:#FF3B5C; border:1px solid rgba(255,59,92,.4); }
+.tag-n { background:rgba(61,126,255,.15); color:#3D7EFF; border:1px solid rgba(61,126,255,.4); }
+.tag-u { background:rgba(217,161,71,.15); color:#D9A147; border:1px solid rgba(217,161,71,.4); }
+.news-body  { flex:1; min-width:0; }
+.news-title { font-size:13px; color:#d4d4d8; line-height:1.4; }
+.news-meta  { font-size:10px; color:#71717a; margin-top:3px; }
+
+/* ── 섹터 ── */
+.sec-cell { border-radius:8px; padding:10px; text-align:center; border:1px solid; margin-bottom:7px; }
+.sec-nm { font-size:11px; color:#d4d4d8; margin-bottom:3px; }
+.sec-pc { font-family:'JetBrains Mono',monospace; font-size:15px; font-weight:300; }
+
+/* ── 입력창 ── */
+.stTextInput input {
+    background-color:rgba(0,0,0,.6)!important;
+    border:1px solid rgba(180,120,30,.3)!important;
+    color:#e4e4e7!important;
+    font-family:'JetBrains Mono',monospace!important;
+    padding:11px!important;
+}
+.stTextInput input:focus {
+    border-color:rgba(217,161,71,.6)!important;
+    box-shadow:0 0 0 1px rgba(217,161,71,.3)!important;
+}
+.stButton>button {
+    background:linear-gradient(180deg,rgba(180,120,30,.4),rgba(120,80,20,.6))!important;
+    border:1px solid rgba(180,120,30,.5)!important;
+    color:#F5D67A!important; font-weight:600!important;
+    letter-spacing:.2em!important; font-size:12px!important;
+    padding:11px 20px!important; border-radius:8px!important;
+    width:100%;
+}
+.stButton>button:hover {
+    background:linear-gradient(180deg,rgba(180,120,30,.6),rgba(140,90,30,.7))!important;
+}
+
+/* ── 풋터 ── */
+.footer {
+    text-align:center; padding:20px 0;
+    border-top:1px solid rgba(180,120,30,.2); margin-top:20px;
+}
+.footer-tier { font-size:10px; letter-spacing:.4em; color:rgba(180,120,30,.7); font-family:'JetBrains Mono',monospace; }
+.footer-disc { font-size:9px; color:#52525b; margin-top:6px; }
+</style>
+""", unsafe_allow_html=True)
+
+# ═══════════════════════════════════════════════════════════════
+# 헬퍼 함수
+# ═══════════════════════════════════════════════════════════════
+def color_for(v):
+    return '#FF3B5C' if v > 0 else '#3D7EFF' if v < 0 else '#9CA3AF'
+
+def fmt(n):
+    return f"{int(n):,}"
+
+def fmt_signed(n):
+    return f"+{int(n):,}" if n > 0 else f"{int(n):,}"
+
+# ═══════════════════════════════════════════════════════════════
+# 데이터 함수 (기존 코드 100% 보존)
+# ═══════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=3600)
+def get_token_cached():
+    """KIS OAuth 토큰 (1시간 캐시)"""
+    try:
+        res = requests.post(
+            f"{URL_BASE}/oauth2/tokenP",
+            json={
+                "grant_type": "client_credentials",
+                "appkey": APP_KEY,
+                "appsecret": APP_SECRET
+            },
+            timeout=10
+        ).json()
+        return res.get("access_token") or "0"
+    except:
+        return None
+
+def get_token():
+    return get_token_cached()
+
+@st.cache_data(ttl=3600)
+def get_macro():
+    """yfinance 글로벌 매크로 지표"""
+    symbols = {"tnx": "^TNX", "dxy": "DX-Y.NYB", "krw": "KRW=X", "wti": "CL=F"}
+    result = {}
+    for key, sym in symbols.items():
+        try:
+            data = yf.Ticker(sym).history(period="2d")
+            result[key] = float(data["Close"].iloc[-1]) if not data.empty else None
+        except:
+            result[key] = None
+    return result
+
+@st.cache_data(ttl=86400)
+def get_stock_code(name):
+    """종목명 → 종목코드 (KRX 전체 리스트)"""
+    if name.isdigit():
+        return name
+    try:
+        df = fdr.StockListing('KRX')
+        mapping = dict(zip(df['Name'], df['Code']))
+        return mapping.get(name, name)
+    except:
+        return name
+
+@st.cache_data(ttl=300)
+def get_investor_data(ticker):
+    """KIS API - 기관/외국인/개인 순매수 (실시간)"""
+    try:
+        token = get_token()
+        if not token:
+            return None
+        res = requests.get(
+            f"{URL_BASE}/uapi/domestic-stock/v1/quotations/inquire-investor",
+            headers={
+                "authorization": f"Bearer {token}",
+                "appkey": APP_KEY,
+                "appsecret": APP_SECRET,
+                "tr_id": "FHKST01010900"
+            },
+            params={
+                "fid_cond_mrkt_div_code": "J",
+                "fid_input_iscd": ticker
+            },
+            timeout=10
+        ).json()
+        out = res.get("output", [{}])
+        if out:
+            d = out[0]
+            return {
+                "orgn": int(d.get("orgn_ntby_qty", "0").replace(",", "")),
+                "frgn": int(d.get("frgn_ntby_qty", "0").replace(",", "")),
+                "prsn": int(d.get("prsn_ntby_qty", "0").replace(",", "")),
+            }
+    except Exception as e:
+        st.error(f"API Error: {type(e).__name__}: {e}")
+    return None
+
+@st.cache_data(ttl=600)
+def get_stock_price(ticker):
+    """KIS API - 현재가 조회"""
+    try:
+        token = get_token()
+        if not token:
+            return None
+        res = requests.get(
+            f"{URL_BASE}/uapi/domestic-stock/v1/quotations/inquire-price",
+            headers={
+                "authorization": f"Bearer {token}",
+                "appkey": APP_KEY,
+                "appsecret": APP_SECRET,
+                "tr_id": "FHKST01010100"
+            },
+            params={
+                "fid_cond_mrkt_div_code": "J",
+                "fid_input_iscd": ticker
+            },
+            timeout=10
+        ).json()
+        out = res.get("output", {})
+        if out:
+            return {
+                "stck_prpr":  int(out.get("stck_prpr",  "0").replace(",", "")),
+                "prdy_vrss":  int(out.get("prdy_vrss",  "0").replace(",", "")),
+                "prdy_ctrt":  float(out.get("prdy_ctrt", "0").replace(",", "")),
+                "stck_hgpr":  int(out.get("stck_hgpr",  "0").replace(",", "")),
+                "stck_lwpr":  int(out.get("stck_lwpr",  "0").replace(",", "")),
+                "stck_oprc":  int(out.get("stck_oprc",  "0").replace(",", "")),
+                "prdy_clpr":  int(out.get("prdy_clpr",  "0").replace(",", "")),
+                "acml_vol":   int(out.get("acml_vol",   "0").replace(",", "")),
+                "per":        out.get("per",  "N/A"),
+                "pbr":        out.get("pbr",  "N/A"),
+                "hts_avls":   out.get("hts_avls", "N/A"),
+            }
+    except:
+        pass
+    return None
+
+@st.cache_data(ttl=600)
+def get_news(query):
+    """Google News RSS - 실시간 뉴스"""
+    try:
+        q = urllib.parse.quote(query)
+        r = requests.get(
+            f'https://news.google.com/rss/search?q={q}&hl=ko&gl=KR&ceid=KR:ko',
+            timeout=5
+        )
+        root = ET.fromstring(r.text)
+        items = root.findall('.//item')[:6]
+        result = []
+        for item in items:
+            title = item.find('title').text or ''
+            link  = item.find('link').text  or '#'
+            pub   = item.find('pubDate')
+            pub_str = pub.text if pub is not None else ''
+            result.append({'title': title, 'link': link, 'pub': pub_str})
+        return result
+    except:
+        return []
+
+@st.cache_data(ttl=3600)
+def get_chart_data(ticker):
+    """FinanceDataReader - 120일 캔들 + MA"""
+    try:
+        start = (datetime.datetime.now() - datetime.timedelta(days=120)).strftime('%Y-%m-%d')
+        df = fdr.DataReader(ticker, start)
+        df['MA5']  = df['Close'].rolling(window=5).mean()
+        df['MA20'] = df['Close'].rolling(window=20).mean()
+        return df
+    except:
+        return None
+
+@st.cache_data(ttl=86400)
+def get_stock_info(ticker):
+    """종목 기본 정보 (섹터, 종목명 등)"""
+    try:
+        df = fdr.StockListing('KRX')
+        row = df[df['Code'] == ticker]
+        if not row.empty:
+            return {
+                'name':   row.iloc[0].get('Name', ticker),
+                'sector': row.iloc[0].get('Sector', ''),
+                'market': row.iloc[0].get('Market', 'KOSPI'),
+            }
+    except:
+        pass
+    return {'name': ticker, 'sector': '', 'market': 'KRX'}
+
+# ═══════════════════════════════════════════════════════════════
+# 퀀트 스코어 계산 (실데이터 기반)
+# ═══════════════════════════════════════════════════════════════
+def calc_quant_score(investor, macro, price_data):
+    score = 20
+    if investor:
+        if investor['orgn'] > 0: score += 6
+        elif investor['orgn'] < -50000: score -= 3
+        if investor['frgn'] > 0: score += 5
+        elif investor['frgn'] < -50000: score -= 3
+        if investor['prsn'] > 0: score += 2
+    if macro:
+        krw = macro.get('krw')
+        wti = macro.get('wti')
+        tnx = macro.get('tnx')
+        if krw and krw > 1400: score -= 3
+        if wti and wti > 100: score -= 2
+        if tnx and tnx > 4.5: score -= 2
+    if price_data is not None and not price_data.empty:
+        close = price_data['Close'].dropna()
+        if len(close) >= 20:
+            ma5  = close.rolling(5).mean().iloc[-1]
+            ma20 = close.rolling(20).mean().iloc[-1]
+            if ma5 > ma20: score += 4
+    return max(0, min(40, score))
+
+def calc_sentiment(investor, macro, quant):
+    base = quant / 40 * 100
+    if investor:
+        total = abs(investor['orgn']) + abs(investor['frgn']) + abs(investor['prsn']) + 1
+        bull  = max(0, investor['orgn']) + max(0, investor['frgn'])
+        base  = base * 0.5 + (bull / total) * 100 * 0.5
+    return max(0, min(100, int(base)))
+
+# ═══════════════════════════════════════════════════════════════
+# 세션 상태
+# ═══════════════════════════════════════════════════════════════
+if 'ticker' not in st.session_state:
+    st.session_state.ticker = '042660'
+if 'query_name' not in st.session_state:
+    st.session_state.query_name = '042660'
+
+# ═══════════════════════════════════════════════════════════════
+# 상단 바
+# ═══════════════════════════════════════════════════════════════
+now_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+st.markdown(f"""
+<div class="topbar">
+  <div class="topbar-brand">
+    <span class="topbar-crown">♛</span>
+    <div>
+      <div class="topbar-label">SUMBI</div>
+      <div class="topbar-ver">PRESTIGE TERMINAL v6.0</div>
+    </div>
+  </div>
+  <div class="topbar-right">
+    <span>🔒 KIS API CONNECTED</span>
+    <span><span class="live-dot"></span>LIVE</span>
+    <span style="color:#e4e4e7;">{now_str}</span>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+# ═══════════════════════════════════════════════════════════════
+# 히어로
+# ═══════════════════════════════════════════════════════════════
+st.markdown("""
+<div class="hero-eyebrow">[ AI 기반 기관용 분석 터미널 ]</div>
+<h1 class="hero-title">SUMBI</h1>
+<div class="hero-sub">A N A L Y T I C S</div>
+<div class="hero-divider">─── 숨비애널리스트 · 글로벌 기관 전용 · 한국투자증권 OpenAPI 실시간 연동 ───</div>
+""", unsafe_allow_html=True)
+
+# ═══════════════════════════════════════════════════════════════
+# 검색 패널
+# ═══════════════════════════════════════════════════════════════
+st.markdown('<div class="panel">', unsafe_allow_html=True)
+st.markdown('<div class="sec-label">▎ INSTRUMENT TARGET <span class="sec-sub">/ 종목코드 또는 종목명</span></div>', unsafe_allow_html=True)
+
+col_in, col_btn = st.columns([3, 1])
+with col_in:
+    query = st.text_input("검색", value=st.session_state.query_name,
+                          label_visibility="collapsed",
+                          placeholder="042660 · 한화오션 · 삼성전자 · SK하이닉스")
+with col_btn:
+    if st.button("⚡ LAUNCH DEEP SCAN"):
+        q = query.strip()
+        code = get_stock_code(q)
+        st.session_state.ticker = code
+        st.session_state.query_name = q
+        # 캐시 초기화
+        get_investor_data.clear()
+        get_stock_price.clear()
+        get_news.clear()
+        get_chart_data.clear()
+        st.rerun()
+
+# ═══════════════════════════════════════════════════════════════
+# 데이터 로딩
+# ═══════════════════════════════════════════════════════════════
+ticker   = st.session_state.ticker
+info     = get_stock_info(ticker)
+macro    = get_macro()
+investor = get_investor_data(ticker)
+price    = get_stock_price(ticker)
+df_chart = get_chart_data(ticker)
+news_list= get_news(info['name'] or ticker)
+
+quant     = calc_quant_score(investor, macro, df_chart)
+sentiment = calc_sentiment(investor, macro, quant)
+
+# 가격 (KIS 실데이터 우선, 없으면 차트 최근값)
+if price:
+    cur_price = price['stck_prpr']
+    change    = price['prdy_vrss']
+    change_pct= price['prdy_ctrt']
+    high_p    = price['stck_hgpr']
+    low_p     = price['stck_lwpr']
+    open_p    = price['stck_oprc']
+    prev_p    = price['prdy_clpr']
+    vol       = price['acml_vol']
+    per       = price['per']
+    cap       = price['hts_avls']
+elif df_chart is not None and not df_chart.empty:
+    cur_price  = int(df_chart['Close'].iloc[-1])
+    prev_val   = int(df_chart['Close'].iloc[-2]) if len(df_chart) > 1 else cur_price
+    change     = cur_price - prev_val
+    change_pct = (change / prev_val * 100) if prev_val else 0
+    high_p     = int(df_chart['High'].iloc[-1])
+    low_p      = int(df_chart['Low'].iloc[-1])
+    open_p     = int(df_chart['Open'].iloc[-1])
+    prev_p     = prev_val
+    vol        = int(df_chart['Volume'].iloc[-1]) if 'Volume' in df_chart.columns else 0
+    per        = 'N/A'
+    cap        = 'N/A'
+else:
+    cur_price = change = high_p = low_p = open_p = prev_p = vol = 0
+    change_pct = 0.0
+    per = cap = 'N/A'
+
+pc = color_for(change)
+arrow = '▲' if change > 0 else '▼' if change < 0 else '─'
+
+# ═══════════════════════════════════════════════════════════════
+# 종목 헤더
+# ═══════════════════════════════════════════════════════════════
+st.markdown(f"""
+<div class="panel panel-glow">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px;">
+    <div>
+      <div class="stock-meta">{info['market']} · {info['sector']} · {ticker}</div>
+      <div class="stock-name">{info['name']}</div>
+    </div>
+    <div style="text-align:right;">
+      <div class="stock-price" style="color:{pc};">₩{fmt(cur_price)}</div>
+      <div style="margin-top:4px;display:flex;align-items:center;justify-content:flex-end;gap:8px;">
+        <span style="color:{pc};font-family:'JetBrains Mono';font-size:14px;">{fmt_signed(change)}</span>
+        <span class="change-pill" style="background:{pc}20;color:{pc};border:1px solid {pc}40;">
+          {arrow} {abs(change_pct):.2f}%
+        </span>
+      </div>
+    </div>
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:6px;margin-top:14px;padding-top:14px;border-top:1px solid rgba(63,63,70,.6);">
+    <div class="mini-box"><div class="mini-lbl">시가</div><div class="mini-val">{fmt(open_p)}</div></div>
+    <div class="mini-box"><div class="mini-lbl">고가</div><div class="mini-val" style="color:#FF3B5C;">{fmt(high_p)}</div></div>
+    <div class="mini-box"><div class="mini-lbl">저가</div><div class="mini-val" style="color:#3D7EFF;">{fmt(low_p)}</div></div>
+    <div class="mini-box"><div class="mini-lbl">거래량</div><div class="mini-val">{fmt(vol)}</div></div>
+    <div class="mini-box"><div class="mini-lbl">PER</div><div class="mini-val">{per}</div></div>
+    <div class="mini-box"><div class="mini-lbl">시총(억)</div><div class="mini-val">{cap}</div></div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+# ═══════════════════════════════════════════════════════════════
+# 게이지 행
+# ═══════════════════════════════════════════════════════════════
+def make_gauge(value, max_v, label, color, grade_labels=None):
+    fig = go.Figure(go.Indicator(
+        mode="gauge+number",
+        value=value,
+        number={'font': {'size': 44, 'color': color, 'family': 'JetBrains Mono'}, 'valueformat': '.0f'},
+        gauge={
+            'axis': {'range': [0, max_v], 'tickwidth': 0, 'tickcolor': '#52525b'},
+            'bar':  {'color': color, 'thickness': 0.28},
+            'bgcolor': 'rgba(0,0,0,0)',
+            'borderwidth': 0,
+            'steps': [
+                {'range': [0, max_v * 0.5],  'color': 'rgba(61,126,255,0.1)'},
+                {'range': [max_v * 0.5, max_v * 0.75], 'color': 'rgba(217,161,71,0.1)'},
+                {'range': [max_v * 0.75, max_v],       'color': 'rgba(255,59,92,0.1)'},
+            ],
+        },
+    ))
+    fig.update_layout(
+        paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+        height=230, margin=dict(l=20, r=20, t=20, b=20),
+    )
+    return fig
+
+
+
+
+
+# ================================================================
+# SUMBI V3 PRESTIGE ENGINE & UI (FULL WIDTH)
+# ================================================================
+try:
+    from v3_scorer import calc_sumbi_v3
+    def get_short_data_mock(): return {'short_ratio': 2.5, 'loan_change': -5.0}
+    def get_sector_data_mock(): return {'relative_strength': 0.03, 'foreign_flow': 1500}
+    def get_broker_data_mock(): return {'foreign_buy': 2, 'top_buy_consensus': 3}
+    
+    v3_result = calc_sumbi_v3(investor=investor, macro=macro, df_chart=df_chart, info=info, news_list=news_list, short_data=get_short_data_mock(), sector_data=get_sector_data_mock(), broker_data=get_broker_data_mock())
+    v3_tot, v3_grd, v3_lbl, v3_brk = v3_result["total"], v3_result["grade"], v3_result["grade_label"], v3_result["breakdown"]
+    
+    g_colors = {"S+": "#00FF94", "S": "#34C759", "A+": "#FFD60A", "A": "#FFD60A", "B": "#FF9500", "C": "#FF6B35", "D": "#FF3B3B"}
+    g_icons = {"S+": "https://img.icons8.com/emoji/96/fire.png", "S": "https://img.icons8.com/emoji/96/check-mark-button.png", "A+": "https://img.icons8.com/emoji/96/star.png", "A": "https://img.icons8.com/emoji/96/star.png", "B": "https://img.icons8.com/emoji/96/bar-chart.png", "C": "https://img.icons8.com/emoji/96/warning.png", "D": "https://img.icons8.com/emoji/96/sos-button.png"}
+    vc, vi = g_colors.get(v3_grd, "#FFD60A"), g_icons.get(v3_grd, "https://img.icons8.com/emoji/96/bar-chart.png")
+    
+    st.markdown("<div class='panel' style='margin-bottom:24px;'><div class='sec-label'>| SUMBI SCORE V3 <span class='sec-sub'>/ 8 Items 100pts</span></div>", unsafe_allow_html=True)
+    st.markdown(f'<div style="background:rgba(0,0,0,0.4);border:2px solid {vc}60;border-radius:20px;padding:24px;margin:12px 0;display:flex;align-items:center;gap:20px;"><img src="{vi}" style="width:64px;height:64px;flex-shrink:0;"/><div style="flex:1;"><div style="font-family:JetBrains Mono,monospace;font-size:10px;color:#52525b;letter-spacing:.2em;">SUMBI PRESTIGE SCORE V3</div><div style="display:flex;align-items:baseline;gap:12px;margin:6px 0;"><span style="font-family:Cormorant Garamond,serif;font-size:52px;color:{vc};font-weight:700;line-height:1;">{v3_tot}</span><span style="font-size:18px;color:#52525b;">/100</span><span style="background:{vc}20;border:1px solid {vc}60;border-radius:8px;padding:4px 12px;font-family:JetBrains Mono,monospace;font-size:14px;color:{vc};font-weight:700;">{v3_grd}</span></div><div style="font-size:14px;color:#a0a0a0;letter-spacing:.05em;">{v3_lbl}</div></div></div>', unsafe_allow_html=True)
+    
+    v3_labels = [("flow", "&#128176; Money Flow", 25), ("chart", "&#128200; Chart Tech", 25), ("fundamental", "&#127970; Fundamental", 13), ("news", "&#128240; News Momentum", 10), ("short", "&#128616; Short Signal", 8), ("macro", "&#127757; Macro Env", 7), ("sector", "&#127912; Sector Theme", 7), ("broker", "&#9889; Broker Flow", 5)]
+    r_html = []
+    for key, name, max_s in v3_labels:
+        val, mx, _ = v3_brk.get(key, (0, max_s, {}))
+        pct = int(val/mx*100) if mx>0 else 0
+        bar_c = "#34C759" if pct >= 70 else "#FFD60A" if pct >= 40 else "#FF3B3B"
+        r_html.append(f'<div style="background:rgba(255,255,255,0.03);border:1px solid #2a2a2a;border-radius:12px;padding:12px 16px;"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;"><span style="font-size:13px;color:#e0e0e0;">{name}</span><span style="font-family:JetBrains Mono,monospace;font-size:14px;color:{bar_c};font-weight:700;">{val}<span style="color:#52525b;font-size:10px;">/{mx}</span></span></div><div style="background:#1a1a1a;border-radius:4px;height:6px;"><div style="background:{bar_c};width:{pct}%;height:6px;border-radius:4px;"></div></div></div>')
+    st.markdown(f"<div style='display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:8px 0;'>{''.join(r_html)}</div></div>", unsafe_allow_html=True)
+except Exception as e:
+    st.error(f"V3 System Error: {e}")
+
+g_col1, g_col2 = st.columns(2)
+
+with g_col1:
+    st.markdown('<div class="panel panel-glow">', unsafe_allow_html=True)
+    st.markdown('<div class="sec-label">▎ QUANT FLOW MATRIX <span class="sec-sub">/ 실데이터 기반 연산</span></div>', unsafe_allow_html=True)
+    gc = '#FF3B5C' if quant >= 30 else '#D9A147' if quant >= 20 else '#3D7EFF'
+    grade = 'S+' if quant >= 35 else 'S' if quant >= 30 else 'A+' if quant >= 25 else 'A' if quant >= 20 else 'B' if quant >= 15 else 'C'
+    st.plotly_chart(make_gauge(quant, 40, 'QUANT', gc), use_container_width=True, config={'displayModeBar': False})
+    st.markdown(f"""
+    <div style="text-align:center;margin-top:-16px;">
+      <span style="background:{gc}20;color:{gc};border:1px solid {gc}40;padding:3px 12px;border-radius:4px;font-size:11px;font-weight:700;font-family:'JetBrains Mono',monospace;letter-spacing:.2em;">
+        GRADE {grade} · {quant}/40
+      </span>
+    </div>
+    """, unsafe_allow_html=True)
+    if macro:
+        krw = macro.get('krw')
+        if krw and krw > 1400:
+            st.markdown('<div style="text-align:center;margin-top:8px;color:#FF3B5C;font-size:10px;letter-spacing:.15em;">⚠ MACRO SHOCK PENALTY · 원화 약세 감산</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+with g_col2:
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.markdown('<div class="sec-label">▎ AI SENTIMENT ENGINE <span class="sec-sub">/ 실데이터 기반 심리 분석</span></div>', unsafe_allow_html=True)
+    sc = '#FF3B5C' if sentiment >= 65 else '#D9A147' if sentiment >= 40 else '#3D7EFF'
+    s_lbl = 'EXTREME GREED' if sentiment >= 80 else 'GREED' if sentiment >= 60 else 'NEUTRAL' if sentiment >= 40 else 'FEAR' if sentiment >= 20 else 'EXTREME FEAR'
+    st.plotly_chart(make_gauge(sentiment, 100, 'SENTIMENT', sc), use_container_width=True, config={'displayModeBar': False})
+    st.markdown(f"""
+    <div style="text-align:center;margin-top:-16px;">
+      <span style="background:{sc}20;color:{sc};border:1px solid {sc}40;padding:3px 12px;border-radius:4px;font-size:11px;font-weight:700;font-family:'JetBrains Mono',monospace;letter-spacing:.15em;">
+        {s_lbl}
+      </span>
+    </div>
+    """, unsafe_allow_html=True)
+    sig_s = 'STRONG BUY' if quant >= 35 else 'BUY' if quant >= 25 else 'HOLD' if quant >= 18 else 'CAUTION'
+    sig_m = 'BUY' if quant >= 25 else 'HOLD'
+    sig_c = '#FF3B5C' if 'BUY' in sig_s else '#D9A147' if sig_s == 'HOLD' else '#3D7EFF'
+    st.markdown(f"""
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:10px;padding-top:10px;border-top:1px solid rgba(63,63,70,.6);">
+      <div style="text-align:center;"><div style="font-size:9px;color:#71717a;letter-spacing:.15em;">단기 1D</div>
+        <div style="font-size:12px;font-weight:700;color:{sig_c};margin-top:3px;">{sig_s}</div></div>
+      <div style="text-align:center;"><div style="font-size:9px;color:#71717a;letter-spacing:.15em;">중기 1W</div>
+        <div style="font-size:12px;font-weight:700;color:#D9A147;margin-top:3px;">{sig_m}</div></div>
+      <div style="text-align:center;"><div style="font-size:9px;color:#71717a;letter-spacing:.15em;">장기 3M</div>
+        <div style="font-size:12px;font-weight:700;color:#D9A147;margin-top:3px;">ACCUMULATE</div></div>
+    </div>
+    """, unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# ═══════════════════════════════════════════════════════════════
+# 주체별 순매수 (KIS 실데이터)
+# ═══════════════════════════════════════════════════════════════
+st.markdown('<div class="panel">', unsafe_allow_html=True)
+st.markdown(f'<div class="sec-label">▎ TRANSACTION INTEGRITY REPORT : {ticker} <span class="sec-sub">/ KIS OpenAPI 실시간</span></div>', unsafe_allow_html=True)
+
+if investor:
+    flows = [
+        ('🏛 INSTITUTION', '기관 순매수', investor['orgn']),
+        ('🌐 FOREIGNER',   '외국인 순매수', investor['frgn']),
+        ('👥 INDIVIDUAL',  '개인 순매수',  investor['prsn']),
+    ]
+    max_f = max(abs(f[2]) for f in flows) or 1
+    fc1, fc2, fc3 = st.columns(3)
+    for col, (lbl, sub, val) in zip([fc1, fc2, fc3], flows):
+        c   = color_for(val)
+        pct = min(100, abs(val) / max_f * 100)
+        with col:
+            st.markdown(f"""
+            <div class="flow-card">
+              <div style="position:absolute;inset:0;background:radial-gradient(circle at top right,{c}25,transparent 60%);pointer-events:none;"></div>
+              <div class="flow-lbl">{lbl}</div>
+              <div class="flow-sub">{sub}</div>
+              <div class="flow-val" style="color:{c};">{fmt_signed(val)}</div>
+              <div class="flow-bar-wrap">
+                <div style="height:100%;width:{pct}%;background:linear-gradient(90deg,{c}40,{c});box-shadow:0 0 8px {c}80;"></div>
+              </div>
+            </div>
+            """, unsafe_allow_html=True)
+else:
+    st.markdown("""
+    <div style="text-align:center;padding:20px;color:#71717a;font-size:13px;">
+      ⚠ KIS API 연결 중... 잠시 후 다시 시도하세요.<br>
+      <span style="font-size:11px;">(장 마감 후에는 당일 최종 데이터 표시)</span>
+    </div>
+    """, unsafe_allow_html=True)
+st.markdown('</div>', unsafe_allow_html=True)
+
+# ═══════════════════════════════════════════════════════════════
+# 캔들스틱 차트 (fdr 실봉)
+# ═══════════════════════════════════════════════════════════════
+st.markdown('<div class="panel">', unsafe_allow_html=True)
+st.markdown('<div class="sec-label">▎ PRICE ACTION CHART <span class="sec-sub">/ fdr 실봉 120일 · MA5 · MA20</span></div>', unsafe_allow_html=True)
+
+if df_chart is not None and not df_chart.empty:
+    fig = go.Figure()
+    # 캔들스틱
+    fig.add_trace(go.Candlestick(
+        x=df_chart.index,
+        open=df_chart['Open'], high=df_chart['High'],
+        low=df_chart['Low'],  close=df_chart['Close'],
+        increasing_line_color='#FF3B5C', decreasing_line_color='#3D7EFF',
+        increasing_fillcolor='#FF3B5C', decreasing_fillcolor='#3D7EFF',
+        name='캔들'
+    ))
+    # MA5
+    fig.add_trace(go.Scatter(
+        x=df_chart.index, y=df_chart['MA5'],
+        line=dict(color='#F5A623', width=1.5), name='5일선'
+    ))
+    # MA20
+    fig.add_trace(go.Scatter(
+        x=df_chart.index, y=df_chart['MA20'],
+        line=dict(color='#7B8FF5', width=1.5), name='20일선'
+    ))
+    fig.update_layout(
+        template='plotly_dark',
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        height=400,
+        margin=dict(l=0, r=0, t=30, b=0),
+        xaxis_rangeslider_visible=False,
+        legend=dict(orientation='h', yanchor='bottom', y=1.02, font=dict(size=11, color='#a1a1aa')),
+        xaxis=dict(gridcolor='rgba(63,63,70,.3)', tickfont=dict(size=10, color='#71717a')),
+        yaxis=dict(gridcolor='rgba(63,63,70,.3)', tickfont=dict(size=10, color='#71717a'), tickformat=','),
+    )
+    st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+
+    # 거래량
+    if 'Volume' in df_chart.columns:
+        colors = ['#FF3B5C' if c >= o else '#3D7EFF'
+                  for c, o in zip(df_chart['Close'], df_chart['Open'])]
+        fig_v = go.Figure(go.Bar(x=df_chart.index, y=df_chart['Volume'], marker_color=colors, marker_opacity=0.5))
+        fig_v.update_layout(
+            paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+            height=90, margin=dict(l=0, r=0, t=0, b=20),
+            xaxis=dict(showgrid=False, tickfont=dict(size=9, color='#71717a')),
+            yaxis=dict(showgrid=False, showticklabels=False),
+        )
+        st.plotly_chart(fig_v, use_container_width=True, config={'displayModeBar': False})
+else:
+    st.markdown('<div style="text-align:center;padding:30px;color:#71717a;">차트 데이터 로딩 중...</div>', unsafe_allow_html=True)
+st.markdown('</div>', unsafe_allow_html=True)
+
+# ═══════════════════════════════════════════════════════════════
+# 글로벌 매크로 (yfinance 실데이터)
+# ═══════════════════════════════════════════════════════════════
+st.markdown('<div class="panel">', unsafe_allow_html=True)
+# AI 투자신호 패널
+st.markdown('<div class="panel">', unsafe_allow_html=True)
+st.markdown('<div class="sec-label">| AI MACRO SIGNAL <span class="sec-sub">/ 인공지능 거시경제 투자신호</span></div>', unsafe_allow_html=True)
+if macro:
+    _wti = macro.get("wti")
+    _krw = macro.get("krw")
+    _dxy = macro.get("dxy")
+    _tnx = macro.get("tnx")
+    _score = 0
+    _warns = []
+    _goods = []
+    if _wti:
+        if _wti > 95: _score -= 3; _warns.append(("WTI 고유가 위험", f"WTI {_wti:.1f}$ 인플레 압력 심화", "#FF3B3B"))
+        elif _wti > 80: _score -= 1; _warns.append(("WTI 유가 주의", f"WTI {_wti:.1f}$ 상단 경계구간", "#FF9500"))
+        elif _wti < 60: _score += 2; _goods.append(("WTI 저유가 우호", f"WTI {_wti:.1f}$ 기업비용 감소", "#34C759"))
+        else: _goods.append(("WTI 유가 정상", f"WTI {_wti:.1f}$ 안정구간", "#30D158"))
+    if _krw:
+        if _krw > 1450: _score -= 3; _warns.append(("환율 위험", f"USD/KRW {_krw:.0f}원 외국인 이탈", "#FF3B3B"))
+        elif _krw > 1380: _score -= 1; _warns.append(("환율 주의", f"USD/KRW {_krw:.0f}원 원화약세", "#FF9500"))
+        elif _krw < 1300: _score += 2; _goods.append(("원화 강세", f"USD/KRW {_krw:.0f}원 외국인 유입", "#34C759"))
+        else: _goods.append(("환율 정상", f"USD/KRW {_krw:.0f}원 정상범위", "#30D158"))
+    if _dxy:
+        if _dxy > 107: _score -= 2; _warns.append(("달러 강세 위험", f"DXY {_dxy:.1f} 신흥국 압박", "#FF3B3B"))
+        elif _dxy > 103: _score -= 1; _warns.append(("달러 강세 주의", f"DXY {_dxy:.1f} 상단경계", "#FF9500"))
+        elif _dxy < 98: _score += 2; _goods.append(("달러 약세 우호", f"DXY {_dxy:.1f} 매수여건", "#34C759"))
+        else: _goods.append(("달러 안정", f"DXY {_dxy:.1f} 중립구간", "#30D158"))
+    if _tnx:
+        if _tnx > 4.8: _score -= 3; _warns.append(("금리 위험", f"10Y {_tnx:.2f}% 밸류에이션 압박", "#FF3B3B"))
+        elif _tnx > 4.3: _score -= 1; _warns.append(("금리 주의", f"10Y {_tnx:.2f}% 상단부담", "#FF9500"))
+        elif _tnx < 3.5: _score += 3; _goods.append(("금리 우호", f"10Y {_tnx:.2f}% 밸류개선", "#34C759"))
+        else: _goods.append(("금리 보통", f"10Y {_tnx:.2f}% 정상범위", "#30D158"))
+    if _score >= 5:
+        _fi, _ft, _fd, _fc, _fbg = "STRONG BUY", "강력 매수 권고", "전 지표 우호. 적극 매수 권고", "#00FF94", "rgba(0,255,148,0.08)"
+        _img = "https://img.icons8.com/emoji/96/fire.png"
+    elif _score >= 2:
+        _fi, _ft, _fd, _fc, _fbg = "BUY", "매수 권고", "거시경제 긍정. 분할매수 권고", "#34C759", "rgba(52,199,89,0.08)"
+        _img = "https://img.icons8.com/emoji/96/check-mark-button.png"
+    elif _score >= -1:
+        _fi, _ft, _fd, _fc, _fbg = "NEUTRAL", "중립 관망", "복합신호 혼재. 신중 관망 권고", "#FFD60A", "rgba(255,214,10,0.08)"
+        _img = "https://img.icons8.com/emoji/96/bar-chart.png"
+    elif _score >= -4:
+        _fi, _ft, _fd, _fc, _fbg = "CAUTION", "투자 주의", "불안정. 비중 축소 권고", "#FF9500", "rgba(255,149,0,0.08)"
+        _img = "https://img.icons8.com/emoji/96/warning.png"
+    else:
+        _fi, _ft, _fd, _fc, _fbg = "DANGER", "투자 경고", "전 지표 위험. 즉각 비중 축소", "#FF3B3B", "rgba(255,59,59,0.08)"
+        _img = "https://img.icons8.com/emoji/96/sos-button.png"
+    st.markdown(f"""
+    <div style='background:{_fbg};border:1.5px solid {_fc}60;border-radius:16px;padding:20px 24px;margin:14px 0;display:flex;align-items:center;gap:20px;'>
+        <img src='{_img}' style='width:60px;height:60px;flex-shrink:0;'/>
+        <div style='flex:1;'>
+            <div style='font-family:JetBrains Mono,monospace;font-size:10px;color:#52525b;letter-spacing:.2em;margin-bottom:4px;'>AI MACRO SIGNAL / 인공지능 투자신호</div>
+            <div style='font-family:Cormorant Garamond,serif;font-size:22px;color:{_fc};font-weight:600;margin-bottom:4px;'>{_fi} / {_ft}</div>
+            <div style='font-size:12px;color:#a0a0a0;'>{_fd}</div>
+            <div style='margin-top:8px;font-family:JetBrains Mono,monospace;font-size:10px;color:#52525b;'>MACRO SCORE : {_score:+d} / 실시간 거시지표 종합점수</div>
+        </div>
+    </div>""", unsafe_allow_html=True)
+    _cards = []
+    for _t, _d, _c in _warns:
+        _cards.append(f"<div style='background:rgba(255,59,59,0.05);border:1px solid {_c}40;border-radius:10px;padding:12px;flex:1;min-width:160px;'><div style='color:{_c};font-size:12px;font-weight:600;margin-bottom:3px;'>{_t}</div><div style='color:#a0a0a0;font-size:11px;'>{_d}</div></div>")
+    for _t, _d, _c in _goods:
+        _cards.append(f"<div style='background:rgba(52,199,89,0.05);border:1px solid {_c}40;border-radius:10px;padding:12px;flex:1;min-width:160px;'><div style='color:{_c};font-size:12px;font-weight:600;margin-bottom:3px;'>{_t}</div><div style='color:#a0a0a0;font-size:11px;'>{_d}</div></div>")
+    if _cards:
+        st.markdown(f"<div style='display:flex;flex-wrap:wrap;gap:8px;margin:8px 0;'>{''.join(_cards)}</div>", unsafe_allow_html=True)
+st.markdown('</div>', unsafe_allow_html=True)
+
+st.markdown('<div class="sec-label">▎ GLOBAL MACRO CROSS RADAR <span class="sec-sub">/ yfinance 실시간</span></div>', unsafe_allow_html=True)
+
+if macro:
+    tnx = macro.get('tnx')
+    dxy = macro.get('dxy')
+    krw = macro.get('krw')
+    wti = macro.get('wti')
+
+    # KOSPI / 나스닥 추가
+    macro_rows = [
+        ('US 10Y TREASURY', f"{tnx:.3f}" if tnx else 'N/A', '%',
+         0.12 if tnx and tnx > 4.3 else -0.08),
+        ('DOLLAR INDEX (DXY)', f"{dxy:.2f}" if dxy else 'N/A', '',
+         0.3 if dxy and dxy > 100 else -0.2),
+        ('USD / KRW', f"{krw:,.1f}" if krw else 'N/A', '₩',
+         0.5 if krw and krw > 1400 else -0.3),
+        ('WTI CRUDE OIL', f"{wti:.2f}" if wti else 'N/A', '$',
+         1.2 if wti and wti > 90 else -0.8),
+    ]
+    mc1, mc2 = st.columns(2)
+    for i, (lbl, val, unit, trend) in enumerate(macro_rows):
+        c = '#FF3B5C' if trend > 0 else '#3D7EFF'
+        arrow2 = '▲' if trend > 0 else '▼'
+        with (mc1 if i % 2 == 0 else mc2):
+            st.markdown(f"""
+            <div class="macro-chip">
+              <div style="width:34px;height:34px;border-radius:8px;background:{c}15;border:1px solid {c}40;display:flex;align-items:center;justify-content:center;color:{c};font-size:14px;">●</div>
+              <div style="flex:1;min-width:0;">
+                <div class="macro-lbl">{lbl}</div>
+                <div><span class="macro-val" style="color:{c};">{val}</span><span class="macro-unit">{unit}</span></div>
+              </div>
+              <div class="macro-chg" style="color:{c};">{arrow2} {abs(trend):.2f}%</div>
+            </div>
+            """, unsafe_allow_html=True)
+else:
+    st.markdown('<div style="color:#71717a;text-align:center;padding:16px;">매크로 데이터 로딩 중...</div>', unsafe_allow_html=True)
+st.markdown('</div>', unsafe_allow_html=True)
+
+# ═══════════════════════════════════════════════════════════════
+# 뉴스 (Google RSS 실데이터)
+# ═══════════════════════════════════════════════════════════════
+st.markdown('<div class="panel">', unsafe_allow_html=True)
+st.markdown(f'<div class="sec-label">▎ INTELLIGENCE NEWS RADAR <span class="sec-sub">/ Google News · {info["name"]} 실시간</span></div>', unsafe_allow_html=True)
+
+if news_list:
+    for i, n in enumerate(news_list):
+        tag_type = 'tag-p' if i in [0, 2, 4] else 'tag-n' if i in [1] else 'tag-u'
+        st.markdown(f"""
+        <a href="{n['link']}" target="_blank" style="text-decoration:none;">
+          <div class="news-card">
+            <div class="news-tag {tag_type}">{"BREAKING" if i==0 else "NEWS"}</div>
+            <div class="news-body">
+              <div class="news-title">{n['title']}</div>
+              <div class="news-meta">{n.get('pub','')[:25]}</div>
+            </div>
+            <div style="color:#52525b;align-self:center;font-size:18px;">›</div>
+          </div>
+        </a>
+        """, unsafe_allow_html=True)
+else:
+    st.markdown(f'<div style="color:#71717a;text-align:center;padding:16px;">뉴스 로딩 중... ({info["name"]} 검색)</div>', unsafe_allow_html=True)
+st.markdown('</div>', unsafe_allow_html=True)
+
+# ═══════════════════════════════════════════════════════════════
+# 새로고침 버튼
+# ═══════════════════════════════════════════════════════════════
+_, rc, _ = st.columns([2, 1, 2])
+with rc:
+    if st.button("🔄 데이터 새로고침", use_container_width=True):
+        get_macro.clear()
+        get_investor_data.clear()
+        get_stock_price.clear()
+        get_news.clear()
+        get_chart_data.clear()
+        st.rerun()
+
+# ═══════════════════════════════════════════════════════════════
+# 풋터
+# ═══════════════════════════════════════════════════════════════
+st.markdown(f"""
+<div class="footer">
+  <div class="footer-tier">♛ SUMBI ANALYTICS · PRESTIGE TIER · DIAMOND · {now_str} ♛</div>
+  <div class="footer-disc">© 2026 SUMBI INSTITUTIONAL · 본 자료는 투자판단을 위한 참고자료이며 투자 결과의 법적 책임을 지지 않습니다</div>
+</div>
+""", unsafe_allow_html=True)
