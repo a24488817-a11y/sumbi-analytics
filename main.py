@@ -24,11 +24,26 @@ import yfinance as yf
 import FinanceDataReader as fdr
 from dotenv import load_dotenv
 from v3_scorer import calc_sumbi_v3
+from kis_websocket import realtime_data, start_websocket
 
 # ═══════════════════════════════════════════════════════════════
 # 환경 설정
 # ═══════════════════════════════════════════════════════════════
 load_dotenv()
+
+# KIS WebSocket 백그라운드 자동 시작
+import threading as _threading
+def _start_ws():
+    try:
+        from kis_websocket import start_websocket
+        # 코스피 주요 종목 기본 구독
+        default_tickers = ["005930", "000660", "035720", "035420", "051910"]
+        start_websocket(default_tickers)
+    except Exception as e:
+        print(f"WebSocket 시작 오류: {e}")
+
+_ws_thread = _threading.Thread(target=_start_ws, daemon=True)
+_ws_thread.start()
 APP_KEY    = os.environ.get("KIS_APP_KEY")
 APP_SECRET = os.environ.get("KIS_APP_SECRET")
 URL_BASE   = "https://openapi.koreainvestment.com:9443"
@@ -510,7 +525,7 @@ news_list= get_news(info['name'] or ticker)
 
 quant     = calc_quant_score(investor, macro, df_chart)
 sentiment = calc_sentiment(investor, macro, quant)
-v3_result = calc_sumbi_v3(investor, macro, df_chart, info=info, news_list=news_list)
+v3_result = calc_sumbi_v3(investor, macro, df_chart, info=info, news_list=news_list, realtime_data=realtime_data.get(ticker), ticker=ticker)
 v3_bd = v3_result.get("breakdown", {}) if v3_result else {}
 
 # 가격 (KIS 실데이터 우선, 없으면 차트 최근값)

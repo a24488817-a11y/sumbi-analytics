@@ -304,7 +304,30 @@ def calc_broker_score(broker_data):
     return max(0, min(score, 5)), {}
 
 
-def calc_sumbi_v3(investor, macro, df_chart, info=None, news_list=None, short_data=None, sector_data=None, broker_data=None):
+
+def calc_realtime_score(realtime_data):
+    """실시간 체결강도 점수 (10점) - KIS WebSocket"""
+    if not realtime_data:
+        return 5, {}
+    score = 5
+    details = {}
+    strength = realtime_data.get('strength', 100)
+    volume = realtime_data.get('volume', 0)
+    avg_volume = realtime_data.get('avg_volume', 0)
+    if strength > 130: score += 3
+    elif strength > 115: score += 2
+    elif strength > 105: score += 1
+    elif strength < 85: score -= 2
+    elif strength < 75: score -= 3
+    if avg_volume > 0:
+        ratio = volume / avg_volume
+        if ratio > 3: score += 2
+        elif ratio > 2: score += 1
+        elif ratio < 0.3: score -= 1
+    details['체결강도'] = round(strength, 1)
+    return max(0, min(score, 10)), details
+
+def calc_sumbi_v3(investor, macro, df_chart, info=None, news_list=None, short_data=None, sector_data=None, broker_data=None, realtime_data=None, ticker=None):
     """SUMBI V3 종합 점수 (100점)"""
     flow, flow_d = calc_flow_score(investor)
     chart, chart_d = calc_chart_score(df_chart)
@@ -339,5 +362,17 @@ def calc_sumbi_v3(investor, macro, df_chart, info=None, news_list=None, short_da
             'macro': (macro_s, 7, macro_d),
             'sector': (sector, 7, sector_d),
             'broker': (broker, 5, broker_d),
+            'realtime': (realtime, 10, realtime_d),
+            'dart': (dart, 5, dart_d),
+            'dart': (dart, 5, dart_d),
         }
     }
+
+def calc_dart_score_wrapper(ticker):
+    """DART 공시 점수 래퍼 (5점)"""
+    try:
+        from dart_connector import calc_dart_score
+        score, details = calc_dart_score(ticker)
+        return score, details
+    except Exception as e:
+        return 2, {}
