@@ -44,7 +44,7 @@ st.set_page_config(
 # 럭셔리 CSS
 # ═══════════════════════════════════════════════════════════════
 st.markdown("""
-<style>
+<style> * { word-break: keep-all !important; } 
 @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500;700&family=Inter:wght@300;400;500;600;700&display=swap');
 
 /* ── 기본 숨기기 ── */
@@ -81,7 +81,7 @@ st.markdown("""
 }
 .hero-divider {
     text-align: center; font-size: 10px;
-    letter-spacing: 0.3em; color: #52525b; margin: 8px 0 20px;
+    letter-spacing: 0.3em; color: #e0e0e0; margin: 8px 0 20px;
 }
 
 /* ── 상단 바 ── */
@@ -93,8 +93,8 @@ st.markdown("""
 .topbar-brand { display: flex; align-items: center; gap: 8px; }
 .topbar-crown { color: #D9A147; font-size: 18px; filter: drop-shadow(0 0 8px rgba(217,161,71,0.6)); }
 .topbar-label { font-size: 8px; letter-spacing: 0.4em; color: rgba(180,120,30,0.8); }
-.topbar-ver { font-size: 9px; letter-spacing: 0.25em; color: #71717a; margin-top: -2px; }
-.topbar-right { display: flex; gap: 10px; font-size: 10px; color: #a1a1aa; align-items: center; }
+.topbar-ver { font-size: 9px; letter-spacing: 0.25em; color: #e0e0e0; margin-top: -2px; }
+.topbar-right { display: flex; gap: 10px; font-size: 10px; color: #e0e0e0; align-items: center; }
 .live-dot {
     display: inline-block; width: 7px; height: 7px; border-radius: 50%;
     background: #10b981; box-shadow: 0 0 8px #10b981;
@@ -119,12 +119,12 @@ st.markdown("""
 }
 .sec-label::before { content:''; width:20px; height:1px; background:linear-gradient(90deg,transparent,#D9A147); }
 .sec-label::after  { content:''; flex:1; height:1px; background:linear-gradient(90deg,rgba(217,161,71,.3),transparent); }
-.sec-sub { font-size:10px; color:#71717a; letter-spacing:normal; font-weight:normal; }
+.sec-sub { font-size:14px; color:#d0d0d0; letter-spacing:normal; font-weight:normal; }
 
 /* ── 종목 헤더 ── */
-.stock-meta { font-size:10px; letter-spacing:.25em; color:rgba(180,120,30,.8); font-family:'JetBrains Mono',monospace; }
+.stock-meta { font-size:14px; letter-spacing:.25em; color:rgba(220,160,40,1); font-family:'JetBrains Mono',monospace; }
 .stock-name { font-family:'Cormorant Garamond',serif; font-size:clamp(1.6rem,5vw,2.4rem); font-weight:300; color:#fafafa; line-height:1.1; }
-.stock-en   { font-size:11px; color:#71717a; font-style:italic; }
+.stock-en   { font-size:15px; color:#d0d0d0; font-style:italic; }
 .stock-price{ font-family:'JetBrains Mono',monospace; font-size:clamp(1.8rem,6vw,2.8rem); font-weight:300; text-align:right; line-height:1; }
 .change-pill{
     display:inline-block; padding:3px 10px; border-radius:6px;
@@ -133,7 +133,7 @@ st.markdown("""
 
 /* ── 미니 메트릭 ── */
 .mini-box { text-align:center; padding:8px 4px; }
-.mini-lbl { font-size:9px; letter-spacing:.2em; color:#71717a; margin-bottom:3px; }
+.mini-lbl { font-size:13px; letter-spacing:.2em; color:#d0d0d0; margin-bottom:3px; }
 .mini-val { font-family:'JetBrains Mono',monospace; font-size:13px; color:#e4e4e7; }
 
 /* ── 주체별 카드 ── */
@@ -142,8 +142,8 @@ st.markdown("""
     border:1px solid rgba(63,63,70,.8);
     border-radius:12px; padding:15px; position:relative; overflow:hidden;
 }
-.flow-lbl { font-size:10px; letter-spacing:.25em; color:#a1a1aa; font-weight:600; margin-bottom:3px; }
-.flow-sub { font-size:10px; color:#71717a; margin-bottom:8px; }
+.flow-lbl { font-size:14px; letter-spacing:.25em; color:#c0c0c0; font-weight:600; margin-bottom:3px; }
+.flow-sub { font-size:14px; color:#d0d0d0; margin-bottom:8px; }
 .flow-val { font-family:'JetBrains Mono',monospace; font-size:clamp(1.2rem,4vw,1.8rem); font-weight:300; }
 .flow-bar-wrap{ margin-top:10px; height:3px; background:rgba(63,63,70,.5); border-radius:2px; overflow:hidden; }
 
@@ -154,10 +154,10 @@ st.markdown("""
     border:1px solid rgba(63,63,70,.8); background:rgba(9,9,11,.5);
     margin-bottom:8px;
 }
-.macro-lbl { font-size:9px; letter-spacing:.2em; color:#71717a; }
+.macro-lbl { font-size:13px; letter-spacing:.2em; color:#d0d0d0; }
 .macro-val { font-family:'JetBrains Mono',monospace; font-size:17px; font-weight:300; }
-.macro-unit{ font-size:10px; color:#52525b; margin-left:3px; }
-.macro-chg { font-family:'JetBrains Mono',monospace; font-size:10px; }
+.macro-unit{ font-size:14px; color:#c8c8c8; margin-left:3px; }
+.macro-chg { font-family:'JetBrains Mono',monospace; font-size:14px; }
 
 /* ── 뉴스 ── */
 .news-card {
@@ -166,7 +166,7 @@ st.markdown("""
     display:flex; gap:10px; align-items:flex-start;
 }
 .news-tag {
-    padding:2px 7px; border-radius:4px; font-size:9px;
+    padding:2px 7px; border-radius:4px; font-size:13px;
     letter-spacing:.1em; font-weight:bold;
     font-family:'JetBrains Mono',monospace; white-space:nowrap; flex-shrink:0;
 }
@@ -174,12 +174,12 @@ st.markdown("""
 .tag-n { background:rgba(61,126,255,.15); color:#3D7EFF; border:1px solid rgba(61,126,255,.4); }
 .tag-u { background:rgba(217,161,71,.15); color:#D9A147; border:1px solid rgba(217,161,71,.4); }
 .news-body  { flex:1; min-width:0; }
-.news-title { font-size:13px; color:#d4d4d8; line-height:1.4; }
-.news-meta  { font-size:10px; color:#71717a; margin-top:3px; }
+.news-title { font-size:13px; color:#e0e0e0; line-height:1.4; }
+.news-meta  { font-size:14px; color:#d0d0d0; margin-top:3px; }
 
 /* ── 섹터 ── */
 .sec-cell { border-radius:8px; padding:10px; text-align:center; border:1px solid; margin-bottom:7px; }
-.sec-nm { font-size:11px; color:#d4d4d8; margin-bottom:3px; }
+.sec-nm { font-size:15px; color:#e0e0e0; margin-bottom:3px; }
 .sec-pc { font-family:'JetBrains Mono',monospace; font-size:15px; font-weight:300; }
 
 /* ── 입력창 ── */
@@ -211,8 +211,8 @@ st.markdown("""
     text-align:center; padding:20px 0;
     border-top:1px solid rgba(180,120,30,.2); margin-top:20px;
 }
-.footer-tier { font-size:10px; letter-spacing:.4em; color:rgba(180,120,30,.7); font-family:'JetBrains Mono',monospace; }
-.footer-disc { font-size:9px; color:#52525b; margin-top:6px; }
+.footer-tier { font-size:14px; letter-spacing:.4em; color:rgba(220,160,40,1); font-family:'JetBrains Mono',monospace; }
+.footer-disc { font-size:13px; color:#c8c8c8; margin-top:6px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -220,7 +220,7 @@ st.markdown("""
 # 헬퍼 함수
 # ═══════════════════════════════════════════════════════════════
 def color_for(v):
-    return '#FF3B5C' if v > 0 else '#3D7EFF' if v < 0 else '#9CA3AF'
+    return '#FF3B5C' if v > 0 else '#3D7EFF' if v < 0 else '#e0e0e0'
 
 def fmt(n):
     return f"{int(n):,}"
@@ -452,10 +452,10 @@ st.markdown(f"""
     <span class="topbar-crown">♛</span>
     <div>
       <div class="topbar-label">SUMBI</div>
-      <div class="topbar-ver">PRESTIGE TERMINAL v6.0</div>
-    </div>
+<div class="topbar-ver">PRESTIGE TERMINAL v6.0</div>
+</div>
   </div>
-  <div class="topbar-right">
+<div class="topbar-right">
     <span>🔒 KIS API CONNECTED</span>
     <span><span class="live-dot"></span>LIVE</span>
     <span style="color:#e4e4e7;">{now_str}</span>
@@ -485,7 +485,7 @@ with col_in:
                           label_visibility="collapsed",
                           placeholder="042660 · 한화오션 · 삼성전자 · SK하이닉스")
 with col_btn:
-    if st.button("⚡ LAUNCH DEEP SCAN"):
+    if st.button("⚡ LAUNCH DEEP SCAN (딥스캔 시작)"):
         q = query.strip()
         code = get_stock_code(q)
         st.session_state.ticker = code
@@ -553,26 +553,26 @@ st.markdown(f"""
   <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px;">
     <div>
       <div class="stock-meta">{info['market']} · {info['sector']} · {ticker}</div>
-      <div class="stock-name">{info['name']}</div>
-    </div>
-    <div style="text-align:right;">
+<div class="stock-name">{info['name']}</div>
+</div>
+<div style="text-align:right;">
       <div class="stock-price" style="color:{pc};">₩{fmt(cur_price)}</div>
-      <div style="margin-top:4px;display:flex;align-items:center;justify-content:flex-end;gap:8px;">
+<div style="margin-top:4px;display:flex;align-items:center;justify-content:flex-end;gap:8px;">
         <span style="color:{pc};font-family:'JetBrains Mono';font-size:14px;">{fmt_signed(change)}</span>
         <span class="change-pill" style="background:{pc}20;color:{pc};border:1px solid {pc}40;">
           {arrow} {abs(change_pct):.2f}%
         </span>
       </div>
-    </div>
+</div>
   </div>
-  <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:6px;margin-top:14px;padding-top:14px;border-top:1px solid rgba(63,63,70,.6);">
+<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:6px;margin-top:14px;padding-top:14px;border-top:1px solid rgba(63,63,70,.6);">
     <div class="mini-box"><div class="mini-lbl">시가</div><div class="mini-val">{fmt(open_p)}</div></div>
-    <div class="mini-box"><div class="mini-lbl">고가</div><div class="mini-val" style="color:#FF3B5C;">{fmt(high_p)}</div></div>
-    <div class="mini-box"><div class="mini-lbl">저가</div><div class="mini-val" style="color:#3D7EFF;">{fmt(low_p)}</div></div>
-    <div class="mini-box"><div class="mini-lbl">거래량</div><div class="mini-val">{fmt(vol)}</div></div>
-    <div class="mini-box"><div class="mini-lbl">PER</div><div class="mini-val">{per}</div></div>
-    <div class="mini-box"><div class="mini-lbl">시총(억)</div><div class="mini-val">{cap}</div></div>
-  </div>
+<div class="mini-box"><div class="mini-lbl">고가</div><div class="mini-val" style="color:#FF3B5C;">{fmt(high_p)}</div></div>
+<div class="mini-box"><div class="mini-lbl">저가</div><div class="mini-val" style="color:#3D7EFF;">{fmt(low_p)}</div></div>
+<div class="mini-box"><div class="mini-lbl">거래량</div><div class="mini-val">{fmt(vol)}</div></div>
+<div class="mini-box"><div class="mini-lbl">PER</div><div class="mini-val">{per}</div></div>
+<div class="mini-box"><div class="mini-lbl">시총(억)</div><div class="mini-val">{cap}</div></div>
+</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -585,7 +585,7 @@ def make_gauge(value, max_v, label, color, grade_labels=None):
         value=value,
         number={'font': {'size': 44, 'color': color, 'family': 'JetBrains Mono'}, 'valueformat': '.0f'},
         gauge={
-            'axis': {'range': [0, max_v], 'tickwidth': 0, 'tickcolor': '#52525b'},
+            'axis': {'range': [0, max_v], 'tickwidth': 0, 'tickcolor': '#e0e0e0'},
             'bar':  {'color': color, 'thickness': 0.28},
             'bgcolor': 'rgba(0,0,0,0)',
             'borderwidth': 0,
@@ -628,22 +628,22 @@ if v3_result:
     st.markdown("<div class='panel'>", unsafe_allow_html=True)
     st.markdown(f"<div class='sec-label'>| SUMBI PRESTIGE SCORE V3 / 100pts</div>", unsafe_allow_html=True)
     st.markdown(f"<div style='text-align:center;padding:20px;border:2px solid {gc};border-radius:16px;margin:12px 0;'><div style='font-size:48px;font-weight:700;color:{gc};'>{v3_tot}</div><div style='color:#aaa;'>/100 {v3_grd} {v3_lbl}</div></div>", unsafe_allow_html=True)
-    labels = [("flow","Money Flow",25),("chart","Chart Tech",25),("fundamental","Fundamental",13),("news","News Momentum",10),("short","Short Signal",8),("macro","Macro Env",7),("sector","Sector Theme",7),("broker","Broker Flow",5)]
+    labels = [("flow","Money Flow (자금 흐름)",25),("chart","Chart Tech (차트 기술)",25),("fundamental","Fundamental (펀더멘탈)",13),("news","News Momentum (뉴스 모멘텀)",10),("short","Short Signal (공매도 신호)",8),("macro","Macro Env (거시 환경)",7),("sector","Sector Theme (섹터 테마)",7),("broker","Broker Flow (브로커 흐름)",5)]
     rows = []
     for key, eng, max_s in labels:
         val, mx, _ = v3_bd.get(key, (0, max_s, {}))
         pct = int(val / mx * 100) if mx > 0 else 0
         bar_c = "#34C759" if pct >= 70 else "#FFD60A" if pct >= 40 else "#FF3B3B"
-        rows.append(f"<div style='background:rgba(255,255,255,0.03);border:1px solid #2a2a2a;border-radius:12px;padding:12px 16px;'><div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;'><span style='font-size:13px;color:#e0e0e0;'>{eng}</span><span style='font-family:JetBrains Mono,monospace;font-size:14px;color:{bar_c};font-weight:700;'>{val}<span style='color:#52525b;font-size:10px;'>/{mx}</span></span></div><div style='background:#1a1a1a;border-radius:4px;height:6px;'><div style='background:{bar_c};width:{pct}%;height:6px;border-radius:4px;'></div></div></div>")
+        rows.append(f"<div style='background:rgba(255,255,255,0.03);border:1px solid #2a2a2a;border-radius:12px;padding:12px 16px;'><div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;'><span style='font-size:13px;color:#e0e0e0;'>{eng}</span><span style='font-family:JetBrains Mono,monospace;font-size:14px;color:{bar_c};font-weight:700;'>{val}<span style='color:#c8c8c8;font-size:14px;'>/{mx}</span></span></div><div style='background:#1a1a1a;border-radius:4px;height:6px;'><div style='background:{bar_c};width:{pct}%;height:6px;border-radius:4px;'></div></div></div>")
     st.markdown(f"<div style='display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:8px 0;'>{''.join(rows)}</div>", unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
     st.markdown('<div class="sec-label">▎ QUANT FLOW MATRIX <span class="sec-sub">/ 실데이터 기반 연산</span></div>', unsafe_allow_html=True)
     gc = '#FF3B5C' if quant >= 30 else '#D9A147' if quant >= 20 else '#3D7EFF'
     grade = 'S+' if quant >= 35 else 'S' if quant >= 30 else 'A+' if quant >= 25 else 'A' if quant >= 20 else 'B' if quant >= 15 else 'C'
-    st.plotly_chart(make_gauge(quant, 40, 'QUANT', gc), use_container_width=True, config={'displayModeBar': False})
+    st.plotly_chart(make_gauge(quant, 40, 'QUANT', gc), width="stretch", config={'displayModeBar': False})
     st.markdown(f"""
     <div style="text-align:center;margin-top:-16px;">
-      <span style="background:{gc}20;color:{gc};border:1px solid {gc}40;padding:3px 12px;border-radius:4px;font-size:11px;font-weight:700;font-family:'JetBrains Mono',monospace;letter-spacing:.2em;">
+      <span style="background:{gc}20;color:{gc};border:1px solid {gc}40;padding:3px 12px;border-radius:4px;font-size:15px;font-weight:700;font-family:'JetBrains Mono',monospace;letter-spacing:.2em;">
         GRADE {grade} · {quant}/40
       </span>
     </div>
@@ -651,7 +651,7 @@ if v3_result:
     if macro:
         krw = macro.get('krw')
         if krw and krw > 1400:
-            st.markdown('<div style="text-align:center;margin-top:8px;color:#FF3B5C;font-size:10px;letter-spacing:.15em;">⚠ MACRO SHOCK PENALTY · 원화 약세 감산</div>', unsafe_allow_html=True)
+            st.markdown('<div style="text-align:center;margin-top:8px;color:#FF3B5C;font-size:14px;letter-spacing:.15em;">⚠ MACRO SHOCK PENALTY · 원화 약세 감산</div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
 with g_col2:
@@ -659,10 +659,10 @@ with g_col2:
     st.markdown('<div class="sec-label">▎ AI SENTIMENT ENGINE <span class="sec-sub">/ 실데이터 기반 심리 분석</span></div>', unsafe_allow_html=True)
     sc = '#FF3B5C' if sentiment >= 65 else '#D9A147' if sentiment >= 40 else '#3D7EFF'
     s_lbl = 'EXTREME GREED' if sentiment >= 80 else 'GREED' if sentiment >= 60 else 'NEUTRAL' if sentiment >= 40 else 'FEAR' if sentiment >= 20 else 'EXTREME FEAR'
-    st.plotly_chart(make_gauge(sentiment, 100, 'SENTIMENT', sc), use_container_width=True, config={'displayModeBar': False})
+    st.plotly_chart(make_gauge(sentiment, 100, 'SENTIMENT', sc), width="stretch", config={'displayModeBar': False})
     st.markdown(f"""
     <div style="text-align:center;margin-top:-16px;">
-      <span style="background:{sc}20;color:{sc};border:1px solid {sc}40;padding:3px 12px;border-radius:4px;font-size:11px;font-weight:700;font-family:'JetBrains Mono',monospace;letter-spacing:.15em;">
+      <span style="background:{sc}20;color:{sc};border:1px solid {sc}40;padding:3px 12px;border-radius:4px;font-size:15px;font-weight:700;font-family:'JetBrains Mono',monospace;letter-spacing:.15em;">
         {s_lbl}
       </span>
     </div>
@@ -672,13 +672,13 @@ with g_col2:
     sig_c = '#FF3B5C' if 'BUY' in sig_s else '#D9A147' if sig_s == 'HOLD' else '#3D7EFF'
     st.markdown(f"""
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:10px;padding-top:10px;border-top:1px solid rgba(63,63,70,.6);">
-      <div style="text-align:center;"><div style="font-size:9px;color:#71717a;letter-spacing:.15em;">단기 1D</div>
-        <div style="font-size:12px;font-weight:700;color:{sig_c};margin-top:3px;">{sig_s}</div></div>
-      <div style="text-align:center;"><div style="font-size:9px;color:#71717a;letter-spacing:.15em;">중기 1W</div>
-        <div style="font-size:12px;font-weight:700;color:#D9A147;margin-top:3px;">{sig_m}</div></div>
-      <div style="text-align:center;"><div style="font-size:9px;color:#71717a;letter-spacing:.15em;">장기 3M</div>
-        <div style="font-size:12px;font-weight:700;color:#D9A147;margin-top:3px;">ACCUMULATE</div></div>
-    </div>
+      <div style="text-align:center;"><div style="font-size:13px;color:#d0d0d0;letter-spacing:.15em;">단기 1D</div>
+<div style="font-size:12px;font-weight:700;color:{sig_c};margin-top:3px;">{sig_s}</div></div>
+<div style="text-align:center;"><div style="font-size:13px;color:#d0d0d0;letter-spacing:.15em;">중기 1W</div>
+<div style="font-size:12px;font-weight:700;color:#D9A147;margin-top:3px;">{sig_m}</div></div>
+<div style="text-align:center;"><div style="font-size:13px;color:#d0d0d0;letter-spacing:.15em;">장기 3M</div>
+<div style="font-size:12px;font-weight:700;color:#D9A147;margin-top:3px;">ACCUMULATE</div></div>
+</div>
     """, unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -703,19 +703,19 @@ if investor:
             st.markdown(f"""
             <div class="flow-card">
               <div style="position:absolute;inset:0;background:radial-gradient(circle at top right,{c}25,transparent 60%);pointer-events:none;"></div>
-              <div class="flow-lbl">{lbl}</div>
-              <div class="flow-sub">{sub}</div>
-              <div class="flow-val" style="color:{c};">{fmt_signed(val)}</div>
-              <div class="flow-bar-wrap">
+<div class="flow-lbl">{lbl}</div>
+<div class="flow-sub">{sub}</div>
+<div class="flow-val" style="color:{c};">{fmt_signed(val)}</div>
+<div class="flow-bar-wrap">
                 <div style="height:100%;width:{pct}%;background:linear-gradient(90deg,{c}40,{c});box-shadow:0 0 8px {c}80;"></div>
-              </div>
+</div>
             </div>
             """, unsafe_allow_html=True)
 else:
     st.markdown("""
-    <div style="text-align:center;padding:20px;color:#71717a;font-size:13px;">
+    <div style="text-align:center;padding:20px;color:#d0d0d0;font-size:13px;">
       ⚠ KIS API 연결 중... 잠시 후 다시 시도하세요.<br>
-      <span style="font-size:11px;">(장 마감 후에는 당일 최종 데이터 표시)</span>
+      <span style="font-size:15px;">(장 마감 후에는 당일 최종 데이터 표시)</span>
     </div>
     """, unsafe_allow_html=True)
 st.markdown('</div>', unsafe_allow_html=True)
@@ -754,11 +754,11 @@ if df_chart is not None and not df_chart.empty:
         height=400,
         margin=dict(l=0, r=0, t=30, b=0),
         xaxis_rangeslider_visible=False,
-        legend=dict(orientation='h', yanchor='bottom', y=1.02, font=dict(size=11, color='#a1a1aa')),
-        xaxis=dict(gridcolor='rgba(63,63,70,.3)', tickfont=dict(size=10, color='#71717a')),
-        yaxis=dict(gridcolor='rgba(63,63,70,.3)', tickfont=dict(size=10, color='#71717a'), tickformat=','),
+        legend=dict(orientation='h', yanchor='bottom', y=1.02, font=dict(size=11, color='#e0e0e0')),
+        xaxis=dict(gridcolor='rgba(63,63,70,.3)', tickfont=dict(size=10, color='#e0e0e0')),
+        yaxis=dict(gridcolor='rgba(63,63,70,.3)', tickfont=dict(size=10, color='#e0e0e0'), tickformat=','),
     )
-    st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+    st.plotly_chart(fig, width="stretch", config={'displayModeBar': False})
 
     # 거래량
     if 'Volume' in df_chart.columns:
@@ -768,12 +768,12 @@ if df_chart is not None and not df_chart.empty:
         fig_v.update_layout(
             paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
             height=90, margin=dict(l=0, r=0, t=0, b=20),
-            xaxis=dict(showgrid=False, tickfont=dict(size=9, color='#71717a')),
+            xaxis=dict(showgrid=False, tickfont=dict(size=9, color='#e0e0e0')),
             yaxis=dict(showgrid=False, showticklabels=False),
         )
-        st.plotly_chart(fig_v, use_container_width=True, config={'displayModeBar': False})
+        st.plotly_chart(fig_v, width="stretch", config={'displayModeBar': False})
 else:
-    st.markdown('<div style="text-align:center;padding:30px;color:#71717a;">차트 데이터 로딩 중...</div>', unsafe_allow_html=True)
+    st.markdown('<div style="text-align:center;padding:30px;color:#d0d0d0;">차트 데이터 로딩 중...</div>', unsafe_allow_html=True)
 st.markdown('</div>', unsafe_allow_html=True)
 
 # ═══════════════════════════════════════════════════════════════
@@ -828,19 +828,18 @@ if macro:
         _img = "https://img.icons8.com/emoji/96/sos-button.png"
     st.markdown(f"""
     <div style='background:{_fbg};border:1.5px solid {_fc}60;border-radius:16px;padding:20px 24px;margin:14px 0;display:flex;align-items:center;gap:20px;'>
-        <img src='{_img}' style='width:60px;height:60px;flex-shrink:0;'/>
-        <div style='flex:1;'>
-            <div style='font-family:JetBrains Mono,monospace;font-size:10px;color:#52525b;letter-spacing:.2em;margin-bottom:4px;'>AI MACRO SIGNAL / 인공지능 투자신호</div>
-            <div style='font-family:Cormorant Garamond,serif;font-size:22px;color:{_fc};font-weight:600;margin-bottom:4px;'>{_fi} / {_ft}</div>
-            <div style='font-size:12px;color:#a0a0a0;'>{_fd}</div>
-            <div style='margin-top:8px;font-family:JetBrains Mono,monospace;font-size:10px;color:#52525b;'>MACRO SCORE : {_score:+d} / 실시간 거시지표 종합점수</div>
-        </div>
+<div style='flex:1;'>
+<div style='font-family:JetBrains Mono,monospace;font-size:14px;color:#c8c8c8;letter-spacing:.2em;margin-bottom:4px;'>AI MACRO SIGNAL / 인공지능 투자신호</div>
+<div style='font-family:Cormorant Garamond,serif;font-size:22px;color:{_fc};font-weight:600;margin-bottom:4px;'>{_fi} / {_ft}</div>
+<div style='font-size:12px;color:#c8c8c8;'>{_fd}</div>
+<div style='margin-top:8px;font-family:JetBrains Mono,monospace;font-size:14px;color:#c8c8c8;'>MACRO SCORE : {_score:+d} / 실시간 거시지표 종합점수</div>
+</div>
     </div>""", unsafe_allow_html=True)
     _cards = []
     for _t, _d, _c in _warns:
-        _cards.append(f"<div style='background:rgba(255,59,59,0.05);border:1px solid {_c}40;border-radius:10px;padding:12px;flex:1;min-width:160px;'><div style='color:{_c};font-size:12px;font-weight:600;margin-bottom:3px;'>{_t}</div><div style='color:#a0a0a0;font-size:11px;'>{_d}</div></div>")
+        _cards.append(f"<div style='background:rgba(255,59,59,0.05);border:1px solid {_c}40;border-radius:10px;padding:12px;flex:1;min-width:160px;'><div style='color:{_c};font-size:12px;font-weight:600;margin-bottom:3px;'>{_t}</div><div style='color:#c8c8c8;font-size:15px;'>{_d}</div></div>")
     for _t, _d, _c in _goods:
-        _cards.append(f"<div style='background:rgba(52,199,89,0.05);border:1px solid {_c}40;border-radius:10px;padding:12px;flex:1;min-width:160px;'><div style='color:{_c};font-size:12px;font-weight:600;margin-bottom:3px;'>{_t}</div><div style='color:#a0a0a0;font-size:11px;'>{_d}</div></div>")
+        _cards.append(f"<div style='background:rgba(52,199,89,0.05);border:1px solid {_c}40;border-radius:10px;padding:12px;flex:1;min-width:160px;'><div style='color:{_c};font-size:12px;font-weight:600;margin-bottom:3px;'>{_t}</div><div style='color:#c8c8c8;font-size:15px;'>{_d}</div></div>")
     if _cards:
         st.markdown(f"<div style='display:flex;flex-wrap:wrap;gap:8px;margin:8px 0;'>{''.join(_cards)}</div>", unsafe_allow_html=True)
 st.markdown('</div>', unsafe_allow_html=True)
@@ -855,13 +854,13 @@ if macro:
 
     # KOSPI / 나스닥 추가
     macro_rows = [
-        ('US 10Y TREASURY', f"{tnx:.3f}" if tnx else 'N/A', '%',
+        ('US 10Y TREASURY (미 10년물 국채)', f"{tnx:.3f}" if tnx else 'N/A', '%',
          0.12 if tnx and tnx > 4.3 else -0.08),
-        ('DOLLAR INDEX (DXY)', f"{dxy:.2f}" if dxy else 'N/A', '',
+        ('DOLLAR INDEX (달러 인덱스)', f"{dxy:.2f}" if dxy else 'N/A', '',
          0.3 if dxy and dxy > 100 else -0.2),
-        ('USD / KRW', f"{krw:,.1f}" if krw else 'N/A', '₩',
+        ('USD / KRW (원/달러 환율)', f"{krw:,.1f}" if krw else 'N/A', '₩',
          0.5 if krw and krw > 1400 else -0.3),
-        ('WTI CRUDE OIL', f"{wti:.2f}" if wti else 'N/A', '$',
+        ('WTI CRUDE OIL (WTI 원유)', f"{wti:.2f}" if wti else 'N/A', '$',
          1.2 if wti and wti > 90 else -0.8),
     ]
     mc1, mc2 = st.columns(2)
@@ -872,15 +871,15 @@ if macro:
             st.markdown(f"""
             <div class="macro-chip">
               <div style="width:34px;height:34px;border-radius:8px;background:{c}15;border:1px solid {c}40;display:flex;align-items:center;justify-content:center;color:{c};font-size:14px;">●</div>
-              <div style="flex:1;min-width:0;">
+<div style="flex:1;min-width:0;">
                 <div class="macro-lbl">{lbl}</div>
-                <div><span class="macro-val" style="color:{c};">{val}</span><span class="macro-unit">{unit}</span></div>
-              </div>
-              <div class="macro-chg" style="color:{c};">{arrow2} {abs(trend):.2f}%</div>
-            </div>
+<div><span class="macro-val" style="color:{c};">{val}</span><span class="macro-unit">{unit}</span></div>
+</div>
+<div class="macro-chg" style="color:{c};">{arrow2} {abs(trend):.2f}%</div>
+</div>
             """, unsafe_allow_html=True)
 else:
-    st.markdown('<div style="color:#71717a;text-align:center;padding:16px;">매크로 데이터 로딩 중...</div>', unsafe_allow_html=True)
+    st.markdown('<div style="color:#d0d0d0;text-align:center;padding:16px;">매크로 데이터 로딩 중...</div>', unsafe_allow_html=True)
 st.markdown('</div>', unsafe_allow_html=True)
 
 # ═══════════════════════════════════════════════════════════════
@@ -896,16 +895,16 @@ if news_list:
         <a href="{n['link']}" target="_blank" style="text-decoration:none;">
           <div class="news-card">
             <div class="news-tag {tag_type}">{"BREAKING" if i==0 else "NEWS"}</div>
-            <div class="news-body">
+<div class="news-body">
               <div class="news-title">{n['title']}</div>
-              <div class="news-meta">{n.get('pub','')[:25]}</div>
-            </div>
-            <div style="color:#52525b;align-self:center;font-size:18px;">›</div>
-          </div>
+<div class="news-meta">{n.get('pub','')[:25]}</div>
+</div>
+<div style="color:#c8c8c8;align-self:center;font-size:18px;">›</div>
+</div>
         </a>
         """, unsafe_allow_html=True)
 else:
-    st.markdown(f'<div style="color:#71717a;text-align:center;padding:16px;">뉴스 로딩 중... ({info["name"]} 검색)</div>', unsafe_allow_html=True)
+    st.markdown(f'<div style="color:#d0d0d0;text-align:center;padding:16px;">뉴스 로딩 중... ({info["name"]} 검색)</div>', unsafe_allow_html=True)
 st.markdown('</div>', unsafe_allow_html=True)
 
 # ═══════════════════════════════════════════════════════════════
@@ -913,7 +912,7 @@ st.markdown('</div>', unsafe_allow_html=True)
 # ═══════════════════════════════════════════════════════════════
 _, rc, _ = st.columns([2, 1, 2])
 with rc:
-    if st.button("🔄 데이터 새로고침", use_container_width=True):
+    if st.button("🔄 데이터 새로고침", width="stretch"):
         get_macro.clear()
         get_investor_data.clear()
         get_stock_price.clear()
@@ -927,6 +926,6 @@ with rc:
 st.markdown(f"""
 <div class="footer">
   <div class="footer-tier">♛ SUMBI ANALYTICS · PRESTIGE TIER · DIAMOND · {now_str} ♛</div>
-  <div class="footer-disc">© 2026 SUMBI INSTITUTIONAL · 본 자료는 투자판단을 위한 참고자료이며 투자 결과의 법적 책임을 지지 않습니다</div>
+<div class="footer-disc">© 2026 SUMBI INSTITUTIONAL · 본 자료는 투자판단을 위한 참고자료이며 투자 결과의 법적 책임을 지지 않습니다</div>
 </div>
 """, unsafe_allow_html=True)
