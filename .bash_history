@@ -1,136 +1,3 @@
-start_idx = -1
-end_idx = -1
-for i, line in enumerate(lines):
-    if "SUMBI V3 PRESTIGE ENGINE" in line:
-        start_idx = i - 1
-    if "st.error(f\"V3 System Error:" in line and start_idx != -1:
-        end_idx = i + 1
-        break
-
-if start_idx != -1 and end_idx != -1:
-    del lines[start_idx:end_idx]
-
-# 3. 고급 영/한 병기 + 대형 폰트 V3 UI 생성 (인코딩 안전 유니코드 사용)
-v3_upgraded = """
-# ================================================================
-# SUMBI V3 PRESTIGE ENGINE & UI (BILINGUAL & LARGE FONT)
-# ================================================================
-try:
-    from v3_scorer import calc_sumbi_v3
-    def get_short_data_mock(): return {'short_ratio': 2.5, 'loan_change': -5.0}
-    def get_sector_data_mock(): return {'relative_strength': 0.03, 'foreign_flow': 1500}
-    def get_broker_data_mock(): return {'foreign_buy': 2, 'top_buy_consensus': 3}
-    
-    v3_result = calc_sumbi_v3(investor=investor, macro=macro, df_chart=df_chart, info=info, news_list=news_list, short_data=get_short_data_mock(), sector_data=get_sector_data_mock(), broker_data=get_broker_data_mock())
-    v3_tot, v3_grd, v3_lbl, v3_brk = v3_result["total"], v3_result["grade"], v3_result["grade_label"], v3_result["breakdown"]
-    
-    g_colors = {"S+": "#00FF94", "S": "#34C759", "A+": "#FFD60A", "A": "#FFD60A", "B": "#FF9500", "C": "#FF6B35", "D": "#FF3B3B"}
-    g_icons = {"S+": "&#128293;", "S": "&#9989;", "A+": "&#11088;", "A": "&#11088;", "B": "&#128202;", "C": "&#9888;&#65039;", "D": "&#128680;"}
-    vc, vi = g_colors.get(v3_grd, "#FFD60A"), g_icons.get(v3_grd, "&#128202;")
-    
-    st.markdown("<div class='panel' style='margin-bottom:24px;'><div class='sec-label' style='font-size:18px;'>| SUMBI SCORE V3 <span class='sec-sub' style='font-size:14px;'>/ 8 Items 100pts</span></div>", unsafe_allow_html=True)
-    st.markdown(f'<div style="background:rgba(0,0,0,0.4);border:2px solid {vc}60;border-radius:20px;padding:28px;margin:12px 0;display:flex;align-items:center;gap:20px;"><div style="font-size:55px;">{vi}</div><div style="flex:1;"><div style="font-family:JetBrains Mono,monospace;font-size:13px;color:#52525b;letter-spacing:.1em;">SUMBI PRESTIGE SCORE V3 / \uc228\ube44 \uc885\ud569 \ud22c\uc790 \uc810\uc218</div><div style="display:flex;align-items:baseline;gap:12px;margin:8px 0;"><span style="font-family:Cormorant Garamond,serif;font-size:60px;color:{vc};font-weight:700;line-height:1;">{v3_tot}</span><span style="font-size:22px;color:#52525b;">/ 100</span><span style="background:{vc}20;border:1px solid {vc}60;border-radius:8px;padding:6px 14px;font-family:JetBrains Mono,monospace;font-size:18px;color:{vc};font-weight:700;">{v3_grd}</span></div><div style="font-size:16px;color:#a0a0a0;letter-spacing:.05em;font-weight:600;">{v3_lbl}</div></div></div>', unsafe_allow_html=True)
-    
-    v3_labels = [("flow", "&#128176; Money Flow | \uba54\uc774\uc800 \uc218\uae09", 25), ("chart", "&#128200; Chart Tech | \ucc28\ud2b8\u00b7\uae30\uc220\uc801", 25), ("fundamental", "&#127970; Fundamental | \uae30\uc5c5 \ud380\ub354\uba58\ud138", 13), ("news", "&#128240; News Momentum | \ub274\uc2a4 \ubaa8\uba58\ud140", 10), ("short", "&#128616; Short Signal | \uacf5\ub9e4\ub3c4 \uc2e0\ud638", 8), ("macro", "&#127757; Macro Env | \ub9e4\ud06c\ub85c \ud658\uacbd", 7), ("sector", "&#127912; Sector Theme | \uc139\ud130\u00b7\ud14c\ub9c8", 7), ("broker", "&#9889; Broker Flow | \uac70\ub798\uc6d0 \ubd84\uc11d", 5)]
-    r_html = []
-    for key, name, max_s in v3_labels:
-        val, mx, _ = v3_brk.get(key, (0, max_s, {}))
-        pct = int(val/mx*100) if mx>0 else 0
-        bar_c = "#34C759" if pct >= 70 else "#FFD60A" if pct >= 40 else "#FF3B3B"
-        r_html.append(f'<div style="background:rgba(255,255,255,0.03);border:1px solid #2a2a2a;border-radius:12px;padding:16px;"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;"><span style="font-size:15px;color:#e0e0e0;font-weight:600;">{name}</span><span style="font-family:JetBrains Mono,monospace;font-size:18px;color:{bar_c};font-weight:700;">{val}<span style="color:#52525b;font-size:14px;">/{mx}</span></span></div><div style="background:#1a1a1a;border-radius:6px;height:10px;"><div style="background:{bar_c};width:{pct}%;height:10px;border-radius:6px;"></div></div></div>')
-    st.markdown(f"<div style='display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:12px 0;'>{''.join(r_html)}</div></div>", unsafe_allow_html=True)
-except Exception as e:
-    st.error(f"V3 System Error: {e}")
-"""
-
-# 찾기: g_col1, g_col2 = st.columns
-inject_idx = -1
-for i, line in enumerate(lines):
-    if "g_col1, g_col2 = st.columns" in line:
-        inject_idx = i
-        break
-
-lines.insert(inject_idx, v3_upgraded)
-
-with open('/home/ubuntu/main.py', 'w', encoding='utf-8') as f:
-    f.writelines(lines)
-print(">> [2/3] UI Code Upgraded (Bilingual, Larger Fonts).")
-PYEOF
-
-python3 /home/ubuntu/upgrade_ui.py
-echo ">> [3/3] Restarting Streamlit Server..."
-pkill -9 -f streamlit
-nohup /usr/bin/python3 /home/ubuntu/.local/bin/streamlit run /home/ubuntu/main.py --server.port 8501 > /home/ubuntu/streamlit.log 2>&1 &
-echo "ALL DONE. Please refresh your dashboard!"
-ps aux | grep streamlit | grep -v grep
-tail -20 ~/stream_run.log
-grep -n "from v3_scorer\|v3_result\|calc_sumbi_v3\|SUMBI SCORE V3" ~/main.py | head -10
-ls -la ~/v3_scorer.py ~/connect_v3.py ~/add_v3_ui.py ~/insert_signal.py 2>/dev/null
-grep -n "get_short_data_mock\|get_sector_data_mock\|get_broker_data_mock" ~/main.py | head -5
-pkill -f "streamlit run" && sleep 3 && cd ~ && nohup streamlit run main.py --server.port 8501 > stream_run.log 2>&1 &
-sleep 10 && tail -20 ~/stream_run.log
-tail -20 ~/stream_run.log
-grep -n "def get_investor_data\|return.*inst\|return.*foreign\|'inst\|'forn\|'buy\|순매수" ~/main.py | head -20
-sed -n '280,330p' ~/main.py
-cat > /home/ubuntu/fix_flow.py << 'PYEOF'
-with open('/home/ubuntu/v3_scorer.py', 'r', encoding='utf-8') as f:
-    content = f.read()
-
-# 키 이름 수정
-content = content.replace(
-    "inst = investor.get('institution', 0)",
-    "inst = investor.get('orgn', investor.get('institution', 0))"
-)
-content = content.replace(
-    "foreign = investor.get('foreign', 0)",
-    "foreign = investor.get('frgn', investor.get('foreign', 0))"
-)
-content = content.replace(
-    "indi = investor.get('individual', 0)",
-    "indi = investor.get('prsn', investor.get('individual', 0))"
-)
-
-with open('/home/ubuntu/v3_scorer.py', 'w', encoding='utf-8') as f:
-    f.write(content)
-print("수정 완료!")
-PYEOF
-
-python3 /home/ubuntu/fix_flow.py
-grep -n "orgn\|frgn\|prsn" ~/v3_scorer.py | head -10
-grep -n "cache\|ttl" ~/main.py | grep "investor" | head -5
-grep -n "orgn\|frgn\|prsn" ~/v3_scorer.py | head -10
-sed -n '628,640p' ~/main.py
-python3 -c "
-import sys
-sys.path.insert(0, '/home/ubuntu')
-from v3_scorer import calc_flow_score
-test = {'orgn': 166178, 'frgn': 103059, 'prsn': -260539}
-score, detail = calc_flow_score(test)
-print(f'테스트 결과: {score}점 / {detail}')
-"
-sed -n '500,540p' ~/main.py
-grep -n "^investor\|^    investor\| investor =" ~/main.py | head -15
-grep -n "^investor\b\| investor\b" ~/main.py | head -10
-sed -n '518,535p' ~/main.py
-sed -n '628,636p' ~/main.py
-python3 -c "
-with open('/home/ubuntu/main.py', 'r', encoding='utf-8') as f:
-    lines = f.readlines()
-
-# v3_result 줄 찾기
-v3_line_idx = -1
-v3_line_content = ''
-for i, line in enumerate(lines):
-    if 'v3_result = calc_sumbi_v3' in line:
-        v3_line_idx = i
-        v3_line_content = line
-        print(f'현재 위치: {i+1}줄')
-        break
-
-# 519줄 이후(sentiment 다음)에 재삽입
-target_idx = -1
-for i, line in enumerate(lines):
-    if 'sentiment = calc_sentiment' in line:
         target_idx = i
         print(f'삽입 위치: {i+2}줄 (sentiment 다음)')
         break
@@ -1998,3 +1865,136 @@ print('main.py ticker 전달 완료!')
 sudo systemctl restart sumbi.service && sleep 5 && sudo systemctl status sumbi.service | tail -10
 sudo systemctl status sumbi.service | tail -15
 cd ~ && git add -A && git commit -m "DART+WebSocket 연동 완료 115점" && git push origin main
+ls -la ~/sumbi_backup_*.tar.gz | tail -3
+grep -i "naver\|CLIENT\|NAVER" ~/.env
+cat ~/.env
+echo 'NAVER_CLIENT_ID=Sdoj3I5WetzzjmyJAmen' >> ~/.env
+echo 'NAVER_CLIENT_SECRET=d_dkWCKTKu' >> ~/.env
+grep NAVER ~/.env
+python3 -c "
+content = '''import requests, os
+from dotenv import load_dotenv
+
+load_dotenv()
+NAVER_ID = os.environ.get(\"NAVER_CLIENT_ID\")
+NAVER_SECRET = os.environ.get(\"NAVER_CLIENT_SECRET\")
+
+def get_naver_news(query, display=10):
+    \"\"\"네이버 뉴스 검색 API\"\"\"
+    try:
+        headers = {
+            \"X-Naver-Client-Id\": NAVER_ID,
+            \"X-Naver-Client-Secret\": NAVER_SECRET
+        }
+        params = {\"query\": query, \"display\": display, \"sort\": \"date\"}
+        r = requests.get(\"https://openapi.naver.com/v1/search/news.json\",
+                        headers=headers, params=params, timeout=5)
+        items = r.json().get(\"items\", [])
+        return [{\"title\": i[\"title\"].replace(\"<b>\",\"\").replace(\"</b>\",\"\"),
+                 \"link\": i[\"link\"],
+                 \"pub\": i[\"pubDate\"]} for i in items]
+    except Exception as e:
+        print(f\"네이버 뉴스 오류: {e}\")
+        return []
+
+if __name__ == \"__main__\":
+    news = get_naver_news(\"삼성전자 주식\", 5)
+    print(f\"뉴스 {len(news)}건:\")
+    for n in news:
+        print(f\"  - {n[title][:30]}\")
+'''
+with open(\"/home/ubuntu/naver_news.py\", \"w\") as f:
+    f.write(content)
+print(\"완료\")
+"
+python3 ~/naver_news.py
+python3 -c "
+from naver_news import get_naver_news
+news = get_naver_news('삼성전자 주식', 5)
+print(f'뉴스 {len(news)}건:')
+for n in news:
+    print(f\"  - {n['title'][:30]}\")
+"
+python3 -c "
+with open('/home/ubuntu/main.py', 'r') as f:
+    content = f.read()
+
+# get_news 함수에 네이버 뉴스 추가
+old = '''def get_news(query):'''
+new = '''def get_news(query):'''
+
+# import 추가
+content = content.replace(
+    'from kis_websocket import realtime_data, start_websocket',
+    'from kis_websocket import realtime_data, start_websocket\nfrom naver_news import get_naver_news'
+)
+
+with open('/home/ubuntu/main.py', 'w') as f:
+    f.write(content)
+
+# get_news 함수 확인
+import subprocess
+result = subprocess.run(['grep', '-n',
+python3 -c "
+with open('/home/ubuntu/main.py', 'r') as f:
+    content = f.read()
+
+# get_news 함수에 네이버 뉴스 추가
+old = '''def get_news(query):'''
+new = '''def get_news(query):'''
+
+# import 추가
+content = content.replace(
+    'from kis_websocket import realtime_data, start_websocket',
+    'from kis_websocket import realtime_data, start_websocket\nfrom naver_news import get_naver_news'
+)
+
+with open('/home/ubuntu/main.py', 'w') as f:
+    f.write(content)
+
+# get_news 함수 확인
+import subprocess
+result = subprocess.run(['grep', '-n',
+
+grep -n "def get_news" ~/main.py
+sed -n '369,395p' ~/main.py
+python3 -c "
+with open('/home/ubuntu/main.py', 'r') as f:
+    content = f.read()
+
+old = '''    except:
+        return []
+
+@st.cache_data(ttl=3600)
+def get_chart_data'''
+
+new = '''    except:
+        return []
+
+def get_news_combined(query):
+    \"\"\"구글 RSS + 네이버 뉴스 통합\"\"\"
+    results = get_news(query)
+    try:
+        from naver_news import get_naver_news
+        naver = get_naver_news(query, 10)
+        results = results + naver
+    except Exception as e:
+        pass
+    return results[:20]
+
+@st.cache_data(ttl=3600)
+def get_chart_data'''
+
+content = content.replace(old, new)
+
+# news_list 호출을 combined로 교체
+content = content.replace(
+    'news_list= get_news(info[\\'name\\'] or ticker)',
+    'news_list= get_news_combined(info[\\'name\\'] or ticker)'
+)
+
+with open('/home/ubuntu/main.py', 'w') as f:
+    f.write(content)
+print('네이버+구글 뉴스 병합 완료! 최대 20건')
+"
+sudo systemctl restart sumbi.service && sleep 5 && sudo systemctl status sumbi.service | tail -10

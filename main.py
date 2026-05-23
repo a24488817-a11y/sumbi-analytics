@@ -387,6 +387,17 @@ def get_news(query):
     except:
         return []
 
+def get_news_combined(query):
+    """구글 RSS + 네이버 뉴스 통합"""
+    results = get_news(query)
+    try:
+        from naver_news import get_naver_news
+        naver = get_naver_news(query, 10)
+        results = results + naver
+    except Exception as e:
+        pass
+    return results[:20]
+
 @st.cache_data(ttl=3600)
 def get_chart_data(ticker):
     """FinanceDataReader - 120일 캔들 + MA"""
@@ -521,7 +532,7 @@ macro    = get_macro()
 investor = get_investor_data(ticker)
 price    = get_stock_price(ticker)
 df_chart = get_chart_data(ticker)
-news_list= get_news(info['name'] or ticker)
+news_list= get_news_combined(info['name'] or ticker)
 
 quant     = calc_quant_score(investor, macro, df_chart)
 sentiment = calc_sentiment(investor, macro, quant)
