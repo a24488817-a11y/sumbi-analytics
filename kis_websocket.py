@@ -7,6 +7,20 @@ from datetime import datetime
 from dotenv import load_dotenv
 import requests
 
+_ws_app = None
+_ws_thread = None
+
+def stop_websocket():
+    global _ws_app, _ws_thread
+    if _ws_app:
+        try:
+            _ws_app.close()
+        except:
+            pass
+        _ws_app = None
+    _ws_thread = None
+
+
 load_dotenv()
 APP_KEY = os.environ.get("KIS_APP_KEY")
 APP_SECRET = os.environ.get("KIS_APP_SECRET")
@@ -81,7 +95,7 @@ def start_websocket(tickers):
         print("[WS] 접속키 발급 실패")
         return
 
-    ws = websocket.WebSocketApp(
+    _ws_app = websocket.WebSocketApp(
         "ws://ops.koreainvestment.com:21000",
         on_open=lambda ws: on_open(ws, approval_key, tickers),
         on_message=on_message,
@@ -89,9 +103,9 @@ def start_websocket(tickers):
         on_close=on_close
     )
 
-    t = threading.Thread(target=ws.run_forever)
-    t.daemon = True
-    t.start()
+    _ws_thread = threading.Thread(target=_ws_app.run_forever)
+    _ws_thread.daemon = True
+    _ws_thread.start()
     print(f"[WS] 실시간 연결 시작: {tickers}")
 
 def get_realtime(ticker):
