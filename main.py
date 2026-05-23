@@ -269,6 +269,13 @@ def get_token():
 
 @st.cache_data(ttl=3600)
 def get_macro():
+    """FRED API + yfinance 병합"""
+    try:
+        fred = get_macro_fred()
+        if fred and fred.get("tnx"):
+            return fred
+    except:
+        pass
     """yfinance 글로벌 매크로 지표"""
     symbols = {"tnx": "^TNX", "dxy": "DX-Y.NYB", "krw": "KRW=X", "wti": "CL=F"}
     result = {}
@@ -392,6 +399,7 @@ def get_news_combined(query):
     results = get_news(query)
     try:
         from naver_news import get_naver_news
+from fred_connector import get_macro_fred
         naver = get_naver_news(query, 10)
         results = results + naver
     except Exception as e:

@@ -1,113 +1,3 @@
-        target_idx = i
-        print(f'삽입 위치: {i+2}줄 (sentiment 다음)')
-        break
-
-if v3_line_idx >= 0 and target_idx >= 0 and v3_line_idx != target_idx + 1:
-    # 기존 v3_result 줄 제거
-    lines.pop(v3_line_idx)
-    # sentiment 다음에 삽입 (pop 후 인덱스 조정)
-    insert_at = target_idx if v3_line_idx < target_idx else target_idx + 1
-    lines.insert(insert_at + 1, v3_line_content)
-    with open('/home/ubuntu/main.py', 'w', encoding='utf-8') as f:
-        f.writelines(lines)
-    print('이동 완료!')
-else:
-    print('이미 올바른 위치이거나 찾지 못함')
-"
-grep -n "v3_result = calc_sumbi_v3\|investor = get_investor\|sentiment = calc_sentiment" ~/main.py
-pkill -f "streamlit run" && sleep 2 && cd ~ && nohup streamlit run main.py --server.port 8501 > stream_run.log 2>&1 &
-sleep 10 && tail -5 ~/stream_run.log
-cp ~/main.py.backup_v3_20260521_152256 ~/main.py
-grep -n "sentiment = calc_sentiment\|quant.*=.*calc_quant" ~/main.py
-sed -n '523,530p' ~/main.py
-python3 -c "
-with open('/home/ubuntu/main.py', 'r', encoding='utf-8') as f:
-    lines = f.readlines()
-
-# 511줄(index 510) sentiment 다음에 삽입
-insert_line = 'v3_result = calc_sumbi_v3(investor=investor, macro=macro, df_chart=df_chart, info=info, news_list=news_list, short_data=get_short_data_mock(), sector_data=get_sector_data_mock(), broker_data=get_broker_data_mock())\n'
-
-# 들여쓰기 확인
-print(repr(lines[509]))  # 510줄
-print(repr(lines[510]))  # 511줄
-
-# 511줄과 같은 들여쓰기 적용
-indent = ''
-for ch in lines[510]:
-    if ch in (' ', '\t'):
-        indent += ch
-    else:
-        break
-
-insert_line = indent + insert_line
-lines.insert(511, insert_line)
-
-with open('/home/ubuntu/main.py', 'w', encoding='utf-8') as f:
-    f.writelines(lines)
-print('삽입 완료!')
-print(repr(lines[511]))
-"
-python3 -m py_compile ~/main.py && echo "문법 OK!" || echo "문법 오류!"
-pkill -f "streamlit run" && sleep 2 && cd ~ && nohup streamlit run main.py --server.port 8501 > stream_run.log 2>&1 & sleep 8 && tail -5 ~/stream_run.log
-python3 /home/ubuntu/add_v3_ui.py
-python3 -m py_compile ~/main.py && echo "문법 OK!"
-pkill -f "streamlit run" && sleep 2 && cd ~ && nohup streamlit run main.py --server.port 8501 > stream_run.log 2>&1 &sleep 10 && tail -5 ~/stream_run.log
-cat > /home/ubuntu/add_v3_ui2.py << 'PYEOF'
-with open('/home/ubuntu/main.py', 'r', encoding='utf-8') as f:
-    content = f.read()
-
-v3_ui = """
-# V3 점수판 UI
-if "v3_result" in dir() and v3_result:
-    v3 = v3_result
-    v3_tot = v3["total"]
-    v3_grd = v3["grade"]
-    v3_lbl = v3["grade_label"]
-    v3_brk = v3["breakdown"]
-    gc = {"S+":"#00FF94","S":"#34C759","A+":"#FFD60A","A":"#FFD60A","B":"#FF9500","C":"#FF6B35","D":"#FF3B3B"}.get(v3_grd,"#FFD60A")
-    st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.markdown(f'<div class="sec-label">| SUMBI SCORE V3 <span class="sec-sub">/ 8 Items 100pts</span></div>', unsafe_allow_html=True)
-    st.markdown(f\"""
-    <div style='background:rgba(0,0,0,0.4);border:2px solid {gc}60;border-radius:20px;padding:24px;margin:12px 0;'>
-        <div style='font-family:JetBrains Mono,monospace;font-size:11px;color:#52525b;letter-spacing:.2em;'>SUMBI PRESTIGE SCORE V3 / 숨비 종합 투자 점수</div>
-        <div style='display:flex;align-items:baseline;gap:12px;margin:8px 0;'>
-            <span style='font-family:Cormorant Garamond,serif;font-size:56px;color:{gc};font-weight:700;line-height:1;'>{v3_tot}</span>
-            <span style='font-size:18px;color:#52525b;'>/100</span>
-            <span style='background:{gc}20;border:1px solid {gc}60;border-radius:8px;padding:4px 14px;font-family:JetBrains Mono,monospace;font-size:14px;color:{gc};font-weight:700;'>{v3_grd}</span>
-        </div>
-        <div style='font-size:14px;color:#a0a0a0;'>{v3_lbl}</div>
-    </div>\""", unsafe_allow_html=True)
-    labels = [
-        ("flow",        "Money Flow",   "메이저 수급",   25),
-        ("chart",       "Chart Tech",   "차트 기술적",   25),
-        ("fundamental", "Fundamental",  "기업 펀더멘털", 13),
-        ("news",        "News",         "뉴스 모멘텀",   10),
-        ("short",       "Short Signal", "공매도 신호",    8),
-        ("macro",       "Macro Env",    "매크로 환경",    7),
-        ("sector",      "Sector",       "섹터 테마",      7),
-        ("broker",      "Broker Flow",  "거래원 분석",    5),
-    ]
-    rows = []
-    for key, eng, kor, mx in labels:
-        val, _, _ = v3_brk.get(key, (0, mx, {}))
-        pct = int(val / mx * 100) if mx > 0 else 0
-        bc = "#34C759" if pct >= 70 else "#FFD60A" if pct >= 40 else "#FF3B3B"
-        rows.append(f"<div style='background:rgba(255,255,255,0.03);border:1px solid #2a2a2a;border-radius:12px;padding:12px 16px;'><div style='display:flex;justify-content:space-between;margin-bottom:6px;'><span style='font-size:13px;color:#e0e0e0;'>{eng} <span style='color:#52525b;font-size:11px;'>/ {kor}</span></span><span style='font-family:JetBrains Mono,monospace;font-size:14px;color:{bc};font-weight:700;'>{val}<span style='color:#52525b;font-size:10px;'>/{mx}</span></span></div><div style='background:#1a1a1a;border-radius:4px;height:6px;'><div style='background:{bc};width:{pct}%;height:6px;border-radius:4px;'></div></div></div>")
-    st.markdown(f"<div style='display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:8px 0;'>{''.join(rows)}</div>", unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
-"""
-
-target = 'st.markdown(\'<div class="sec-label">| QUANT FLOW MATRIX'
-if target in content:
-    content = content.replace(target, v3_ui + "\n" + target, 1)
-    with open('/home/ubuntu/main.py', 'w', encoding='utf-8') as f:
-        f.write(content)
-    print("SUCCESS!")
-else:
-    for i, line in enumerate(content.split('\n')):
-        if 'QUANT FLOW' in line:
-            print(f"Found: {i+1}: {line[:60]}")
-PYEOF
 
 python3 /home/ubuntu/add_v3_ui2.py
 python3 -m py_compile ~/main.py && echo "문법 OK!"
@@ -1998,3 +1888,113 @@ with open('/home/ubuntu/main.py', 'w') as f:
 print('네이버+구글 뉴스 병합 완료! 최대 20건')
 "
 sudo systemctl restart sumbi.service && sleep 5 && sudo systemctl status sumbi.service | tail -10
+cd ~ && git add -A && git commit -m "네이버뉴스+DART+WebSocket 완전연동" && git push origin main
+cd ~ && git log --oneline -3
+grep -n "macro\|fred\|FRED" ~/main.py | head -10
+sed -n '271,320p' ~/main.py
+grep -i "fred\|FRED" ~/.env
+echo 'FRED_API_KEY=66f8e6a39938571b83bcdf4bae9b9418' >> ~/.env
+grep FRED ~/.env
+python3 -c "
+content = '''import requests, os
+from dotenv import load_dotenv
+from datetime import datetime
+
+load_dotenv()
+FRED_KEY = os.environ.get(\"FRED_API_KEY\")
+
+def get_fred_series(series_id):
+    try:
+        url = f\"https://api.stlouisfed.org/fred/series/observations\"
+        params = {\"series_id\": series_id, \"api_key\": FRED_KEY,
+                  \"file_type\": \"json\", \"limit\": 1, \"sort_order\": \"desc\"}
+        r = requests.get(url, params=params, timeout=10)
+        data = r.json()
+        val = data[\"observations\"][0][\"value\"]
+        return float(val) if val != \".\" else None
+    except:
+        return None
+
+def get_macro_fred():
+    return {
+        \"ffr\": get_fred_series(\"FEDFUNDS\"),
+        \"tnx\": get_fred_series(\"DGS10\"),
+        \"dxy\": get_fred_series(\"DTWEXBGS\"),
+        \"cpi\": get_fred_series(\"CPIAUCSL\"),
+        \"vix\": get_fred_series(\"VIXCLS\"),
+        \"krw\": get_fred_series(\"DEXKOUS\"),
+        \"wti\": get_fred_series(\"DCOILWTICO\"),
+    }
+
+if __name__ == \"__main__\":
+    data = get_macro_fred()
+    print(\"FRED 매크로 데이터:\")
+    for k, v in data.items():
+        print(f\"  {k}: {v}\")
+'''
+with open(\"/home/ubuntu/fred_conne
+ls ~/fred_connector.py && python3 ~/fred_connector.py
+cat > /home/ubuntu/fred_connector.py << 'FREDEOF'
+import requests, os
+from dotenv import load_dotenv
+
+load_dotenv()
+FRED_KEY = os.environ.get("FRED_API_KEY")
+
+def get_fred_series(series_id):
+    try:
+        url = "https://api.stlouisfed.org/fred/series/observations"
+        params = {"series_id": series_id, "api_key": FRED_KEY,
+                  "file_type": "json", "limit": 1, "sort_order": "desc"}
+        r = requests.get(url, params=params, timeout=10)
+        val = r.json()["observations"][0]["value"]
+        return float(val) if val != "." else None
+    except:
+        return None
+
+def get_macro_fred():
+    return {
+        "ffr": get_fred_series("FEDFUNDS"),
+        "tnx": get_fred_series("DGS10"),
+        "cpi": get_fred_series("CPIAUCSL"),
+        "vix": get_fred_series("VIXCLS"),
+        "krw": get_fred_series("DEXKOUS"),
+        "wti": get_fred_series("DCOILWTICO"),
+    }
+
+if __name__ == "__main__":
+    data = get_macro_fred()
+    print("FRED 매크로:")
+    for k, v in data.items():
+        print(f"  {k}: {v}")
+FREDEOF
+
+python3 /home/ubuntu/fred_connector.py
+python3 -c "
+with open('/home/ubuntu/main.py', 'r') as f:
+    content = f.read()
+
+content = content.replace(
+    'from naver_news import get_naver_news',
+    'from naver_news import get_naver_news\nfrom fred_connector import get_macro_fred'
+)
+
+old = '''def get_macro():
+    \"\"\"yfinance'''
+new = '''def get_macro():
+    \"\"\"FRED API + yfinance 병합\"\"\"
+    try:
+        fred = get_macro_fred()
+        if fred and fred.get(\"tnx\"):
+            return fred
+    except:
+        pass
+    \"\"\"yfinance'''
+
+content = content.replace(old, new)
+
+with open('/home/ubuntu/main.py', 'w') as f:
+    f.write(content)
+print('FRED 매크로 연동 완료!')
+"
+sudo systemctl restart sumbi.service && sleep 5 && sudo systemctl status sumbi.service | tail -8
