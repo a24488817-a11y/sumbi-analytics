@@ -227,8 +227,17 @@ def fmt(n):
 def fmt_signed(n):
     return f"+{int(n):,}" if n > 0 else f"{int(n):,}"
 
+# [신규 수술 완료] API 빈값 렌더링 멈춤 방어 함수
+def safe_num(val, t=int):
+    try:
+        if val is None or val == "": return t(0)
+        if isinstance(val, (int, float)): return t(val)
+        return t(str(val).replace(',', ''))
+    except:
+        return t(0)
+
 # ═══════════════════════════════════════════════════════════════
-# 데이터 함수 (기존 코드 100% 보존)
+# 데이터 함수
 # ═══════════════════════════════════════════════════════════════
 
 @st.cache_data(ttl=3600)
@@ -300,10 +309,11 @@ def get_investor_data(ticker):
         out = res.get("output", [{}])
         if out:
             d = out[0]
+            # [수술 완료] 빈값 방어 코드 적용
             return {
-                "orgn": int(d.get("orgn_ntby_qty", "0").replace(",", "")),
-                "frgn": int(d.get("frgn_ntby_qty", "0").replace(",", "")),
-                "prsn": int(d.get("prsn_ntby_qty", "0").replace(",", "")),
+                "orgn": safe_num(d.get("orgn_ntby_qty")),
+                "frgn": safe_num(d.get("frgn_ntby_qty")),
+                "prsn": safe_num(d.get("prsn_ntby_qty")),
             }
     except Exception as e:
         st.error(f"API Error: {type(e).__name__}: {e}")
@@ -332,18 +342,19 @@ def get_stock_price(ticker):
         ).json()
         out = res.get("output", {})
         if out:
+            # [수술 완료] 빈값 방어 코드 적용
             return {
-                "stck_prpr":  int(out.get("stck_prpr",  "0").replace(",", "")),
-                "prdy_vrss":  int(out.get("prdy_vrss",  "0").replace(",", "")),
-                "prdy_ctrt":  float(out.get("prdy_ctrt", "0").replace(",", "")),
-                "stck_hgpr":  int(out.get("stck_hgpr",  "0").replace(",", "")),
-                "stck_lwpr":  int(out.get("stck_lwpr",  "0").replace(",", "")),
-                "stck_oprc":  int(out.get("stck_oprc",  "0").replace(",", "")),
-                "prdy_clpr":  int(out.get("prdy_clpr",  "0").replace(",", "")),
-                "acml_vol":   int(out.get("acml_vol",   "0").replace(",", "")),
-                "per":        out.get("per",  "N/A"),
-                "pbr":        out.get("pbr",  "N/A"),
-                "hts_avls":   out.get("hts_avls", "N/A"),
+                "stck_prpr":  safe_num(out.get("stck_prpr")),
+                "prdy_vrss":  safe_num(out.get("prdy_vrss")),
+                "prdy_ctrt":  safe_num(out.get("prdy_ctrt"), float),
+                "stck_hgpr":  safe_num(out.get("stck_hgpr")),
+                "stck_lwpr":  safe_num(out.get("stck_lwpr")),
+                "stck_oprc":  safe_num(out.get("stck_oprc")),
+                "prdy_clpr":  safe_num(out.get("prdy_clpr")),
+                "acml_vol":   safe_num(out.get("acml_vol")),
+                "per":        out.get("per") or "N/A",
+                "pbr":        out.get("pbr") or "N/A",
+                "hts_avls":   out.get("hts_avls") or "N/A",
             }
     except:
         pass
@@ -545,15 +556,16 @@ if price:
     per       = price['per']
     cap       = price['hts_avls']
 elif df_chart is not None and not df_chart.empty:
-    cur_price  = int(df_chart['Close'].iloc[-1])
-    prev_val   = int(df_chart['Close'].iloc[-2]) if len(df_chart) > 1 else cur_price
+    # [수술 완료] 차트 백업 데이터 역시 안전 변환 적용
+    cur_price  = safe_num(df_chart['Close'].iloc[-1])
+    prev_val   = safe_num(df_chart['Close'].iloc[-2]) if len(df_chart) > 1 else cur_price
     change     = cur_price - prev_val
-    change_pct = (change / prev_val * 100) if prev_val else 0
-    high_p     = int(df_chart['High'].iloc[-1])
-    low_p      = int(df_chart['Low'].iloc[-1])
-    open_p     = int(df_chart['Open'].iloc[-1])
+    change_pct = (change / prev_val * 100) if prev_val else 0.0
+    high_p     = safe_num(df_chart['High'].iloc[-1])
+    low_p      = safe_num(df_chart['Low'].iloc[-1])
+    open_p     = safe_num(df_chart['Open'].iloc[-1])
     prev_p     = prev_val
-    vol        = int(df_chart['Volume'].iloc[-1]) if 'Volume' in df_chart.columns else 0
+    vol        = safe_num(df_chart['Volume'].iloc[-1]) if 'Volume' in df_chart.columns else 0
     per        = 'N/A'
     cap        = 'N/A'
 else:
@@ -853,4 +865,3 @@ st.markdown(f"""
   <div class="footer-disc">© 2026 SUMBI INSTITUTIONAL · 본 자료는 투자판단을 위한 참고자료이며 투자 결과의 법적 책임을 지지 않습니다</div>
 </div>
 """, unsafe_allow_html=True)
-
