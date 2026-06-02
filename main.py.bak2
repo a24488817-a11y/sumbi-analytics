@@ -1,0 +1,94 @@
+import streamlit as st
+import requests
+import json
+import xml.etree.ElementTree as ET
+
+APP_KEY = "appkey"
+APP_SECRET = "appkey"
+URL_BASE = "https://openapi.koreainvestment.com:9443"
+
+st.set_page_config(layout="centered", page_title="Sumbi Analytics")
+
+st.markdown("""
+<style>
+.stApp { background-color: #0E1117; }
+.gold-header {
+    text-align: center; font-size: 2.3rem; font-weight: 900;
+    background: linear-gradient(to right, #BF953F, #FCF6BA, #B38728);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    padding: 10px 0;
+}
+.card {
+    background-color: rgba(30, 30, 35, 0.8);
+    border: 1px solid #BF953F; border-radius: 15px;
+    padding: 20px; text-align: center; margin: 10px 0;
+}
+.card-title { font-size: 0.9rem; color: #888888; font-weight: 600; }
+.card-value { font-size: 2rem; font-weight: 800; color: #FCF6BA; margin-top: 5px; }
+.score-box {
+    background: linear-gradient(135deg, #1e1e24 0%, #2a2a35 100%);
+    border: 2px solid #BF953F; border-radius: 15px; padding: 20px;
+    text-align: center; margin-top: 15px;
+}
+</style>
+""", unsafe_allow_html=True)
+
+st.markdown('<h1 class="gold-header">SUMBI ANALYTICS</h1>', unsafe_allow_html=True)
+st.markdown('<p style="text-align:center; color:#555; font-size:0.8rem; letter-spacing:2px; margin-top:-15px;">PRESTIGE TERMINAL v3.0</p>', unsafe_allow_html=True)
+
+@st.cache_data(ttl=3600)
+def get_token():
+    try:
+        res = requests.post(f"{URL_BASE}/oauth2/tokenP", headers={"content-type":"application/json"}, data=json.dumps({
+            "grant_type": "client_credentials", "appkey": APP_KEY, "appsecret": APP_SECRET
+        }))
+        return res.json().get("access_token")
+    except: return None
+
+def get_data(token, ticker):
+    try:
+        headers = {"Content-Type": "application/json", "authorization": f"Bearer {token}", "appkey": APP_KEY, "appsecret": APP_SECRET, "tr_id": "FHKST01010900"}
+        res = requests.get(f"{URL_BASE}/uapi/domestic-stock/v1/quotations/inquire-investor", headers=headers, params={"fid_cond_mrkt_div_code": "J", "fid_input_iscd": ticker})
+        return res.json().get("output", [{}])[0]
+    except: return {}
+
+def get_naver_data(ticker):
+    try:
+        url = f"https://fchart.stock.naver.com/sise.nhn?symbol={ticker}&timeframe=day&count=20&requestType=0"
+        res = requests.get(url, timeout=5)
+        root = ET.fromstring(res.text)
+        closes = [int(item.get('data').split('|')[4]) for item in root.findall('.//item')]
+        if len(closes) >= 10:
+            return sum(closes[-5:])/5, sum(closes[-10:])/10, closes[-1]
+    except: pass
+    return 0, 0, 0
+
+ticker = st.text_input("ENTER TARGET CODE (6-DIGIT)", value="042660")
+if st.button("⚡ EXECUTE DEEP SCAN"):
+    token = get_token()
+    if token:
+        data = get_data(token, ticker)
+        ma5, ma10, current = get_naver_data(ticker)
+        
+        orgn = int(data.get("orgn_ntby_qty", 0))
+        frgn = int(data.get("frgn_ntby_qty", 0))
+        prsn = int(data.get("prsn_ntby_qty", 0))
+        
+        # 📊 42대 필살기 계량 스코어 연산 엔진 (40점 만점 규격)
+        score = 0
+        if orgn > 0: score += 5
+        if frgn > 0: score += 5
+        if orgn > 0 and frgn > 0: score += 5  # [쌍끌이] 기관/외인 동시 매집 포착
+        if abs(orgn) > 50000 or abs(frgn) > 50000: score += 5  # [주도주] 돈의 쏠림 강도
+        if current > ma5 and ma5 > 0: score += 7  # [이평선] 5일 생명선 지지
+        if current > ma10 and ma10 > 0: score += 7  # [이평선] 10일 추세선 지지
+        if ma5 > ma10 and ma5 > 0: score += 6  # [성장 가시성] 정배열 상승 초입 추세
+        
+        st.markdown(f'<div class="score-box"><h2 style="color:#BF953F; margin:0;">🎯 MONEY FLOW SCORE: {score} / 40</h2><p style="color:#888; font-size:0.85rem; margin:5px 0 0 0;">수급 삼각 편대 및 네이버 실시간 이평선 지지 계량분석 완료</p></div>', unsafe_allow_html=True)
+        
+        st.markdown(f'<div style="margin-top:15px;"><h3 style="color:#BF953F; font-size:1.1rem; text-align:center;">TARGET REPORT : {ticker}</h3></div>', unsafe_allow_html=True)
+        
+        c1, c2, c3 = st.columns(3)
+        with c1: st.markdown(f'<div class="card"><div class="card-title">INSTITUTION (기관)</div><div class="card-value">{orgn:,}</div></div>', unsafe_allow_html=True)
+        with c2: st.markdown(f'<div class="card"><div class="card-title">FOREIGNER (외국인)</div><div class="card-value">{frgn:,}</div></div>', unsafe_allow_html=True)
+        with c3: st.markdown(f'<div class="card"><div class="card-title">INDIVIDUAL (개인)</div><div class="card-value">{prsn:,}</div></div>', unsafe_allow_html=True)
