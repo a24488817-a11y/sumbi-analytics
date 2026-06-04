@@ -1,0 +1,20 @@
+import requests
+
+URL = 'http://data.krx.co.kr/comm/bldAttendant/getJsonData.cmd'
+HEADERS = {'User-Agent': 'Mozilla/5.0', 'Referer': 'http://data.krx.co.kr/'}
+DATA = {
+    'bld': 'dbms/MDC/STAT/standard/MDCSTAT02302',
+    'strtDd': '20260501',
+    'endDd': '20260603',
+    'isuCd': 'KR7005930003',
+    'inqTpCd': '2',
+    'trdVolVal': '2',
+    'askBid': '3',
+}
+
+r = requests.post(URL, data=DATA, headers=HEADERS, timeout=15)
+print("STATUS", r.status_code)
+print("FINAL_URL", r.url)
+print("CONTENT_TYPE", r.headers.get('content-type'))
+print("BODY_HEAD")
+print(r.text[:400])
