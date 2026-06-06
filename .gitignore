@@ -47,3 +47,30 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# Python
+__pycache__/
+*.pyc
+.local/
+.cache/
+
+# SUMBI data (server-local only)
+kis_stock_data/
+short_data/
+credit_data/
+lending_data/
+*.csv
+
+# backups
+*.bak_*
+main.py.bak*
+
+# logs and runtime
+*.log
+nohup.out
+server.log
+stream_run.log
+streamlit*.log
+
+# git env secret
+.env
