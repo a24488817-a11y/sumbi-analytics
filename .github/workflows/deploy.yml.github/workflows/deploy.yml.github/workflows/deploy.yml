@@ -1,0 +1,19 @@
+name: Deploy SUMBI
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'main.py'
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: SSH Deploy
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.HOST }}
+          username: ubuntu
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            git -C /home/ubuntu/sumbi-analytics pull
+            python3 /home/ubuntu/sumbi-analytics/deploy_safe.py /home/ubuntu/sumbi-analytics/main.py
