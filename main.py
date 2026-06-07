@@ -621,9 +621,9 @@ def make_gauge(value, max_v, label, color, grade_labels=None):
             'bgcolor': 'rgba(0,0,0,0)',
             'borderwidth': 0,
             'steps': [
-                {'range': [0, max_v * 0.5],  'color': '#3D7EFF10'},
-                {'range': [max_v * 0.5, max_v * 0.75], 'color': '#D9A14710'},
-                {'range': [max_v * 0.75, max_v],       'color': '#FF3B5C10'},
+                {'range': [0, max_v * 0.5],  'color': '#3D7EFF'},
+                {'range': [max_v * 0.5, max_v * 0.75], 'color': '#D9A147'},
+                {'range': [max_v * 0.75, max_v],       'color': '#FF3B5C'},
             ],
         },
     ))
