@@ -74,3 +74,15 @@ streamlit*.log
 
 # git env secret
 .env
+.streamlit/secrets.toml
+.env
+*.backup*
+*.bak_*
+main.py.backup*
+main_backup*
+v3_scorer.py.backup*
+*.tar.gz
+*.b64
+patch_*.py
+*_test.py
+sh_probe.py
